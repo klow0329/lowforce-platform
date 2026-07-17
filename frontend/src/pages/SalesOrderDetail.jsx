@@ -36,7 +36,7 @@ export default function SalesOrderDetail() {
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [existingInvoice, setExistingInvoice] = useState(null);
+  const [invoices, setInvoices] = useState([]);
 
   useEffect(() => {
     api.listSalespeople().then(({ salespeople }) => setSalespeople(salespeople));
@@ -57,7 +57,7 @@ export default function SalesOrderDetail() {
       setExhibitorName(salesOrder.company_name);
       setLoading(false);
     });
-    api.listInvoices({ sales_order_id: id }).then(({ invoices }) => setExistingInvoice(invoices[0] || null));
+    api.listInvoices({ sales_order_id: id }).then(({ invoices }) => setInvoices(invoices));
   }, [id, isNew]);
 
   useEffect(() => {
@@ -195,30 +195,66 @@ export default function SalesOrderDetail() {
               <button type="button" onClick={() => navigate(`/sales-orders/${id}/proforma`)} style={{ padding: '8px 16px' }}>
                 View / Print Proforma
               </button>
-              {existingInvoice ? (
-                <button type="button" onClick={() => navigate(`/invoices/${existingInvoice.id}`)} style={{ padding: '8px 16px' }}>
-                  View Invoice {existingInvoice.invoice_no}
-                </button>
-              ) : (
+            </>
+          )}
+        </div>
+      </form>
+
+      {!isNew && (() => {
+        // A contract can be billed in installments (the Excel workflow used
+        // 20%/50%/100% milestones) — list every invoice and offer another
+        // while an un-invoiced balance remains.
+        const totalInvoiced = invoices.reduce((sum, inv) => sum + Number(inv.amount_myr), 0);
+        const remaining = Number(form.total_myr || 0) - totalInvoiced;
+        const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
+        return (
+          <div style={{ marginTop: 32 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3>Invoices — {fmtMYR(totalInvoiced)} of {fmtMYR(form.total_myr || 0)} invoiced</h3>
+              {remaining > 0.01 && (
                 <button
                   type="button"
                   onClick={() => {
                     const params = new URLSearchParams({
                       sales_order_id: id,
                       exhibitor_name: exhibitorName,
-                      total_myr: form.total_myr,
+                      total_myr: remaining.toFixed(2),
                     });
                     navigate(`/invoices/new?${params}`);
                   }}
-                  style={{ padding: '8px 16px' }}
                 >
-                  Generate Invoice
+                  {invoices.length === 0 ? 'Generate Invoice' : '+ New Installment Invoice'}
                 </button>
               )}
-            </>
-          )}
-        </div>
-      </form>
+            </div>
+            <table width="100%" cellPadding="6">
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                  <th>Invoice No</th>
+                  <th>Date</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((inv) => (
+                  <tr
+                    key={inv.id}
+                    onClick={() => navigate(`/invoices/${inv.id}`)}
+                    style={{ borderBottom: '1px solid #eee', cursor: 'pointer' }}
+                  >
+                    <td>{inv.invoice_no}</td>
+                    <td>{inv.invoice_date || '—'}</td>
+                    <td>{fmtMYR(inv.amount_myr)}</td>
+                  </tr>
+                ))}
+                {invoices.length === 0 && (
+                  <tr><td colSpan={3}>Not invoiced yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
     </div>
   );
 }

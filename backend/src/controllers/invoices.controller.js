@@ -87,13 +87,26 @@ async function createInvoice(req, res) {
       return res.status(404).json({ error: 'Contract not found.' });
     }
 
-    const existing = await client.query(
-      `SELECT id FROM invoices WHERE sales_order_id = $1 AND company_id = $2`,
+    // A contract can carry several installment invoices (the Excel workflow
+    // billed 20%/50%/100% milestones as IN1-IN4) — the only hard rule is
+    // that together they can't exceed the contract total.
+    const invoicedResult = await client.query(
+      `SELECT COALESCE(SUM(amount_myr), 0) AS total_invoiced
+       FROM invoices WHERE sales_order_id = $1 AND company_id = $2`,
       [sales_order_id, req.companyId]
     );
-    if (existing.rows[0]) {
+    const remaining = Number(salesOrder.total_myr) - Number(invoicedResult.rows[0].total_invoiced);
+    if (remaining <= 0.01) {
       await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'This contract has already been invoiced.' });
+      return res.status(400).json({ error: 'This contract is already fully invoiced.' });
+    }
+
+    const invoiceAmount = amount_myr ? Number(amount_myr) : remaining;
+    if (invoiceAmount > remaining + 0.01) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: `Invoice exceeds the contract's un-invoiced balance of RM ${remaining.toFixed(2)}.`,
+      });
     }
 
     const invoiceNo = await generateInvoiceNo(client, req.companyId);
@@ -104,7 +117,7 @@ async function createInvoice(req, res) {
        RETURNING id`,
       [
         req.companyId, salesOrder.event_id, sales_order_id, salesOrder.exhibitor_id,
-        invoiceNo, invoice_date || null, amount_myr || salesOrder.total_myr,
+        invoiceNo, invoice_date || null, invoiceAmount,
       ]
     );
 
