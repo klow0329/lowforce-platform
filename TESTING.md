@@ -57,7 +57,22 @@ manage events and per-user event access from the **Admin** page, and edit
 each event's rates on the **Price List** page (everyone else sees it
 read-only).
 
-## Latest changes to test
+## Latest changes to test (round 2)
+
+- **Exhibitor form**: "Exhibitor Name" label; Address, Postcode, State,
+  Country, Contact 1 Phone and Email are mandatory; Malaysia additionally
+  requires Co. Reg No. and SST No. (same rules apply to the Billing block
+  when "Same as Exhibitor Info" is unticked — all billing labels now carry
+  the "Billing" prefix, and Billing Address only shows when unticked).
+- **Price List**: Rate Tier is picked from a dropdown of existing tiers
+  ("+ Create a new tier…" is a deliberate action, so no typo-tiers); MEP
+  priced per tier from the Excel formula (Onsite Rebooking RM900/USD200,
+  others RM1,600/USD380); BAD (Badge) added at RM10/USD3; discounts removed.
+- **Contracts & Invoices**: Discount fields (flat MYR or %) live here now,
+  and show on the printed Contract/Invoice when set. Total/Amount fields are
+  labelled "after discount".
+
+## Earlier changes (round 1)
 
 - **Exhibitor form**: "Alt Name" (was Chinese name); fuller Billing block
   (postcode, city, country, Co. Reg/TIN/SST No., contact no. — auto-mirrored

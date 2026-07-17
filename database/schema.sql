@@ -143,9 +143,7 @@ CREATE TABLE price_list (
     sales_item_code  TEXT NOT NULL,       -- e.g. "BAS", "MEP" (Marketing Exposure Package)
     description      TEXT,
     unit_price_myr   NUMERIC(12,2),
-    unit_price_usd   NUMERIC(12,2),
-    discount_type    TEXT,                -- NULL (none), 'FLAT' (amount) or 'PERCENT'
-    discount_value   NUMERIC(12,2)
+    unit_price_usd   NUMERIC(12,2)
 );
 
 -- ----------------------------------------------------------------------------
@@ -260,6 +258,8 @@ CREATE TABLE sales_orders (
     booth_no          TEXT,
     dimension         TEXT,      -- e.g. "3m x 3m"
     remarks           TEXT,
+    discount_type     TEXT,      -- NULL (none), 'FLAT' (MYR amount) or 'PERCENT'
+    discount_value    NUMERIC(12,2),
     is_active         BOOLEAN NOT NULL DEFAULT TRUE,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -278,7 +278,9 @@ CREATE TABLE invoices (
     exhibitor_id    UUID NOT NULL REFERENCES exhibitors(id),
     invoice_no      TEXT NOT NULL,
     invoice_date    DATE NOT NULL,
-    amount_myr      NUMERIC(12,2) NOT NULL,
+    amount_myr      NUMERIC(12,2) NOT NULL,   -- after discount
+    discount_type   TEXT,                     -- NULL (none), 'FLAT' (MYR amount) or 'PERCENT'
+    discount_value  NUMERIC(12,2),
     UNIQUE (company_id, invoice_no)
 );
 

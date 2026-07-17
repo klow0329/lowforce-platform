@@ -86,6 +86,16 @@ export default function InvoicePrint() {
         </tbody>
       </table>
 
+      {invoice.discount_type && (
+        <div style={line}>
+          <span>Discount Applied</span>
+          <span>
+            {invoice.discount_type === 'PERCENT'
+              ? `${Number(invoice.discount_value)}%`
+              : fmtMYR(invoice.discount_value)}
+          </span>
+        </div>
+      )}
       <div style={{ ...line, fontWeight: 700, fontSize: 16, borderBottom: '2px solid #1B3A6B' }}>
         <span>Total Due</span><span>{fmtMYR(invoice.amount_myr)}</span>
       </div>

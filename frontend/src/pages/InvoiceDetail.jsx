@@ -22,6 +22,8 @@ export default function InvoiceDetail() {
     sales_order_id: lockedSalesOrderId,
     invoice_date: new Date().toISOString().slice(0, 10),
     amount_myr: lockedTotal,
+    discount_type: '',
+    discount_value: '',
   });
   const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [contractSearch, setContractSearch] = useState('');
@@ -39,6 +41,8 @@ export default function InvoiceDetail() {
         sales_order_id: invoice.sales_order_id,
         invoice_date: invoice.invoice_date || '',
         amount_myr: invoice.amount_myr,
+        discount_type: invoice.discount_type || '',
+        discount_value: invoice.discount_value ?? '',
       });
       setExhibitorName(invoice.company_name);
       setInvoiceNo(invoice.invoice_no);
@@ -146,7 +150,22 @@ export default function InvoiceDetail() {
         <label style={label}>Invoice Date</label>
         <input type="date" style={inputStyle} value={form.invoice_date} onChange={(e) => set('invoice_date', e.target.value)} />
 
-        <label style={label}>Amount (MYR)</label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Discount</label>
+            <select style={inputStyle} value={form.discount_type} onChange={(e) => set('discount_type', e.target.value)}>
+              <option value="">— None —</option>
+              <option value="FLAT">Flat amount (MYR)</option>
+              <option value="PERCENT">Percentage (%)</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Discount Value</label>
+            <input type="number" step="0.01" style={inputStyle} value={form.discount_value} onChange={(e) => set('discount_value', e.target.value)} disabled={!form.discount_type} />
+          </div>
+        </div>
+
+        <label style={label}>Amount (MYR — after discount)</label>
         <input type="number" step="0.01" style={inputStyle} value={form.amount_myr} onChange={(e) => set('amount_myr', e.target.value)} />
 
         {error && <p style={{ color: 'red' }}>{error}</p>}

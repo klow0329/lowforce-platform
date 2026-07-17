@@ -11,8 +11,7 @@ async function listPriceList(req, res) {
   }
 
   const result = await pool.query(
-    `SELECT id, booth_type, sales_item_code, description, unit_price_myr, unit_price_usd,
-            discount_type, discount_value
+    `SELECT id, booth_type, sales_item_code, description, unit_price_myr, unit_price_usd
      FROM price_list
      WHERE company_id = $1 AND event_id = $2
      ORDER BY booth_type, sales_item_code`,
@@ -23,21 +22,18 @@ async function listPriceList(req, res) {
 }
 
 async function createPriceItem(req, res) {
-  const { event_id, booth_type, sales_item_code, description, unit_price_myr, unit_price_usd,
-          discount_type, discount_value } = req.body;
+  const { event_id, booth_type, sales_item_code, description, unit_price_myr, unit_price_usd } = req.body;
 
   if (!event_id || !booth_type || !sales_item_code) {
     return res.status(400).json({ error: 'event_id, booth_type and sales_item_code are required.' });
   }
 
   const result = await pool.query(
-    `INSERT INTO price_list (company_id, event_id, booth_type, sales_item_code, description,
-                             unit_price_myr, unit_price_usd, discount_type, discount_value)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO price_list (company_id, event_id, booth_type, sales_item_code, description, unit_price_myr, unit_price_usd)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
     [req.companyId, event_id, booth_type, sales_item_code,
-     description || null, unit_price_myr || null, unit_price_usd || null,
-     discount_type || null, discount_value || null]
+     description || null, unit_price_myr || null, unit_price_usd || null]
   );
 
   res.status(201).json({ priceItem: { id: result.rows[0].id } });
@@ -45,7 +41,7 @@ async function createPriceItem(req, res) {
 
 async function updatePriceItem(req, res) {
   const fields = {};
-  for (const field of ['booth_type', 'sales_item_code', 'description', 'unit_price_myr', 'unit_price_usd', 'discount_type', 'discount_value']) {
+  for (const field of ['booth_type', 'sales_item_code', 'description', 'unit_price_myr', 'unit_price_usd']) {
     if (field in req.body) fields[field] = req.body[field] === '' ? null : req.body[field];
   }
   const columns = Object.keys(fields);

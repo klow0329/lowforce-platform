@@ -53,7 +53,7 @@ async function getSalesOrder(req, res) {
 
 async function createSalesOrder(req, res) {
   const { exhibitor_id, event_id, opportunity_id, salesperson_id, contract_type, contract_date, total_myr,
-          hall, booth_no, dimension, booking_type, remarks } = req.body;
+          hall, booth_no, dimension, booking_type, remarks, discount_type, discount_value } = req.body;
 
   if (!exhibitor_id || !event_id) {
     return res.status(400).json({ error: 'exhibitor_id and event_id are required.' });
@@ -65,13 +65,15 @@ async function createSalesOrder(req, res) {
 
     const result = await client.query(
       `INSERT INTO sales_orders (company_id, exhibitor_id, event_id, opportunity_id, salesperson_id,
-                                 contract_type, contract_date, total_myr, hall, booth_no, dimension, booking_type, remarks)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                 contract_type, contract_date, total_myr, hall, booth_no, dimension, booking_type, remarks,
+                                 discount_type, discount_value)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING id`,
       [
         req.companyId, exhibitor_id, event_id, opportunity_id || null, salesperson_id || null,
         contract_type || 'STANDARD', contract_date || null, total_myr || 0,
         hall || null, booth_no || null, dimension || null, booking_type || null, remarks || null,
+        discount_type || null, discount_value || null,
       ]
     );
 
@@ -97,7 +99,7 @@ async function createSalesOrder(req, res) {
   }
 }
 
-const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'total_myr', 'hall', 'booth_no', 'dimension', 'booking_type', 'remarks'];
+const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'total_myr', 'hall', 'booth_no', 'dimension', 'booking_type', 'remarks', 'discount_type', 'discount_value'];
 
 async function updateSalesOrder(req, res) {
   const fields = {};

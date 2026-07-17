@@ -27,6 +27,15 @@ const ITEM_NAMES = {
   WOP: 'Walk On Package (per sqm)',
   COC: 'Corner Charge',
 };
+// MEP (Marketing Exposure Package) — rates decoded from the Excel AO-column
+// formula: Onsite Rebooking 900/200, every other tier 1600/380.
+const MEP_PRICES = {
+  'PUBLISHED RATE': [1600, 380],
+  'EARLY BIRD': [1600, 380],
+  'ONSITE REBOOKING': [900, 200],
+  'CONTRA': [1600, 380],
+};
+
 // Items without a fixed tier price — priced per deal or by formula.
 // (Descriptions are editable per event on the Price List screen.)
 const VARIABLE_ITEMS = [
@@ -34,6 +43,7 @@ const VARIABLE_ITEMS = [
   { code: 'CUB', description: 'Customized Booth — per agreement' },
   { code: 'SPO', description: 'Sponsorship — per agreement' },
   { code: 'OTH', description: 'Others — per agreement' },
+  { code: 'BAD', description: 'Badge', myr: 10, usd: 3 },
 ];
 
 async function main() {
@@ -87,19 +97,19 @@ async function main() {
           );
           count++;
         }
-        // MEP (Marketing Exposure Package) can be priced differently per tier
+        // MEP (Marketing Exposure Package) is priced per tier
         await client.query(
-          `INSERT INTO price_list (company_id, event_id, booth_type, sales_item_code, description)
-           VALUES ($1, $2, $3, 'MEP', 'Marketing Exposure Package')`,
-          [COMPANY_ID, eventId, tier]
+          `INSERT INTO price_list (company_id, event_id, booth_type, sales_item_code, description, unit_price_myr, unit_price_usd)
+           VALUES ($1, $2, $3, 'MEP', 'Marketing Exposure Package', $4, $5)`,
+          [COMPANY_ID, eventId, tier, MEP_PRICES[tier][0], MEP_PRICES[tier][1]]
         );
         count++;
       }
       for (const item of VARIABLE_ITEMS) {
         await client.query(
           `INSERT INTO price_list (company_id, event_id, booth_type, sales_item_code, description, unit_price_myr, unit_price_usd)
-           VALUES ($1, $2, 'ALL TIERS', $3, $4, NULL, NULL)`,
-          [COMPANY_ID, eventId, item.code, item.description]
+           VALUES ($1, $2, 'ALL TIERS', $3, $4, $5, $6)`,
+          [COMPANY_ID, eventId, item.code, item.description, item.myr ?? null, item.usd ?? null]
         );
         count++;
       }

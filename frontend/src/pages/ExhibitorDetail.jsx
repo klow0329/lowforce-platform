@@ -126,13 +126,13 @@ export default function ExhibitorDetail() {
     setError('');
     setSaving(true);
 
-    // When "same as company" is on, billing fields mirror the company's own
-    // info at save time — billing_address has no company-level equivalent
-    // to mirror, so it's always entered directly.
+    // When "Same as Exhibitor Info" is on, every billing field mirrors the
+    // exhibitor's own info at save time.
     const same = form.billing_same_as_company;
     const payload = {
       ...form,
       billing_name: same ? form.company_name : form.billing_name,
+      billing_address: same ? form.address : form.billing_address,
       billing_postcode: same ? form.postcode : form.billing_postcode,
       billing_city: same ? form.city : form.billing_city,
       billing_country_code: same ? form.country_code : form.billing_country_code,
@@ -170,7 +170,7 @@ export default function ExhibitorDetail() {
       <form onSubmit={handleSubmit}>
         <div style={section}>
           <h3>Company Info</h3>
-          <label style={label}>Company Name *</label>
+          <label style={label}>Exhibitor Name *</label>
           <input
             style={inputStyle}
             value={form.company_name}
@@ -181,26 +181,26 @@ export default function ExhibitorDetail() {
           <label style={label}>Alt Name</label>
           <input style={inputStyle} value={form.company_name_alt} onChange={(e) => set('company_name_alt', e.target.value)} />
 
-          <label style={label}>Address</label>
-          <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.address} onChange={(e) => set('address', e.target.value)} />
+          <label style={label}>Address *</label>
+          <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.address} onChange={(e) => set('address', e.target.value)} required />
 
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
-              <label style={label}>Postcode</label>
-              <input style={inputStyle} value={form.postcode} onChange={(e) => set('postcode', e.target.value)} />
+              <label style={label}>Postcode *</label>
+              <input style={inputStyle} value={form.postcode} onChange={(e) => set('postcode', e.target.value)} required />
             </div>
             <div style={{ flex: 2 }}>
               <label style={label}>City</label>
               <input style={inputStyle} value={form.city} onChange={(e) => set('city', e.target.value)} />
             </div>
             <div style={{ flex: 2 }}>
-              <label style={label}>State</label>
-              <input style={inputStyle} value={form.state} onChange={(e) => set('state', e.target.value)} />
+              <label style={label}>State *</label>
+              <input style={inputStyle} value={form.state} onChange={(e) => set('state', e.target.value)} required />
             </div>
           </div>
 
-          <label style={label}>Country</label>
-          <select style={inputStyle} value={form.country_code} onChange={(e) => set('country_code', e.target.value)}>
+          <label style={label}>Country *</label>
+          <select style={inputStyle} value={form.country_code} onChange={(e) => set('country_code', e.target.value)} required>
             <option value="">— Select —</option>
             {countries.map((c) => (
               <option key={c.code} value={c.code}>{c.name}</option>
@@ -225,16 +225,16 @@ export default function ExhibitorDetail() {
 
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
-              <label style={label}>Co. Reg No.</label>
-              <input style={inputStyle} value={form.reg_no} onChange={(e) => set('reg_no', e.target.value)} />
+              <label style={label}>Co. Reg No.{form.country_code === 'MY' ? ' *' : ''}</label>
+              <input style={inputStyle} value={form.reg_no} onChange={(e) => set('reg_no', e.target.value)} required={form.country_code === 'MY'} />
             </div>
             <div style={{ flex: 1 }}>
               <label style={label}>TIN No.</label>
               <input style={inputStyle} value={form.tin_no} onChange={(e) => set('tin_no', e.target.value)} />
             </div>
             <div style={{ flex: 1 }}>
-              <label style={label}>SST No.</label>
-              <input style={inputStyle} value={form.sst_no} onChange={(e) => set('sst_no', e.target.value)} />
+              <label style={label}>SST No.{form.country_code === 'MY' ? ' *' : ''}</label>
+              <input style={inputStyle} value={form.sst_no} onChange={(e) => set('sst_no', e.target.value)} required={form.country_code === 'MY'} />
             </div>
           </div>
 
@@ -265,10 +265,10 @@ export default function ExhibitorDetail() {
           <input style={inputStyle} value={form.contact1_name} onChange={(e) => set('contact1_name', e.target.value)} />
           <label style={label}>Contact 1 Job Title</label>
           <input style={inputStyle} value={form.contact1_job_title} onChange={(e) => set('contact1_job_title', e.target.value)} />
-          <label style={label}>Contact 1 Phone</label>
-          <input style={inputStyle} value={form.contact1_phone} onChange={(e) => set('contact1_phone', e.target.value)} />
-          <label style={label}>Contact 1 Email</label>
-          <input type="email" style={inputStyle} value={form.contact1_email} onChange={(e) => set('contact1_email', e.target.value)} />
+          <label style={label}>Contact 1 Phone *</label>
+          <input style={inputStyle} value={form.contact1_phone} onChange={(e) => set('contact1_phone', e.target.value)} required />
+          <label style={label}>Contact 1 Email *</label>
+          <input type="email" style={inputStyle} value={form.contact1_email} onChange={(e) => set('contact1_email', e.target.value)} required />
 
           <label style={label}>Contact 2 Name</label>
           <input style={inputStyle} value={form.contact2_name} onChange={(e) => set('contact2_name', e.target.value)} />
@@ -288,25 +288,32 @@ export default function ExhibitorDetail() {
               checked={form.billing_same_as_company}
               onChange={(e) => set('billing_same_as_company', e.target.checked)}
             />
-            {' '}Same as company info
+            {' '}Same as Exhibitor Info
           </label>
 
           {!form.billing_same_as_company && (
             <>
               <label style={label}>Billing Name</label>
               <input style={inputStyle} value={form.billing_name} onChange={(e) => set('billing_name', e.target.value)} />
+              <label style={label}>Billing Address *</label>
+              <textarea
+                style={{ ...inputStyle, minHeight: 60 }}
+                value={form.billing_address}
+                onChange={(e) => set('billing_address', e.target.value)}
+                required
+              />
               <div style={{ display: 'flex', gap: 8 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={label}>Postcode</label>
-                  <input style={inputStyle} value={form.billing_postcode} onChange={(e) => set('billing_postcode', e.target.value)} />
+                  <label style={label}>Billing Postcode *</label>
+                  <input style={inputStyle} value={form.billing_postcode} onChange={(e) => set('billing_postcode', e.target.value)} required />
                 </div>
                 <div style={{ flex: 2 }}>
-                  <label style={label}>City</label>
+                  <label style={label}>Billing City</label>
                   <input style={inputStyle} value={form.billing_city} onChange={(e) => set('billing_city', e.target.value)} />
                 </div>
               </div>
-              <label style={label}>Billing Country</label>
-              <select style={inputStyle} value={form.billing_country_code} onChange={(e) => set('billing_country_code', e.target.value)}>
+              <label style={label}>Billing Country *</label>
+              <select style={inputStyle} value={form.billing_country_code} onChange={(e) => set('billing_country_code', e.target.value)} required>
                 <option value="">— Select —</option>
                 {countries.map((c) => (
                   <option key={c.code} value={c.code}>{c.name}</option>
@@ -314,31 +321,24 @@ export default function ExhibitorDetail() {
               </select>
               <div style={{ display: 'flex', gap: 8 }}>
                 <div style={{ flex: 1 }}>
-                  <label style={label}>Co. Reg No.</label>
-                  <input style={inputStyle} value={form.billing_reg_no} onChange={(e) => set('billing_reg_no', e.target.value)} />
+                  <label style={label}>Billing Co. Reg No.{form.billing_country_code === 'MY' ? ' *' : ''}</label>
+                  <input style={inputStyle} value={form.billing_reg_no} onChange={(e) => set('billing_reg_no', e.target.value)} required={form.billing_country_code === 'MY'} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={label}>TIN No.</label>
+                  <label style={label}>Billing TIN No.</label>
                   <input style={inputStyle} value={form.billing_tin_no} onChange={(e) => set('billing_tin_no', e.target.value)} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={label}>SST No.</label>
-                  <input style={inputStyle} value={form.billing_sst_no} onChange={(e) => set('billing_sst_no', e.target.value)} />
+                  <label style={label}>Billing SST No.{form.billing_country_code === 'MY' ? ' *' : ''}</label>
+                  <input style={inputStyle} value={form.billing_sst_no} onChange={(e) => set('billing_sst_no', e.target.value)} required={form.billing_country_code === 'MY'} />
                 </div>
               </div>
-              <label style={label}>Contact No.</label>
-              <input style={inputStyle} value={form.billing_contact_no} onChange={(e) => set('billing_contact_no', e.target.value)} />
-              <label style={label}>Billing Email</label>
-              <input type="email" style={inputStyle} value={form.billing_email} onChange={(e) => set('billing_email', e.target.value)} />
+              <label style={label}>Billing Contact No. *</label>
+              <input style={inputStyle} value={form.billing_contact_no} onChange={(e) => set('billing_contact_no', e.target.value)} required />
+              <label style={label}>Billing Email *</label>
+              <input type="email" style={inputStyle} value={form.billing_email} onChange={(e) => set('billing_email', e.target.value)} required />
             </>
           )}
-
-          <label style={label}>Billing Address</label>
-          <textarea
-            style={{ ...inputStyle, minHeight: 60 }}
-            value={form.billing_address}
-            onChange={(e) => set('billing_address', e.target.value)}
-          />
         </div>
 
         <div style={section}>

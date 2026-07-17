@@ -87,6 +87,16 @@ export default function ContractPrint() {
       <div style={line}><span>Dimension</span><span>{salesOrder.dimension || '—'}</span></div>
       <div style={line}><span>Booth Area</span><span>{salesOrder.booth_sqm ? `${salesOrder.booth_sqm} sqm` : '—'}</span></div>
       <div style={line}><span>Salesperson</span><span>{salesOrder.salesperson_name || '—'}</span></div>
+      {salesOrder.discount_type && (
+        <div style={line}>
+          <span>Discount Applied</span>
+          <span>
+            {salesOrder.discount_type === 'PERCENT'
+              ? `${Number(salesOrder.discount_value)}%`
+              : fmtMYR(salesOrder.discount_value)}
+          </span>
+        </div>
+      )}
       <div style={{ ...line, fontWeight: 700, fontSize: 16, borderBottom: '2px solid #1B3A6B' }}>
         <span>Total Contract Value</span><span>{fmtMYR(salesOrder.total_myr)}</span>
       </div>

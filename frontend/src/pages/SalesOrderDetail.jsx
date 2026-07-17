@@ -33,6 +33,8 @@ export default function SalesOrderDetail() {
     booth_no: '',
     dimension: '',
     remarks: '',
+    discount_type: '',
+    discount_value: '',
   });
   const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [exhibitorSearch, setExhibitorSearch] = useState('');
@@ -63,6 +65,8 @@ export default function SalesOrderDetail() {
         booth_no: salesOrder.booth_no || '',
         dimension: salesOrder.dimension || '',
         remarks: salesOrder.remarks || '',
+        discount_type: salesOrder.discount_type || '',
+        discount_value: salesOrder.discount_value ?? '',
       });
       setExhibitorName(salesOrder.company_name);
       setLoading(false);
@@ -212,7 +216,22 @@ export default function SalesOrderDetail() {
           </div>
         </div>
 
-        <label style={label}>Total (MYR)</label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Discount</label>
+            <select style={inputStyle} value={form.discount_type} onChange={(e) => set('discount_type', e.target.value)}>
+              <option value="">— None —</option>
+              <option value="FLAT">Flat amount (MYR)</option>
+              <option value="PERCENT">Percentage (%)</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Discount Value</label>
+            <input type="number" step="0.01" style={inputStyle} value={form.discount_value} onChange={(e) => set('discount_value', e.target.value)} disabled={!form.discount_type} />
+          </div>
+        </div>
+
+        <label style={label}>Total (MYR — after discount)</label>
         <input type="number" step="0.01" style={inputStyle} value={form.total_myr} onChange={(e) => set('total_myr', e.target.value)} />
 
         <label style={label}>Remarks</label>

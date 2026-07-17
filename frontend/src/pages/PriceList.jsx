@@ -6,14 +6,7 @@ const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
 const fmt = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2 }));
 
-const emptyForm = { id: null, booth_type: '', sales_item_code: '', description: '', unit_price_myr: '', unit_price_usd: '', discount_type: '', discount_value: '' };
-
-const fmtDiscount = (item) => {
-  if (!item.discount_type || item.discount_value === null || item.discount_value === undefined) return '—';
-  return item.discount_type === 'PERCENT'
-    ? `${Number(item.discount_value)}%`
-    : `RM ${Number(item.discount_value).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
-};
+const emptyForm = { id: null, booth_type: '', new_tier_name: '', sales_item_code: '', description: '', unit_price_myr: '', unit_price_usd: '' };
 
 export default function PriceList({ user }) {
   const { selectedEventId, events, loading: eventLoading } = useEventContext();
@@ -39,12 +32,11 @@ export default function PriceList({ user }) {
     setForm({
       id: item.id,
       booth_type: item.booth_type,
+      new_tier_name: '',
       sales_item_code: item.sales_item_code,
       description: item.description || '',
       unit_price_myr: item.unit_price_myr ?? '',
       unit_price_usd: item.unit_price_usd ?? '',
-      discount_type: item.discount_type || '',
-      discount_value: item.discount_value ?? '',
     });
     setShowForm(true);
   }
@@ -52,12 +44,22 @@ export default function PriceList({ user }) {
   async function handleSave(e) {
     e.preventDefault();
     setError('');
+
+    // Tier comes from the dropdown of existing tiers — creating a brand-new
+    // tier is a deliberate choice, not a free-text typo.
+    const boothType = form.booth_type === '__NEW__' ? form.new_tier_name.trim().toUpperCase() : form.booth_type;
+    if (!boothType) {
+      setError('Please choose a rate tier (or name the new one).');
+      return;
+    }
+
     try {
-      if (form.id) {
-        const { id, ...payload } = form;
+      const { id, new_tier_name, ...rest } = form;
+      const payload = { ...rest, booth_type: boothType };
+      if (id) {
         await api.updatePriceItem(id, payload);
       } else {
-        await api.createPriceItem({ ...form, event_id: selectedEventId });
+        await api.createPriceItem({ ...payload, event_id: selectedEventId });
       }
       setForm(emptyForm);
       setShowForm(false);
@@ -103,8 +105,20 @@ export default function PriceList({ user }) {
 
       {showForm && isAdmin && (
         <form onSubmit={handleSave} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, margin: '16px 0' }}>
-          <label style={label}>Rate Tier (e.g. PUBLISHED RATE, EARLY BIRD, ONSITE REBOOKING, CONTRA)</label>
-          <input style={inputStyle} value={form.booth_type} onChange={(e) => set('booth_type', e.target.value)} required />
+          <label style={label}>Rate Tier</label>
+          <select style={inputStyle} value={form.booth_type} onChange={(e) => set('booth_type', e.target.value)} required>
+            <option value="">— Select a tier —</option>
+            {tiers.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+            <option value="__NEW__">+ Create a new tier…</option>
+          </select>
+          {form.booth_type === '__NEW__' && (
+            <>
+              <label style={label}>New Tier Name</label>
+              <input style={inputStyle} value={form.new_tier_name} onChange={(e) => set('new_tier_name', e.target.value)} required />
+            </>
+          )}
           <label style={label}>Item Code (e.g. BAS, SSS, ESS, WOP, COC)</label>
           <input style={inputStyle} value={form.sales_item_code} onChange={(e) => set('sales_item_code', e.target.value)} required />
           <label style={label}>Description</label>
@@ -117,20 +131,6 @@ export default function PriceList({ user }) {
             <div style={{ flex: 1 }}>
               <label style={label}>Unit Price (USD)</label>
               <input type="number" step="0.01" style={inputStyle} value={form.unit_price_usd} onChange={(e) => set('unit_price_usd', e.target.value)} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <div style={{ flex: 1 }}>
-              <label style={label}>Discount Type</label>
-              <select style={inputStyle} value={form.discount_type} onChange={(e) => set('discount_type', e.target.value)}>
-                <option value="">— No discount —</option>
-                <option value="FLAT">Flat amount (MYR)</option>
-                <option value="PERCENT">Percentage (%)</option>
-              </select>
-            </div>
-            <div style={{ flex: 1 }}>
-              <label style={label}>Discount Value</label>
-              <input type="number" step="0.01" style={inputStyle} value={form.discount_value} onChange={(e) => set('discount_value', e.target.value)} disabled={!form.discount_type} />
             </div>
           </div>
           <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>
@@ -149,7 +149,6 @@ export default function PriceList({ user }) {
                 <th>Description</th>
                 <th style={{ textAlign: 'right' }}>MYR</th>
                 <th style={{ textAlign: 'right' }}>USD</th>
-                <th style={{ textAlign: 'right' }}>Discount</th>
                 {isAdmin && <th></th>}
               </tr>
             </thead>
@@ -160,7 +159,6 @@ export default function PriceList({ user }) {
                   <td>{item.description || '—'}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(item.unit_price_myr)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(item.unit_price_usd)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmtDiscount(item)}</td>
                   {isAdmin && (
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button onClick={() => startEdit(item)}>Edit</button>{' '}

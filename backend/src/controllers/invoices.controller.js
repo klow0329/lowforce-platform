@@ -135,7 +135,7 @@ async function createInvoice(req, res) {
 
 async function updateInvoice(req, res) {
   const fields = {};
-  for (const field of ['invoice_date', 'amount_myr']) {
+  for (const field of ['invoice_date', 'amount_myr', 'discount_type', 'discount_value']) {
     if (field in req.body) fields[field] = req.body[field] === '' ? null : req.body[field];
   }
   const columns = Object.keys(fields);
