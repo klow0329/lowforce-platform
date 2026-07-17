@@ -1,0 +1,8 @@
+/* Printable documents (Contract Form, and later Invoice/Receipt) render
+   inside the normal app shell but hide the nav chrome when actually
+   printed — anything that shouldn't appear on paper gets .no-print. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

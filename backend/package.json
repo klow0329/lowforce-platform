@@ -1,0 +1,20 @@
+{
+  "name": "lowforce-backend",
+  "version": "0.1.0",
+  "description": "LowForce Platform API — Node.js/Express, multi-tenant",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "connect-pg-simple": "^10.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "pg": "^8.11.5",
+    "xlsx": "^0.18.5"
+  }
+}
