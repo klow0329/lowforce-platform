@@ -52,8 +52,17 @@ screens is real.
   to use.
 
 Every user can change their own password: click your name in the top-right
-corner. Admins can also add users, reset passwords, deactivate accounts, and
-manage events from the **Admin** page (visible only to Admin-role users).
+corner. Admins can also add users, reset passwords, deactivate accounts,
+manage events and per-user event access from the **Admin** page, and edit
+each event's rates on the **Price List** page (everyone else sees it
+read-only).
+
+## MIFB27 — the fresh cycle
+
+The **MIFB 2027** event exists with an empty pipeline (everything is
+event-scoped, so MIFB26's records don't carry over) and a price list copied
+from the real MIFB26 rates — adjust it on the Price List page with MIFB 2027
+selected in the event switcher.
 
 ## Starting the environment
 
