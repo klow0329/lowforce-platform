@@ -25,6 +25,7 @@ export default function OpportunityDetail() {
     booth_type: '',
     estimated_value_myr: '',
     next_follow_up_date: '',
+    remarks: '',
   });
   const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [exhibitorSearch, setExhibitorSearch] = useState('');
@@ -56,6 +57,7 @@ export default function OpportunityDetail() {
         booth_type: opportunity.booth_type || '',
         estimated_value_myr: opportunity.estimated_value_myr ?? '',
         next_follow_up_date: opportunity.next_follow_up_date || '',
+        remarks: opportunity.remarks || '',
       });
       setExhibitorName(opportunity.exhibitor_name);
       setLoading(false);
@@ -182,6 +184,9 @@ export default function OpportunityDetail() {
 
         <label style={label}>Next Follow-up Date</label>
         <input type="date" style={inputStyle} value={form.next_follow_up_date} onChange={(e) => set('next_follow_up_date', e.target.value)} />
+
+        <label style={label}>Remarks</label>
+        <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} />
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
 

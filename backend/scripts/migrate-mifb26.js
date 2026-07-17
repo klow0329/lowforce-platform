@@ -108,6 +108,14 @@ async function main() {
     // --- Reference: segments ------------------------------------------------
     const segMainIds = new Map(); // NAME -> id
     const segSubIds = new Map();  // MAIN||SUB -> id
+    // Space-insensitive fallback: the Master sheet writes some category names
+    // with different spacing than the Segment List ("COFFEE/TEA" vs "COFFEE/ TEA")
+    const norm = (s) => s.replace(/\s+/g, '');
+    const findMain = (main) =>
+      segMainIds.get(main) || [...segMainIds.entries()].find(([k]) => norm(k) === norm(main))?.[1];
+    const findSub = (main, sub) =>
+      segSubIds.get(`${main}||${sub}`) ||
+      [...segSubIds.entries()].find(([k]) => norm(k) === norm(`${main}||${sub}`))?.[1];
     for (const row of sheetRows('Segment List').slice(1)) {
       const main = clean(row[0]).toUpperCase();
       const sub = clean(row[1]).toUpperCase();
@@ -215,7 +223,7 @@ async function main() {
         exhibitorId = exhibitorIds.get(key);
         await client.query(
           `UPDATE exhibitors SET
-             company_name = $2, company_name_chinese = $3, country_code = $4, agent_id = $5, salesperson_id = $6,
+             company_name = $2, company_name_alt = $3, country_code = $4, agent_id = $5, salesperson_id = $6,
              address = $7, postcode = $8, city = $9, state = $10,
              reg_no = $11, tin_no = $12, sst_no = $13, website = $14, fax = $15, halal_certified = $16,
              contact1_name = $17, contact1_job_title = $18, contact1_phone = $19, contact1_email = $20,
@@ -228,7 +236,7 @@ async function main() {
       } else {
         const ins = await client.query(
           `INSERT INTO exhibitors (
-             company_id, company_name, company_name_chinese, country_code, agent_id, salesperson_id,
+             company_id, company_name, company_name_alt, country_code, agent_id, salesperson_id,
              address, postcode, city, state, reg_no, tin_no, sst_no, website, fax, halal_certified,
              contact1_name, contact1_job_title, contact1_phone, contact1_email,
              contact2_name, contact2_job_title, contact2_phone, contact2_email, billing_address
@@ -241,21 +249,43 @@ async function main() {
         stats.exhibitorsInserted++;
       }
 
-      // Segments 1-6 -> real child rows
+      // Segments 1-6 -> real child rows (main required, sub + remarks optional)
       await client.query(`DELETE FROM exhibitor_segments WHERE exhibitor_id = $1`, [exhibitorId]);
       for (let s = 0; s < 6; s++) {
         const main = clean(r[25 + s * 3]).toUpperCase();
         const sub = clean(r[26 + s * 3]).toUpperCase();
-        if (!main || !sub) continue;
-        const subId = segSubIds.get(`${main}||${sub}`);
-        if (subId) {
-          await client.query(
-            `INSERT INTO exhibitor_segments (exhibitor_id, segment_sub_id) VALUES ($1, $2)`,
-            [exhibitorId, subId]
-          );
-          stats.segmentsLinked++;
-        } else {
+        const remarks = clean(r[27 + s * 3]) || null;
+        if (!main) continue;
+        const mainId = findMain(main);
+        if (!mainId) {
+          stats.segmentMisses.push(`${name}: ${main}`);
+          continue;
+        }
+        const subId = sub ? findSub(main, sub) : null;
+        if (sub && !subId) {
           stats.segmentMisses.push(`${name}: ${main} / ${sub}`);
+        }
+        await client.query(
+          `INSERT INTO exhibitor_segments (exhibitor_id, segment_main_id, segment_sub_id, remarks)
+           VALUES ($1, $2, $3, $4)`,
+          [exhibitorId, mainId, subId || null, remarks]
+        );
+        stats.segmentsLinked++;
+      }
+
+      // Event participation from the Master's MIFB / MYFT / MCE flags
+      await client.query(`DELETE FROM exhibitor_events WHERE exhibitor_id = $1`, [exhibitorId]);
+      const participationFlags = [['MIFB26', r[47]], ['MYFT26', r[48]], ['MCE26', r[49]]];
+      for (const [code, flag] of participationFlags) {
+        if (num(flag) > 0 || clean(flag) === '1') {
+          const evId = eventIds.get(code);
+          if (evId) {
+            await client.query(
+              `INSERT INTO exhibitor_events (exhibitor_id, event_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+              [exhibitorId, evId]
+            );
+            stats.participationLinked = (stats.participationLinked || 0) + 1;
+          }
         }
       }
     }
@@ -379,6 +409,7 @@ async function main() {
     console.log('=== Migration complete ===');
     console.log(`Exhibitors: ${stats.exhibitorsInserted} inserted, ${stats.exhibitorsUpdated} updated`);
     console.log(`Segments linked: ${stats.segmentsLinked} (misses: ${stats.segmentMisses.length})`);
+    console.log(`Event participation links: ${stats.participationLinked || 0}`);
     console.log(`Contracts: ${stats.contractsInserted} inserted, ${stats.contractsSkipped} already imported`);
     console.log(`Invoices: ${stats.invoicesInserted}, Payments: ${stats.paymentsInserted}`);
     console.log(`Event flags: ${stats.multiEventRows} multi-event rows (first flag used), ${stats.noEventRows} unflagged (defaulted to MIFB26)`);

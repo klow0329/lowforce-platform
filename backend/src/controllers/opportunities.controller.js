@@ -98,7 +98,7 @@ async function getOpportunity(req, res) {
 
 const OPPORTUNITY_FIELDS = [
   'exhibitor_id', 'event_id', 'salesperson_id', 'stage_id',
-  'booth_sqm', 'booth_type', 'estimated_value_myr', 'next_follow_up_date',
+  'booth_sqm', 'booth_type', 'estimated_value_myr', 'next_follow_up_date', 'remarks',
 ];
 
 function pickOpportunityFields(body) {

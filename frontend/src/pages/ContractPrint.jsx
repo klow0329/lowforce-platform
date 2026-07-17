@@ -24,19 +24,19 @@ export default function ContractPrint() {
   const isCoex = salesOrder.contract_type === 'COEX';
   const docTitle = isCoex ? 'CO-EXHIBITOR CONTRACT' : 'EXHIBITION SPACE CONTRACT';
 
-  const billTo = salesOrder.billing_same_as_company
-    ? {
-        name: salesOrder.company_name,
-        address: salesOrder.billing_address || '—',
-        country: salesOrder.billing_country_code || salesOrder.country_code || '—',
-        email: salesOrder.contact1_email || '—',
-      }
-    : {
-        name: salesOrder.billing_name || salesOrder.company_name,
-        address: salesOrder.billing_address || '—',
-        country: salesOrder.billing_country_code || '—',
-        email: salesOrder.billing_email || '—',
-      };
+  const same = salesOrder.billing_same_as_company;
+  const billTo = {
+    name: same ? salesOrder.company_name : (salesOrder.billing_name || salesOrder.company_name),
+    address: salesOrder.billing_address || '—',
+    postcodeCity: [same ? salesOrder.postcode : salesOrder.billing_postcode, same ? salesOrder.city : salesOrder.billing_city]
+      .filter(Boolean).join(' '),
+    country: (same ? salesOrder.country_code : salesOrder.billing_country_code) || '—',
+    regNo: same ? salesOrder.reg_no : salesOrder.billing_reg_no,
+    tinNo: same ? salesOrder.tin_no : salesOrder.billing_tin_no,
+    sstNo: same ? salesOrder.sst_no : salesOrder.billing_sst_no,
+    contactNo: same ? salesOrder.contact1_phone : salesOrder.billing_contact_no,
+    email: (same ? salesOrder.contact1_email : salesOrder.billing_email) || '—',
+  };
 
   return (
     <div style={{ maxWidth: 700, margin: '40px auto' }}>
@@ -68,7 +68,12 @@ export default function ContractPrint() {
           <h4>Bill To</h4>
           <div>{billTo.name}</div>
           <div>{billTo.address}</div>
+          {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
           <div>{billTo.country}</div>
+          {billTo.regNo && <div>Co. Reg No: {billTo.regNo}</div>}
+          {billTo.tinNo && <div>TIN No: {billTo.tinNo}</div>}
+          {billTo.sstNo && <div>SST No: {billTo.sstNo}</div>}
+          {billTo.contactNo && <div>Contact: {billTo.contactNo}</div>}
           <div>{billTo.email}</div>
         </div>
       </div>
@@ -76,7 +81,10 @@ export default function ContractPrint() {
       <h4>Contract Details</h4>
       <div style={line}><span>Contract Type</span><span>{isCoex ? 'Co-Exhibitor (CoEX)' : 'Standard'}</span></div>
       <div style={line}><span>Contract Date</span><span>{salesOrder.contract_date || '—'}</span></div>
+      <div style={line}><span>Booking Type</span><span>{salesOrder.booking_type || '—'}</span></div>
+      <div style={line}><span>Hall / Booth No</span><span>{[salesOrder.hall, salesOrder.booth_no].filter(Boolean).join(' / ') || '—'}</span></div>
       <div style={line}><span>Booth Type</span><span>{salesOrder.booth_type || '—'}</span></div>
+      <div style={line}><span>Dimension</span><span>{salesOrder.dimension || '—'}</span></div>
       <div style={line}><span>Booth Area</span><span>{salesOrder.booth_sqm ? `${salesOrder.booth_sqm} sqm` : '—'}</span></div>
       <div style={line}><span>Salesperson</span><span>{salesOrder.salesperson_name || '—'}</span></div>
       <div style={{ ...line, fontWeight: 700, fontSize: 16, borderBottom: '2px solid #1B3A6B' }}>

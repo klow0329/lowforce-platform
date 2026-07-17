@@ -26,9 +26,11 @@ async function listSalesOrders(req, res) {
 async function getSalesOrder(req, res) {
   const result = await pool.query(
     `SELECT so.*,
-            ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email,
-            ex.billing_name, ex.billing_address, ex.billing_country_code, ex.billing_email,
-            ex.billing_same_as_company,
+            ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email, ex.contact1_phone,
+            ex.postcode, ex.city, ex.reg_no, ex.tin_no, ex.sst_no,
+            ex.billing_name, ex.billing_address, ex.billing_postcode, ex.billing_city,
+            ex.billing_country_code, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
+            ex.billing_contact_no, ex.billing_email, ex.billing_same_as_company,
             ev.name AS event_name,
             u.full_name AS salesperson_name,
             o.booth_sqm, o.booth_type
@@ -50,7 +52,8 @@ async function getSalesOrder(req, res) {
 }
 
 async function createSalesOrder(req, res) {
-  const { exhibitor_id, event_id, opportunity_id, salesperson_id, contract_type, contract_date, total_myr } = req.body;
+  const { exhibitor_id, event_id, opportunity_id, salesperson_id, contract_type, contract_date, total_myr,
+          hall, booth_no, dimension, booking_type, remarks } = req.body;
 
   if (!exhibitor_id || !event_id) {
     return res.status(400).json({ error: 'exhibitor_id and event_id are required.' });
@@ -61,12 +64,14 @@ async function createSalesOrder(req, res) {
     await client.query('BEGIN');
 
     const result = await client.query(
-      `INSERT INTO sales_orders (company_id, exhibitor_id, event_id, opportunity_id, salesperson_id, contract_type, contract_date, total_myr)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO sales_orders (company_id, exhibitor_id, event_id, opportunity_id, salesperson_id,
+                                 contract_type, contract_date, total_myr, hall, booth_no, dimension, booking_type, remarks)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
         req.companyId, exhibitor_id, event_id, opportunity_id || null, salesperson_id || null,
         contract_type || 'STANDARD', contract_date || null, total_myr || 0,
+        hall || null, booth_no || null, dimension || null, booking_type || null, remarks || null,
       ]
     );
 
@@ -92,7 +97,7 @@ async function createSalesOrder(req, res) {
   }
 }
 
-const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'total_myr'];
+const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'total_myr', 'hall', 'booth_no', 'dimension', 'booking_type', 'remarks'];
 
 async function updateSalesOrder(req, res) {
   const fields = {};

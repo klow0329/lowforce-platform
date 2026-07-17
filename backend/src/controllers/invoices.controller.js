@@ -25,9 +25,11 @@ async function listInvoices(req, res) {
 async function getInvoice(req, res) {
   const result = await pool.query(
     `SELECT inv.*,
-            ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email,
-            ex.billing_name, ex.billing_address, ex.billing_country_code, ex.billing_email,
-            ex.billing_same_as_company,
+            ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email, ex.contact1_phone,
+            ex.postcode, ex.city, ex.reg_no, ex.tin_no, ex.sst_no,
+            ex.billing_name, ex.billing_address, ex.billing_postcode, ex.billing_city,
+            ex.billing_country_code, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
+            ex.billing_contact_no, ex.billing_email, ex.billing_same_as_company,
             ev.name AS event_name,
             so.contract_type, so.contract_date,
             o.booth_sqm, o.booth_type,

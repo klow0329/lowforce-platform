@@ -51,7 +51,7 @@ async function listSalespeople(req, res) {
 // else needs a user_event_access grant (managed from the Admin screen).
 async function listEvents(req, res) {
   const result = await pool.query(
-    `SELECT e.id, e.code, e.name, e.event_year
+    `SELECT e.id, e.code, e.name, e.event_year, e.parent_event_id
      FROM events e
      WHERE e.company_id = $1 AND e.is_active = TRUE
        AND (

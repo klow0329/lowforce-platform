@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { useEventContext } from '../context/EventContext';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
 const emptyForm = {
   company_name: '',
-  company_name_chinese: '',
+  company_name_alt: '',
   country_code: '',
   agent_id: '',
   salesperson_id: '',
@@ -31,9 +32,16 @@ const emptyForm = {
   billing_same_as_company: true,
   billing_name: '',
   billing_address: '',
+  billing_postcode: '',
+  billing_city: '',
   billing_country_code: '',
+  billing_reg_no: '',
+  billing_tin_no: '',
+  billing_sst_no: '',
+  billing_contact_no: '',
   billing_email: '',
-  segment_sub_ids: [],
+  segments: [],
+  event_ids: [],
 };
 
 const section = { marginBottom: 24 };
@@ -45,6 +53,7 @@ export default function ExhibitorDetail() {
   const isNew = !id;
   const navigate = useNavigate();
 
+  const { events } = useEventContext();
   const [form, setForm] = useState(emptyForm);
   const [countries, setCountries] = useState([]);
   const [agents, setAgents] = useState([]);
@@ -83,12 +92,32 @@ export default function ExhibitorDetail() {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
-  function toggleSegment(segmentSubId) {
+  function addSegmentRow() {
+    setForm((f) => ({ ...f, segments: [...f.segments, { segment_main_id: '', segment_sub_id: '', remarks: '' }] }));
+  }
+
+  function updateSegmentRow(index, field, value) {
     setForm((f) => ({
       ...f,
-      segment_sub_ids: f.segment_sub_ids.includes(segmentSubId)
-        ? f.segment_sub_ids.filter((s) => s !== segmentSubId)
-        : [...f.segment_sub_ids, segmentSubId],
+      segments: f.segments.map((seg, i) => {
+        if (i !== index) return seg;
+        const next = { ...seg, [field]: value };
+        if (field === 'segment_main_id') next.segment_sub_id = ''; // sub belongs to the main
+        return next;
+      }),
+    }));
+  }
+
+  function removeSegmentRow(index) {
+    setForm((f) => ({ ...f, segments: f.segments.filter((_, i) => i !== index) }));
+  }
+
+  function toggleEventParticipation(eventId) {
+    setForm((f) => ({
+      ...f,
+      event_ids: f.event_ids.includes(eventId)
+        ? f.event_ids.filter((e) => e !== eventId)
+        : [...f.event_ids, eventId],
     }));
   }
 
@@ -100,11 +129,19 @@ export default function ExhibitorDetail() {
     // When "same as company" is on, billing fields mirror the company's own
     // info at save time — billing_address has no company-level equivalent
     // to mirror, so it's always entered directly.
+    const same = form.billing_same_as_company;
     const payload = {
       ...form,
-      billing_name: form.billing_same_as_company ? form.company_name : form.billing_name,
-      billing_country_code: form.billing_same_as_company ? form.country_code : form.billing_country_code,
-      billing_email: form.billing_same_as_company ? form.contact1_email : form.billing_email,
+      billing_name: same ? form.company_name : form.billing_name,
+      billing_postcode: same ? form.postcode : form.billing_postcode,
+      billing_city: same ? form.city : form.billing_city,
+      billing_country_code: same ? form.country_code : form.billing_country_code,
+      billing_reg_no: same ? form.reg_no : form.billing_reg_no,
+      billing_tin_no: same ? form.tin_no : form.billing_tin_no,
+      billing_sst_no: same ? form.sst_no : form.billing_sst_no,
+      billing_contact_no: same ? form.contact1_phone : form.billing_contact_no,
+      billing_email: same ? form.contact1_email : form.billing_email,
+      segments: form.segments.filter((s) => s.segment_main_id),
     };
 
     try {
@@ -141,8 +178,8 @@ export default function ExhibitorDetail() {
             required
           />
 
-          <label style={label}>Company Name (Chinese)</label>
-          <input style={inputStyle} value={form.company_name_chinese} onChange={(e) => set('company_name_chinese', e.target.value)} />
+          <label style={label}>Alt Name</label>
+          <input style={inputStyle} value={form.company_name_alt} onChange={(e) => set('company_name_alt', e.target.value)} />
 
           <label style={label}>Address</label>
           <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.address} onChange={(e) => set('address', e.target.value)} />
@@ -258,6 +295,16 @@ export default function ExhibitorDetail() {
             <>
               <label style={label}>Billing Name</label>
               <input style={inputStyle} value={form.billing_name} onChange={(e) => set('billing_name', e.target.value)} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Postcode</label>
+                  <input style={inputStyle} value={form.billing_postcode} onChange={(e) => set('billing_postcode', e.target.value)} />
+                </div>
+                <div style={{ flex: 2 }}>
+                  <label style={label}>City</label>
+                  <input style={inputStyle} value={form.billing_city} onChange={(e) => set('billing_city', e.target.value)} />
+                </div>
+              </div>
               <label style={label}>Billing Country</label>
               <select style={inputStyle} value={form.billing_country_code} onChange={(e) => set('billing_country_code', e.target.value)}>
                 <option value="">— Select —</option>
@@ -265,6 +312,22 @@ export default function ExhibitorDetail() {
                   <option key={c.code} value={c.code}>{c.name}</option>
                 ))}
               </select>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Co. Reg No.</label>
+                  <input style={inputStyle} value={form.billing_reg_no} onChange={(e) => set('billing_reg_no', e.target.value)} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>TIN No.</label>
+                  <input style={inputStyle} value={form.billing_tin_no} onChange={(e) => set('billing_tin_no', e.target.value)} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>SST No.</label>
+                  <input style={inputStyle} value={form.billing_sst_no} onChange={(e) => set('billing_sst_no', e.target.value)} />
+                </div>
+              </div>
+              <label style={label}>Contact No.</label>
+              <input style={inputStyle} value={form.billing_contact_no} onChange={(e) => set('billing_contact_no', e.target.value)} />
               <label style={label}>Billing Email</label>
               <input type="email" style={inputStyle} value={form.billing_email} onChange={(e) => set('billing_email', e.target.value)} />
             </>
@@ -279,24 +342,81 @@ export default function ExhibitorDetail() {
         </div>
 
         <div style={section}>
-          <h3>Segments</h3>
-          {segmentGroups.map((group) => (
-            <div key={group.id} style={{ marginBottom: 12 }}>
-              <strong style={{ fontSize: 13 }}>{group.name}</strong>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 4 }}>
-                {group.subSegments.map((sub) => (
-                  <label key={sub.id} style={{ fontSize: 13, fontWeight: 400 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3>Segments</h3>
+            <button type="button" onClick={addSegmentRow}>+ Add Segment</button>
+          </div>
+          {form.segments.length === 0 && (
+            <p style={{ fontSize: 13, color: '#5c6070' }}>No segments yet — use + Add Segment.</p>
+          )}
+          {form.segments.map((seg, index) => {
+            const group = segmentGroups.find((g) => g.id === seg.segment_main_id);
+            return (
+              <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                <select
+                  style={{ ...inputStyle, flex: 2 }}
+                  value={seg.segment_main_id}
+                  onChange={(e) => updateSegmentRow(index, 'segment_main_id', e.target.value)}
+                >
+                  <option value="">— Main Category —</option>
+                  {segmentGroups.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+                <select
+                  style={{ ...inputStyle, flex: 2 }}
+                  value={seg.segment_sub_id || ''}
+                  onChange={(e) => updateSegmentRow(index, 'segment_sub_id', e.target.value)}
+                  disabled={!seg.segment_main_id}
+                >
+                  <option value="">— Subcategory (optional) —</option>
+                  {(group?.subSegments || []).map((sub) => (
+                    <option key={sub.id} value={sub.id}>{sub.name}</option>
+                  ))}
+                </select>
+                <input
+                  style={{ ...inputStyle, flex: 2 }}
+                  placeholder="Remarks"
+                  value={seg.remarks || ''}
+                  onChange={(e) => updateSegmentRow(index, 'remarks', e.target.value)}
+                />
+                <button type="button" onClick={() => removeSegmentRow(index)}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={section}>
+          <h3>Event Participation</h3>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Which events (and sub-events) this exhibitor takes part in.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {events
+              .filter((ev) => !ev.parent_event_id)
+              .map((main) => (
+                <div key={main.id}>
+                  <label style={{ fontSize: 13, fontWeight: 600 }}>
                     <input
                       type="checkbox"
-                      checked={form.segment_sub_ids.includes(sub.id)}
-                      onChange={() => toggleSegment(sub.id)}
+                      checked={form.event_ids.includes(main.id)}
+                      onChange={() => toggleEventParticipation(main.id)}
                     />
-                    {' '}{sub.name}
+                    {' '}{main.name}
                   </label>
-                ))}
-              </div>
-            </div>
-          ))}
+                  {events.filter((ev) => ev.parent_event_id === main.id).map((sub) => (
+                    <label key={sub.id} style={{ fontSize: 13, fontWeight: 400, display: 'block', marginLeft: 24 }}>
+                      <input
+                        type="checkbox"
+                        checked={form.event_ids.includes(sub.id)}
+                        onChange={() => toggleEventParticipation(sub.id)}
+                      />
+                      {' '}{sub.name} <span style={{ color: '#5c6070' }}>(sub-event)</span>
+                    </label>
+                  ))}
+                </div>
+              ))}
+          </div>
         </div>
 
         {error && <p style={{ color: 'red' }}>{error}</p>}

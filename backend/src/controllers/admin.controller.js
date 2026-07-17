@@ -157,16 +157,19 @@ async function listRoles(req, res) {
 // ---------------------------------------------------------------------------
 async function listEvents(req, res) {
   const result = await pool.query(
-    `SELECT id, code, name, event_year, start_date, end_date, is_active
-     FROM events WHERE company_id = $1
-     ORDER BY event_year DESC, code`,
+    `SELECT e.id, e.code, e.name, e.event_year, e.start_date, e.end_date, e.is_active,
+            e.parent_event_id, p.code AS parent_code
+     FROM events e
+     LEFT JOIN events p ON p.id = e.parent_event_id
+     WHERE e.company_id = $1
+     ORDER BY e.event_year DESC, e.code`,
     [req.companyId]
   );
   res.json({ events: result.rows });
 }
 
 async function createEvent(req, res) {
-  const { code, name, event_year, start_date, end_date } = req.body;
+  const { code, name, event_year, start_date, end_date, parent_event_id } = req.body;
 
   if (!code || !name) {
     return res.status(400).json({ error: 'code and name are required.' });
@@ -181,10 +184,10 @@ async function createEvent(req, res) {
   }
 
   const result = await pool.query(
-    `INSERT INTO events (company_id, code, name, event_year, start_date, end_date)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO events (company_id, code, name, event_year, start_date, end_date, parent_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    [req.companyId, code, name, event_year || null, start_date || null, end_date || null]
+    [req.companyId, code, name, event_year || null, start_date || null, end_date || null, parent_event_id || null]
   );
 
   res.status(201).json({ event: { id: result.rows[0].id } });
@@ -194,8 +197,12 @@ async function createEvent(req, res) {
 // data entry and reports hang off; rename via `name` instead.
 async function updateEvent(req, res) {
   const fields = {};
-  for (const field of ['name', 'event_year', 'start_date', 'end_date', 'is_active']) {
+  for (const field of ['name', 'event_year', 'start_date', 'end_date', 'is_active', 'parent_event_id']) {
     if (field in req.body) fields[field] = req.body[field] === '' ? null : req.body[field];
+  }
+  // an event can't be its own parent
+  if (fields.parent_event_id === req.params.id) {
+    return res.status(400).json({ error: "An event can't be its own parent." });
   }
   const columns = Object.keys(fields);
 

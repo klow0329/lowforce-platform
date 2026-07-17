@@ -6,7 +6,14 @@ const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
 const fmt = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2 }));
 
-const emptyForm = { id: null, booth_type: '', sales_item_code: '', description: '', unit_price_myr: '', unit_price_usd: '' };
+const emptyForm = { id: null, booth_type: '', sales_item_code: '', description: '', unit_price_myr: '', unit_price_usd: '', discount_type: '', discount_value: '' };
+
+const fmtDiscount = (item) => {
+  if (!item.discount_type || item.discount_value === null || item.discount_value === undefined) return '—';
+  return item.discount_type === 'PERCENT'
+    ? `${Number(item.discount_value)}%`
+    : `RM ${Number(item.discount_value).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
+};
 
 export default function PriceList({ user }) {
   const { selectedEventId, events, loading: eventLoading } = useEventContext();
@@ -36,6 +43,8 @@ export default function PriceList({ user }) {
       description: item.description || '',
       unit_price_myr: item.unit_price_myr ?? '',
       unit_price_usd: item.unit_price_usd ?? '',
+      discount_type: item.discount_type || '',
+      discount_value: item.discount_value ?? '',
     });
     setShowForm(true);
   }
@@ -110,6 +119,20 @@ export default function PriceList({ user }) {
               <input type="number" step="0.01" style={inputStyle} value={form.unit_price_usd} onChange={(e) => set('unit_price_usd', e.target.value)} />
             </div>
           </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Discount Type</label>
+              <select style={inputStyle} value={form.discount_type} onChange={(e) => set('discount_type', e.target.value)}>
+                <option value="">— No discount —</option>
+                <option value="FLAT">Flat amount (MYR)</option>
+                <option value="PERCENT">Percentage (%)</option>
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Discount Value</label>
+              <input type="number" step="0.01" style={inputStyle} value={form.discount_value} onChange={(e) => set('discount_value', e.target.value)} disabled={!form.discount_type} />
+            </div>
+          </div>
           <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>
             {form.id ? 'Save Changes' : 'Add Item'}
           </button>
@@ -126,6 +149,7 @@ export default function PriceList({ user }) {
                 <th>Description</th>
                 <th style={{ textAlign: 'right' }}>MYR</th>
                 <th style={{ textAlign: 'right' }}>USD</th>
+                <th style={{ textAlign: 'right' }}>Discount</th>
                 {isAdmin && <th></th>}
               </tr>
             </thead>
@@ -136,6 +160,7 @@ export default function PriceList({ user }) {
                   <td>{item.description || '—'}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(item.unit_price_myr)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(item.unit_price_usd)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtDiscount(item)}</td>
                   {isAdmin && (
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button onClick={() => startEdit(item)}>Edit</button>{' '}

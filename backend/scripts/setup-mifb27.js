@@ -28,9 +28,10 @@ const ITEM_NAMES = {
   COC: 'Corner Charge',
 };
 // Items without a fixed tier price — priced per deal or by formula.
+// (Descriptions are editable per event on the Price List screen.)
 const VARIABLE_ITEMS = [
   { code: 'LOD', description: 'Loading — 15% of Bare Space' },
-  { code: 'MEP', description: 'MEP (mechanical/electrical/plumbing) — per order' },
+  { code: 'CUB', description: 'Customized Booth — per agreement' },
   { code: 'SPO', description: 'Sponsorship — per agreement' },
   { code: 'OTH', description: 'Others — per agreement' },
 ];
@@ -86,6 +87,13 @@ async function main() {
           );
           count++;
         }
+        // MEP (Marketing Exposure Package) can be priced differently per tier
+        await client.query(
+          `INSERT INTO price_list (company_id, event_id, booth_type, sales_item_code, description)
+           VALUES ($1, $2, $3, 'MEP', 'Marketing Exposure Package')`,
+          [COMPANY_ID, eventId, tier]
+        );
+        count++;
       }
       for (const item of VARIABLE_ITEMS) {
         await client.query(

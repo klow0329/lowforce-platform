@@ -54,14 +54,15 @@ CREATE TABLE users (
 -- 4. Events — a company can run multiple concurrently (mirrors MIFB/MYFT/MCE)
 -- ----------------------------------------------------------------------------
 CREATE TABLE events (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id  UUID NOT NULL REFERENCES companies(id),
-    code        TEXT NOT NULL,                  -- e.g. MIFB26
-    name        TEXT NOT NULL,                  -- e.g. "MIFB 2026"
-    event_year  INT,
-    start_date  DATE,
-    end_date    DATE,
-    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id       UUID NOT NULL REFERENCES companies(id),
+    code             TEXT NOT NULL,             -- e.g. MIFB26
+    name             TEXT NOT NULL,             -- e.g. "MIFB 2026"
+    event_year       INT,
+    start_date       DATE,
+    end_date         DATE,
+    parent_event_id  UUID REFERENCES events(id), -- sub-event of (e.g. MYFT/MCE under MIFB)
+    is_active        BOOLEAN NOT NULL DEFAULT TRUE,
     UNIQUE (company_id, code)
 );
 
@@ -138,11 +139,13 @@ CREATE TABLE price_list (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id       UUID NOT NULL REFERENCES companies(id),
     event_id         UUID NOT NULL REFERENCES events(id),
-    booth_type       TEXT NOT NULL,       -- e.g. "Standard", "Raw Space"
-    sales_item_code  TEXT NOT NULL,       -- e.g. "MEP", "Badge"
+    booth_type       TEXT NOT NULL,       -- rate tier, e.g. "PUBLISHED RATE", "EARLY BIRD"
+    sales_item_code  TEXT NOT NULL,       -- e.g. "BAS", "MEP" (Marketing Exposure Package)
     description      TEXT,
     unit_price_myr   NUMERIC(12,2),
-    unit_price_usd   NUMERIC(12,2)
+    unit_price_usd   NUMERIC(12,2),
+    discount_type    TEXT,                -- NULL (none), 'FLAT' (amount) or 'PERCENT'
+    discount_value   NUMERIC(12,2)
 );
 
 -- ----------------------------------------------------------------------------
@@ -152,7 +155,7 @@ CREATE TABLE exhibitors (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id            UUID NOT NULL REFERENCES companies(id),
     company_name          TEXT NOT NULL,
-    company_name_chinese  TEXT,
+    company_name_alt      TEXT,     -- alternative name (e.g. Chinese name)
     country_code          TEXT REFERENCES countries(code),
     agent_id              UUID REFERENCES agents(id),
     salesperson_id        UUID REFERENCES users(id),
@@ -182,7 +185,13 @@ CREATE TABLE exhibitors (
     billing_same_as_company  BOOLEAN NOT NULL DEFAULT TRUE,
     billing_name             TEXT,
     billing_address          TEXT,
+    billing_postcode         TEXT,
+    billing_city             TEXT,
     billing_country_code     TEXT REFERENCES countries(code),
+    billing_reg_no           TEXT,
+    billing_tin_no           TEXT,
+    billing_sst_no           TEXT,
+    billing_contact_no       TEXT,
     billing_email            TEXT,
 
     is_active             BOOLEAN NOT NULL DEFAULT TRUE,
@@ -191,11 +200,23 @@ CREATE TABLE exhibitors (
 
 CREATE INDEX idx_exhibitors_company ON exhibitors(company_id);
 
--- Real one-to-many segments table — no more fixed 6-column hack
+-- Real one-to-many segments table — no more fixed 6-column hack.
+-- Main category is required; subcategory is optional; remarks per segment
+-- (mirrors the Excel MAIN CATEGORY / SUBCATEGORY / REMARKS 1-6 triplets).
 CREATE TABLE exhibitor_segments (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     exhibitor_id     UUID NOT NULL REFERENCES exhibitors(id),
-    segment_sub_id   UUID NOT NULL REFERENCES segment_sub(id)
+    segment_main_id  UUID NOT NULL REFERENCES segment_main(id),
+    segment_sub_id   UUID REFERENCES segment_sub(id),
+    remarks          TEXT
+);
+
+-- Which events (incl. sub-events) an exhibitor takes part in — add/remove
+-- freely; distinct from opportunities/contracts, which stay event-scoped.
+CREATE TABLE exhibitor_events (
+    exhibitor_id  UUID NOT NULL REFERENCES exhibitors(id),
+    event_id      UUID NOT NULL REFERENCES events(id),
+    PRIMARY KEY (exhibitor_id, event_id)
 );
 
 -- ----------------------------------------------------------------------------
@@ -212,6 +233,7 @@ CREATE TABLE opportunities (
     booth_type          TEXT,
     estimated_value_myr NUMERIC(12,2) NOT NULL DEFAULT 0,
     next_follow_up_date DATE,
+    remarks             TEXT,
     is_active           BOOLEAN NOT NULL DEFAULT TRUE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -237,6 +259,7 @@ CREATE TABLE sales_orders (
     hall              TEXT,
     booth_no          TEXT,
     dimension         TEXT,      -- e.g. "3m x 3m"
+    remarks           TEXT,
     is_active         BOOLEAN NOT NULL DEFAULT TRUE,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );

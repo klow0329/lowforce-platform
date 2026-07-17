@@ -6,7 +6,7 @@ const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'bo
 const section = { marginBottom: 40 };
 
 const emptyUserForm = { email: '', full_name: '', role_id: '', temp_password: '' };
-const emptyEventForm = { id: null, code: '', name: '', event_year: '', start_date: '', end_date: '' };
+const emptyEventForm = { id: null, code: '', name: '', event_year: '', start_date: '', end_date: '', parent_event_id: '' };
 
 export default function Admin({ user }) {
   const [users, setUsers] = useState([]);
@@ -98,6 +98,7 @@ export default function Admin({ user }) {
       event_year: ev.event_year ?? '',
       start_date: ev.start_date || '',
       end_date: ev.end_date || '',
+      parent_event_id: ev.parent_event_id || '',
     });
     setShowEventForm(true);
   }
@@ -234,6 +235,13 @@ export default function Admin({ user }) {
             <input type="date" style={inputStyle} value={eventForm.start_date} onChange={(e) => setEventForm({ ...eventForm, start_date: e.target.value })} />
             <label style={label}>End Date</label>
             <input type="date" style={inputStyle} value={eventForm.end_date} onChange={(e) => setEventForm({ ...eventForm, end_date: e.target.value })} />
+            <label style={label}>Sub-event of (optional — e.g. MYFT/MCE under MIFB)</label>
+            <select style={inputStyle} value={eventForm.parent_event_id} onChange={(e) => setEventForm({ ...eventForm, parent_event_id: e.target.value })}>
+              <option value="">— None (main event) —</option>
+              {events.filter((ev) => ev.id !== eventForm.id && !ev.parent_event_id).map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.name}</option>
+              ))}
+            </select>
             <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>
               {eventForm.id ? 'Save Changes' : 'Create Event'}
             </button>
@@ -247,6 +255,7 @@ export default function Admin({ user }) {
               <th>Name</th>
               <th>Year</th>
               <th>Dates</th>
+              <th>Type</th>
               <th>Status</th>
               <th></th>
             </tr>
@@ -258,6 +267,7 @@ export default function Admin({ user }) {
                 <td>{ev.name}</td>
                 <td>{ev.event_year || '—'}</td>
                 <td>{ev.start_date && ev.end_date ? `${ev.start_date} → ${ev.end_date}` : '—'}</td>
+                <td>{ev.parent_code ? `Sub-event of ${ev.parent_code}` : 'Main'}</td>
                 <td>{ev.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button onClick={() => startEditEvent(ev)}>Edit</button>{' '}

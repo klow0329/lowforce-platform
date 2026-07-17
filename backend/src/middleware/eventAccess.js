@@ -36,4 +36,21 @@ function requireEventAccess(req, res, next) {
     .catch(next);
 }
 
-module.exports = { userCanAccessEvent, requireEventAccess };
+// All event ids this user can see — used when replacing per-exhibitor event
+// participation so a user never wipes grants on events they can't even see.
+async function getAccessibleEventIds(userId, companyId) {
+  const result = await pool.query(
+    `SELECT e.id FROM events e
+     WHERE e.company_id = $2
+       AND (
+         EXISTS (SELECT 1 FROM users u LEFT JOIN roles r ON r.id = u.role_id
+                 WHERE u.id = $1 AND r.code IN ('ADM','MGT'))
+         OR EXISTS (SELECT 1 FROM user_event_access uea
+                    WHERE uea.user_id = $1 AND uea.event_id = e.id AND uea.is_active = TRUE)
+       )`,
+    [userId, companyId]
+  );
+  return result.rows.map((r) => r.id);
+}
+
+module.exports = { userCanAccessEvent, requireEventAccess, getAccessibleEventIds };

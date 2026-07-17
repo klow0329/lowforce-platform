@@ -21,19 +21,19 @@ export default function InvoicePrint() {
 
   if (!invoice || !company) return <p style={{ maxWidth: 700, margin: '40px auto' }}>Loading...</p>;
 
-  const billTo = invoice.billing_same_as_company
-    ? {
-        name: invoice.company_name,
-        address: invoice.billing_address || '—',
-        country: invoice.billing_country_code || invoice.country_code || '—',
-        email: invoice.contact1_email || '—',
-      }
-    : {
-        name: invoice.billing_name || invoice.company_name,
-        address: invoice.billing_address || '—',
-        country: invoice.billing_country_code || '—',
-        email: invoice.billing_email || '—',
-      };
+  const same = invoice.billing_same_as_company;
+  const billTo = {
+    name: same ? invoice.company_name : (invoice.billing_name || invoice.company_name),
+    address: invoice.billing_address || '—',
+    postcodeCity: [same ? invoice.postcode : invoice.billing_postcode, same ? invoice.city : invoice.billing_city]
+      .filter(Boolean).join(' '),
+    country: (same ? invoice.country_code : invoice.billing_country_code) || '—',
+    regNo: same ? invoice.reg_no : invoice.billing_reg_no,
+    tinNo: same ? invoice.tin_no : invoice.billing_tin_no,
+    sstNo: same ? invoice.sst_no : invoice.billing_sst_no,
+    contactNo: same ? invoice.contact1_phone : invoice.billing_contact_no,
+    email: (same ? invoice.contact1_email : invoice.billing_email) || '—',
+  };
 
   const description = invoice.booth_type
     ? `Exhibition Booth Space — ${invoice.booth_type}${invoice.booth_sqm ? ` (${invoice.booth_sqm} sqm)` : ''}`
@@ -62,7 +62,12 @@ export default function InvoicePrint() {
         <h4>Bill To</h4>
         <div>{billTo.name}</div>
         <div>{billTo.address}</div>
+        {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
         <div>{billTo.country}</div>
+        {billTo.regNo && <div>Co. Reg No: {billTo.regNo}</div>}
+        {billTo.tinNo && <div>TIN No: {billTo.tinNo}</div>}
+        {billTo.sstNo && <div>SST No: {billTo.sstNo}</div>}
+        {billTo.contactNo && <div>Contact: {billTo.contactNo}</div>}
         <div>{billTo.email}</div>
       </div>
 

@@ -57,6 +57,22 @@ manage events and per-user event access from the **Admin** page, and edit
 each event's rates on the **Price List** page (everyone else sees it
 read-only).
 
+## Latest changes to test
+
+- **Exhibitor form**: "Alt Name" (was Chinese name); fuller Billing block
+  (postcode, city, country, Co. Reg/TIN/SST No., contact no. — auto-mirrored
+  when "Same as company" is on); segments are now rows of Main Category +
+  optional Subcategory + Remarks; **Event Participation** checkboxes show
+  MIFB as the main event with MYFT/MCE as sub-events (add/remove freely).
+- **Admin → Events**: an event can be marked as a sub-event of a main event.
+- **Price List**: MEP (Marketing Exposure Package) is priced per rate tier;
+  CUB (Customized Booth) added; every item can carry its own discount —
+  flat MYR amount or percentage. Descriptions are editable per item.
+- **Contracts**: Booking Type, Hall, Booth No, Dimension and Remarks fields;
+  printable Contract/Proforma/Invoice show the fuller Bill To block
+  (postcode/city, Reg/TIN/SST No., contact).
+- **Opportunities**: Remarks field.
+
 ## MIFB27 — the fresh cycle
 
 The **MIFB 2027** event exists with an empty pipeline (everything is

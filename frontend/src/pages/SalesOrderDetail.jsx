@@ -28,6 +28,11 @@ export default function SalesOrderDetail() {
     contract_type: 'STANDARD',
     contract_date: new Date().toISOString().slice(0, 10),
     total_myr: searchParams.get('estimated_value') || '',
+    booking_type: '',
+    hall: '',
+    booth_no: '',
+    dimension: '',
+    remarks: '',
   });
   const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [exhibitorSearch, setExhibitorSearch] = useState('');
@@ -53,6 +58,11 @@ export default function SalesOrderDetail() {
         contract_type: salesOrder.contract_type,
         contract_date: salesOrder.contract_date || '',
         total_myr: salesOrder.total_myr,
+        booking_type: salesOrder.booking_type || '',
+        hall: salesOrder.hall || '',
+        booth_no: salesOrder.booth_no || '',
+        dimension: salesOrder.dimension || '',
+        remarks: salesOrder.remarks || '',
       });
       setExhibitorName(salesOrder.company_name);
       setLoading(false);
@@ -178,8 +188,35 @@ export default function SalesOrderDetail() {
         <label style={label}>Contract Date</label>
         <input type="date" style={inputStyle} value={form.contract_date} onChange={(e) => set('contract_date', e.target.value)} />
 
+        <label style={label}>Booking Type</label>
+        <select style={inputStyle} value={form.booking_type} onChange={(e) => set('booking_type', e.target.value)}>
+          <option value="">— Select —</option>
+          <option value="PUBLISHED RATE">Published Rate</option>
+          <option value="EARLY BIRD">Early Bird</option>
+          <option value="ONSITE REBOOKING">Onsite Rebooking</option>
+          <option value="CONTRA">Contra</option>
+        </select>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Hall</label>
+            <input style={inputStyle} value={form.hall} onChange={(e) => set('hall', e.target.value)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Booth No</label>
+            <input style={inputStyle} value={form.booth_no} onChange={(e) => set('booth_no', e.target.value)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Dimension</label>
+            <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
+          </div>
+        </div>
+
         <label style={label}>Total (MYR)</label>
         <input type="number" step="0.01" style={inputStyle} value={form.total_myr} onChange={(e) => set('total_myr', e.target.value)} />
+
+        <label style={label}>Remarks</label>
+        <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} />
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
 
