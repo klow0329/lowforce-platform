@@ -4,6 +4,9 @@ const { pool } = require('../config/db');
 // their company). Admin and Management see every event; everyone else only
 // the events they've been granted in user_event_access — same model as
 // tblUserEventAccess in the old Power Apps design.
+// A grant on a MAIN event cascades to all of its sub-events — access is
+// managed at main-event level (per user request), so checking a sub-event
+// also accepts a grant on its parent.
 async function userCanAccessEvent(userId, companyId, eventId) {
   const result = await pool.query(
     `SELECT 1
@@ -14,7 +17,9 @@ async function userCanAccessEvent(userId, companyId, eventId) {
          r.code IN ('ADM', 'MGT')
          OR EXISTS (
            SELECT 1 FROM user_event_access uea
-           WHERE uea.user_id = u.id AND uea.event_id = $3 AND uea.is_active = TRUE
+           JOIN events ev ON ev.id = $3
+           WHERE uea.user_id = u.id AND uea.is_active = TRUE
+             AND (uea.event_id = ev.id OR uea.event_id = ev.parent_event_id)
          )
        )`,
     [userId, companyId, eventId]
@@ -46,7 +51,8 @@ async function getAccessibleEventIds(userId, companyId) {
          EXISTS (SELECT 1 FROM users u LEFT JOIN roles r ON r.id = u.role_id
                  WHERE u.id = $1 AND r.code IN ('ADM','MGT'))
          OR EXISTS (SELECT 1 FROM user_event_access uea
-                    WHERE uea.user_id = $1 AND uea.event_id = e.id AND uea.is_active = TRUE)
+                    WHERE uea.user_id = $1 AND uea.is_active = TRUE
+                      AND (uea.event_id = e.id OR uea.event_id = e.parent_event_id))
        )`,
     [userId, companyId]
   );

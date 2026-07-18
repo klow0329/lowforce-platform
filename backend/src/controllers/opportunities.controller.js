@@ -25,7 +25,7 @@ async function listOpportunities(req, res) {
      JOIN sales_stages st ON st.id = o.stage_id
      LEFT JOIN users u ON u.id = o.salesperson_id
      WHERE o.company_id = $1
-       AND ($2::uuid IS NULL OR o.event_id = $2)
+       AND ($2::uuid IS NULL OR o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2))
        AND o.is_active = TRUE
        AND ($3::uuid IS NULL OR o.stage_id = $3)
        AND ($4::uuid IS NULL OR o.salesperson_id = $4)
@@ -57,7 +57,8 @@ async function getOpportunitySummary(req, res) {
      FROM sales_stages st
      LEFT JOIN opportunities o
        ON o.stage_id = st.id AND o.company_id = st.company_id
-      AND o.event_id = $2 AND o.is_active = TRUE
+      AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+      AND o.is_active = TRUE
      WHERE st.company_id = $1
      GROUP BY st.id, st.code, st.name, st.sort_order, st.is_won, st.is_lost
      ORDER BY st.sort_order`,

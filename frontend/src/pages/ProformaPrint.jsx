@@ -50,6 +50,7 @@ export default function ProformaPrint() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
         <div>
+          <img src="/logo.png" alt="" style={{ height: 44, display: 'block', marginBottom: 6 }} />
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{salesOrder.event_name}</div>
         </div>

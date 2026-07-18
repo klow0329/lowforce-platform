@@ -61,7 +61,8 @@ async function listEvents(req, res) {
          )
          OR EXISTS (
            SELECT 1 FROM user_event_access uea
-           WHERE uea.user_id = $2 AND uea.event_id = e.id AND uea.is_active = TRUE
+           WHERE uea.user_id = $2 AND uea.is_active = TRUE
+             AND (uea.event_id = e.id OR uea.event_id = e.parent_event_id)
          )
        )
      ORDER BY e.event_year DESC, e.name`,

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
+import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -33,6 +34,8 @@ export default function OpportunityDetail() {
 
   const [stages, setStages] = useState([]);
   const [salespeople, setSalespeople] = useState([]);
+  const [original, setOriginal] = useState(null);
+  const [editing, setEditing] = useState(isNew);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -48,7 +51,7 @@ export default function OpportunityDetail() {
   useEffect(() => {
     if (isNew) return;
     api.getOpportunity(id).then(({ opportunity }) => {
-      setForm({
+      const loaded = {
         exhibitor_id: opportunity.exhibitor_id,
         event_id: opportunity.event_id,
         salesperson_id: opportunity.salesperson_id || '',
@@ -58,7 +61,9 @@ export default function OpportunityDetail() {
         estimated_value_myr: opportunity.estimated_value_myr ?? '',
         next_follow_up_date: opportunity.next_follow_up_date || '',
         remarks: opportunity.remarks || '',
-      });
+      };
+      setForm(loaded);
+      setOriginal(loaded);
       setExhibitorName(opportunity.exhibitor_name);
       setLoading(false);
     });
@@ -86,6 +91,8 @@ export default function OpportunityDetail() {
     setExhibitorResults([]);
   }
 
+  const changes = computeChanges(original, form);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
@@ -95,6 +102,7 @@ export default function OpportunityDetail() {
       return;
     }
 
+    if (!confirmSave(changes, 'opportunity', isNew)) return;
     setSaving(true);
     try {
       if (isNew) {
@@ -114,11 +122,15 @@ export default function OpportunityDetail() {
   return (
     <div style={{ maxWidth: 600, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>{isNew ? 'Add Opportunity' : 'Edit Opportunity'}</h2>
-        <button type="button" onClick={() => navigate('/opportunities')}>Back to list</button>
+        <h2>{isNew ? 'Add Opportunity' : editing ? 'Edit Opportunity' : 'Opportunity'}</h2>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          <button type="button" onClick={() => navigate('/opportunities')}>Back to list</button>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit}>
+        <fieldset disabled={!editing} style={fieldsetStyle}>
         <label style={label}>Exhibitor *</label>
         {lockedExhibitorId ? (
           <div style={{ padding: 8, background: '#F5F6FA', borderRadius: 4 }}>{exhibitorName}</div>
@@ -151,11 +163,14 @@ export default function OpportunityDetail() {
           </div>
         )}
 
-        <label style={label}>Event</label>
+        <label style={label}>Event (or sub-event)</label>
         <select style={inputStyle} value={form.event_id} onChange={(e) => set('event_id', e.target.value)}>
-          {events.map((ev) => (
-            <option key={ev.id} value={ev.id}>{ev.name}</option>
-          ))}
+          {events
+            .filter((ev) => !ev.parent_event_id)
+            .flatMap((main) => [main, ...events.filter((ev) => ev.parent_event_id === main.id)])
+            .map((ev) => (
+              <option key={ev.id} value={ev.id}>{ev.parent_event_id ? `— ${ev.name}` : ev.name}</option>
+            ))}
         </select>
 
         <label style={label}>Stage</label>
@@ -187,13 +202,17 @@ export default function OpportunityDetail() {
 
         <label style={label}>Remarks</label>
         <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} />
+        </fieldset>
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
+        {editing && !isNew && <ChangesBanner changes={changes} />}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
-            {saving ? 'Saving...' : 'Save'}
-          </button>
+          {editing && (
+            <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
           {!isNew && (
             <button
               type="button"

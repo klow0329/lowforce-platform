@@ -18,7 +18,8 @@ async function getCustomerAging(req, res) {
               GREATEST(0, CURRENT_DATE - inv.invoice_date) AS days_overdue
        FROM invoices inv
        JOIN exhibitors ex ON ex.id = inv.exhibitor_id
-       WHERE inv.company_id = $1 AND inv.event_id = $2
+       WHERE inv.company_id = $1
+         AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
      )
      SELECT ib.*, ab.label AS bucket_label, ab.sort_order AS bucket_sort_order
      FROM invoice_balances ib
@@ -76,36 +77,36 @@ async function getDashboard(req, res) {
            COUNT(*) FILTER (WHERE st.is_lost) AS lost
          FROM opportunities o
          JOIN sales_stages st ON st.id = o.stage_id
-         WHERE o.company_id = $1 AND o.event_id = $2 AND o.is_active = TRUE`,
+         WHERE o.company_id = $1 AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND o.is_active = TRUE`,
         [req.companyId, event_id]
       ),
       pool.query(
         `SELECT COUNT(*) AS count, COALESCE(SUM(so.total_myr), 0) AS total_value
          FROM sales_orders so
-         WHERE so.company_id = $1 AND so.event_id = $2 AND so.is_active = TRUE
+         WHERE so.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND so.is_active = TRUE
            AND NOT EXISTS (SELECT 1 FROM invoices inv WHERE inv.sales_order_id = so.id)`,
         [req.companyId, event_id]
       ),
       pool.query(
         `SELECT COALESCE(SUM(total_myr), 0) AS total FROM sales_orders
-         WHERE company_id = $1 AND event_id = $2 AND is_active = TRUE`,
+         WHERE company_id = $1 AND event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND is_active = TRUE`,
         [req.companyId, event_id]
       ),
       pool.query(
         `SELECT COALESCE(SUM(amount_myr), 0) AS total FROM invoices
-         WHERE company_id = $1 AND event_id = $2`,
+         WHERE company_id = $1 AND event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)`,
         [req.companyId, event_id]
       ),
       pool.query(
         `SELECT COALESCE(SUM(p.amount_myr), 0) AS total
          FROM payments p JOIN invoices inv ON inv.id = p.invoice_id
-         WHERE inv.company_id = $1 AND inv.event_id = $2`,
+         WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)`,
         [req.companyId, event_id]
       ),
       pool.query(
         `SELECT COUNT(*) AS count
          FROM opportunities o JOIN sales_stages st ON st.id = o.stage_id
-         WHERE o.company_id = $1 AND o.event_id = $2 AND o.is_active = TRUE
+         WHERE o.company_id = $1 AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND o.is_active = TRUE
            AND NOT st.is_won AND NOT st.is_lost
            AND o.next_follow_up_date IS NOT NULL AND o.next_follow_up_date <= CURRENT_DATE`,
         [req.companyId, event_id]

@@ -46,6 +46,7 @@ export default function ContractPrint() {
       </div>
 
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
+        <img src="/logo.png" alt="" style={{ height: 48, marginBottom: 8 }} />
         <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
         <div style={{ fontSize: 14, color: '#5c6070' }}>{salesOrder.event_name}</div>
         <h2 style={{ marginTop: 16, marginBottom: 0 }}>{docTitle}</h2>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -23,6 +24,8 @@ export default function PaymentDetail() {
     bank_ref: '',
   });
   const [receiptNo, setReceiptNo] = useState('');
+  const [original, setOriginal] = useState(null);
+  const [editing, setEditing] = useState(isNew);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -30,13 +33,15 @@ export default function PaymentDetail() {
   useEffect(() => {
     if (isNew) return;
     api.getPayment(id).then(({ payment }) => {
-      setForm({
+      const loaded = {
         invoice_id: payment.invoice_id,
         payment_date: payment.payment_date || '',
         amount_myr: payment.amount_myr,
         payment_method: payment.payment_method || '',
         bank_ref: payment.bank_ref || '',
-      });
+      };
+      setForm(loaded);
+      setOriginal(loaded);
       setReceiptNo(payment.receipt_no);
       setLoading(false);
     });
@@ -46,9 +51,12 @@ export default function PaymentDetail() {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
+  const changes = computeChanges(original, form);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    if (!confirmSave(changes, 'payment', isNew)) return;
     setSaving(true);
     try {
       if (isNew) {
@@ -70,7 +78,10 @@ export default function PaymentDetail() {
     <div style={{ maxWidth: 500, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2>{isNew ? 'Record Payment' : `Payment ${receiptNo}`}</h2>
-        <button type="button" onClick={() => navigate(`/invoices/${form.invoice_id}`)}>Back to invoice</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          <button type="button" onClick={() => navigate(`/invoices/${form.invoice_id}`)}>Back to invoice</button>
+        </div>
       </div>
 
       {invoiceNo && (
@@ -78,6 +89,7 @@ export default function PaymentDetail() {
       )}
 
       <form onSubmit={handleSubmit}>
+        <fieldset disabled={!editing} style={fieldsetStyle}>
         <label style={label}>Payment Date</label>
         <input type="date" style={inputStyle} value={form.payment_date} onChange={(e) => set('payment_date', e.target.value)} />
 
@@ -95,13 +107,17 @@ export default function PaymentDetail() {
 
         <label style={label}>Bank Reference</label>
         <input style={inputStyle} value={form.bank_ref} onChange={(e) => set('bank_ref', e.target.value)} />
+        </fieldset>
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
+        {editing && !isNew && <ChangesBanner changes={changes} />}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
-            {saving ? 'Saving...' : 'Save'}
-          </button>
+          {editing && (
+            <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
           {!isNew && (
             <button type="button" onClick={() => navigate(`/payments/${id}/print`)} style={{ padding: '8px 16px' }}>
               View / Print Receipt

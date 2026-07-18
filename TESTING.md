@@ -57,7 +57,23 @@ manage events and per-user event access from the **Admin** page, and edit
 each event's rates on the **Price List** page (everyone else sees it
 read-only).
 
-## Latest changes to test (round 2)
+## Latest changes to test (round 3)
+
+- **Main events only** in the top-bar switcher and in Admin's per-user event
+  access — a grant on MIFB covers MCE/MYFT automatically, and selecting
+  MIFB 2026 shows data for the main event plus its sub-events combined
+  (dashboard for MIFB 2026 now reads RM 24.4M — all 497 contracts).
+  Opportunities/Contracts can still be filed under a specific sub-event via
+  the form's event dropdown (sub-events shown indented).
+- **Admin → Events** is a tree: sub-events nested under their main event.
+- **Records open read-only** with an **Edit** button (Exhibitor, Opportunity,
+  Contract, Invoice, Payment). While editing, a yellow banner lists every
+  changed value (old → new), and saving always asks for confirmation.
+  Admin/Price List actions confirm too.
+- **Branding**: navy top bar with the ExpoCO logo, orange buttons, brand
+  palette throughout; logo on printed Contract/Proforma/Invoice/Receipt.
+
+## Earlier changes (round 2)
 
 - **Exhibitor form**: "Exhibitor Name" label; Address, Postcode, State,
   Country, Contact 1 Phone and Email are mandatory; Malaysia additionally

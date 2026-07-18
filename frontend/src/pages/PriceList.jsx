@@ -53,6 +53,8 @@ export default function PriceList({ user }) {
       return;
     }
 
+    if (!window.confirm(form.id ? `Save changes to ${form.sales_item_code} (${boothType})?` : `Add ${form.sales_item_code} under ${boothType}?`)) return;
+
     try {
       const { id, new_tier_name, ...rest } = form;
       const payload = { ...rest, booth_type: boothType };

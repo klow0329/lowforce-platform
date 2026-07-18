@@ -13,7 +13,7 @@ async function listSalesOrders(req, res) {
      JOIN exhibitors ex ON ex.id = so.exhibitor_id
      LEFT JOIN users u ON u.id = so.salesperson_id
      WHERE so.company_id = $1
-       AND so.event_id = $2
+       AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
        AND so.is_active = TRUE
        AND ($3 = '' OR ex.company_name ILIKE '%' || $3 || '%')
      ORDER BY so.contract_date DESC NULLS LAST, ex.company_name`,

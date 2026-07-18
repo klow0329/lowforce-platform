@@ -12,7 +12,7 @@ async function listInvoices(req, res) {
      FROM invoices inv
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
      WHERE inv.company_id = $1
-       AND ($2::uuid IS NULL OR inv.event_id = $2)
+       AND ($2::uuid IS NULL OR inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2))
        AND ($3::uuid IS NULL OR inv.sales_order_id = $3)
        AND ($4 = '' OR ex.company_name ILIKE '%' || $4 || '%')
      ORDER BY inv.invoice_date DESC NULLS LAST, inv.invoice_no DESC`,

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
+import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -31,19 +32,23 @@ export default function InvoiceDetail() {
   const [invoiceNo, setInvoiceNo] = useState('');
   const [balanceDue, setBalanceDue] = useState(0);
   const [payments, setPayments] = useState([]);
+  const [original, setOriginal] = useState(null);
+  const [editing, setEditing] = useState(isNew);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   function loadInvoice() {
     api.getInvoice(id).then(({ invoice }) => {
-      setForm({
+      const loaded = {
         sales_order_id: invoice.sales_order_id,
         invoice_date: invoice.invoice_date || '',
         amount_myr: invoice.amount_myr,
         discount_type: invoice.discount_type || '',
         discount_value: invoice.discount_value ?? '',
-      });
+      };
+      setForm(loaded);
+      setOriginal(loaded);
       setExhibitorName(invoice.company_name);
       setInvoiceNo(invoice.invoice_no);
       setBalanceDue(invoice.balance_due);
@@ -81,6 +86,8 @@ export default function InvoiceDetail() {
     setContractResults([]);
   }
 
+  const changes = computeChanges(original, form);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
@@ -90,6 +97,7 @@ export default function InvoiceDetail() {
       return;
     }
 
+    if (!confirmSave(changes, 'invoice', isNew)) return;
     setSaving(true);
     try {
       if (isNew) {
@@ -111,10 +119,14 @@ export default function InvoiceDetail() {
     <div style={{ maxWidth: 600, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2>{isNew ? 'New Invoice' : `Invoice ${invoiceNo}`}</h2>
-        <button type="button" onClick={() => navigate('/invoices')}>Back to list</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          <button type="button" onClick={() => navigate('/invoices')}>Back to list</button>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit}>
+        <fieldset disabled={!editing} style={fieldsetStyle}>
         <label style={label}>Contract *</label>
         {lockedSalesOrderId || !isNew ? (
           <div style={{ padding: 8, background: '#F5F6FA', borderRadius: 4 }}>{exhibitorName}</div>
@@ -167,13 +179,17 @@ export default function InvoiceDetail() {
 
         <label style={label}>Amount (MYR — after discount)</label>
         <input type="number" step="0.01" style={inputStyle} value={form.amount_myr} onChange={(e) => set('amount_myr', e.target.value)} />
+        </fieldset>
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
+        {editing && !isNew && <ChangesBanner changes={changes} />}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
-            {saving ? 'Saving...' : 'Save'}
-          </button>
+          {editing && (
+            <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
           {!isNew && (
             <button type="button" onClick={() => navigate(`/invoices/${id}/print`)} style={{ padding: '8px 16px' }}>
               View / Print Invoice

@@ -33,6 +33,7 @@ export default function Admin({ user }) {
   async function handleCreateUser(e) {
     e.preventDefault();
     setError('');
+    if (!window.confirm(`Create user ${userForm.full_name} (${userForm.email})?`)) return;
     try {
       await api.adminCreateUser(userForm);
       setUserForm(emptyUserForm);
@@ -55,6 +56,7 @@ export default function Admin({ user }) {
 
   async function handleToggleActive(u) {
     setError('');
+    if (!window.confirm(`${u.is_active ? 'Deactivate' : 'Activate'} ${u.full_name}?`)) return;
     try {
       await api.adminUpdateUser(u.id, { is_active: !u.is_active });
       loadAll();
@@ -106,6 +108,7 @@ export default function Admin({ user }) {
   async function handleSaveEvent(e) {
     e.preventDefault();
     setError('');
+    if (!window.confirm(eventForm.id ? `Save changes to event ${eventForm.code}?` : `Create event ${eventForm.code}?`)) return;
     try {
       if (eventForm.id) {
         const { id, code, ...payload } = eventForm;
@@ -123,6 +126,7 @@ export default function Admin({ user }) {
 
   async function handleToggleEventActive(ev) {
     setError('');
+    if (!window.confirm(`${ev.is_active ? 'Deactivate' : 'Activate'} event ${ev.code}?`)) return;
     try {
       await api.adminUpdateEvent(ev.id, { is_active: !ev.is_active });
       loadAll();
@@ -190,7 +194,9 @@ export default function Admin({ user }) {
                   {['ADM', 'MGT'].includes(u.role_code) ? (
                     <span style={{ fontSize: 12, color: '#5c6070' }}>All events</span>
                   ) : (
-                    events.map((ev) => (
+                    // Access is granted at main-event level — a grant covers
+                    // the main event and all of its sub-events.
+                    events.filter((ev) => !ev.parent_event_id).map((ev) => (
                       <label key={ev.id} style={{ fontSize: 12, marginRight: 8, whiteSpace: 'nowrap' }}>
                         <input
                           type="checkbox"
@@ -261,13 +267,18 @@ export default function Admin({ user }) {
             </tr>
           </thead>
           <tbody>
-            {events.map((ev) => (
+            {events
+              .filter((ev) => !ev.parent_event_id)
+              .flatMap((main) => [main, ...events.filter((ev) => ev.parent_event_id === main.id)])
+              .map((ev) => (
               <tr key={ev.id} style={{ borderBottom: '1px solid #eee', opacity: ev.is_active ? 1 : 0.5 }}>
-                <td>{ev.code}</td>
+                <td style={ev.parent_event_id ? { paddingLeft: 28 } : { fontWeight: 600 }}>
+                  {ev.parent_event_id ? '↳ ' : ''}{ev.code}
+                </td>
                 <td>{ev.name}</td>
                 <td>{ev.event_year || '—'}</td>
                 <td>{ev.start_date && ev.end_date ? `${ev.start_date} → ${ev.end_date}` : '—'}</td>
-                <td>{ev.parent_code ? `Sub-event of ${ev.parent_code}` : 'Main'}</td>
+                <td>{ev.parent_event_id ? `Sub-event of ${ev.parent_code}` : 'Main'}</td>
                 <td>{ev.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button onClick={() => startEditEvent(ev)}>Edit</button>{' '}

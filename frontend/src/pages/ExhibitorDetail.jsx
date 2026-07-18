@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
+import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
@@ -55,6 +56,8 @@ export default function ExhibitorDetail() {
 
   const { events } = useEventContext();
   const [form, setForm] = useState(emptyForm);
+  const [original, setOriginal] = useState(null);
+  const [editing, setEditing] = useState(isNew);
   const [countries, setCountries] = useState([]);
   const [agents, setAgents] = useState([]);
   const [salespeople, setSalespeople] = useState([]);
@@ -83,6 +86,7 @@ export default function ExhibitorDetail() {
         if (exhibitor[key] !== null && exhibitor[key] !== undefined) loaded[key] = exhibitor[key];
       }
       setForm(loaded);
+      setOriginal(loaded);
       setLoading(false);
     });
     api.listOpportunities({ exhibitor_id: id }).then(({ opportunities }) => setOpportunities(opportunities));
@@ -121,9 +125,13 @@ export default function ExhibitorDetail() {
     }));
   }
 
+  const changes = computeChanges(original, form);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+
+    if (!confirmSave(changes, 'exhibitor', isNew)) return;
     setSaving(true);
 
     // When "Same as Exhibitor Info" is on, every billing field mirrors the
@@ -163,11 +171,15 @@ export default function ExhibitorDetail() {
   return (
     <div style={{ maxWidth: 700, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>{isNew ? 'Add Exhibitor' : 'Edit Exhibitor'}</h2>
-        <button type="button" onClick={() => navigate('/exhibitors')}>Back to list</button>
+        <h2>{isNew ? 'Add Exhibitor' : editing ? 'Edit Exhibitor' : 'Exhibitor'}</h2>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          <button type="button" onClick={() => navigate('/exhibitors')}>Back to list</button>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit}>
+        <fieldset disabled={!editing} style={fieldsetStyle}>
         <div style={section}>
           <h3>Company Info</h3>
           <label style={label}>Exhibitor Name *</label>
@@ -419,11 +431,16 @@ export default function ExhibitorDetail() {
           </div>
         </div>
 
-        {error && <p style={{ color: 'red' }}>{error}</p>}
+        </fieldset>
 
-        <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
-          {saving ? 'Saving...' : 'Save'}
-        </button>
+        {error && <p style={{ color: 'red' }}>{error}</p>}
+        {editing && !isNew && <ChangesBanner changes={changes} />}
+
+        {editing && (
+          <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        )}
       </form>
 
       {!isNew && (

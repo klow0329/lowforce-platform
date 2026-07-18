@@ -14,7 +14,10 @@ export function EventProvider({ children }) {
   useEffect(() => {
     api.listEvents().then(({ events }) => {
       setEvents(events);
-      if (events.length > 0) setSelectedEventId(events[0].id);
+      // The switcher works at main-event level; sub-events ride along.
+      const mains = events.filter((ev) => !ev.parent_event_id);
+      if (mains.length > 0) setSelectedEventId(mains[0].id);
+      else if (events.length > 0) setSelectedEventId(events[0].id);
       setLoading(false);
     });
   }, []);

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
+import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -44,6 +45,8 @@ export default function SalesOrderDetail() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [invoices, setInvoices] = useState([]);
+  const [original, setOriginal] = useState(null);
+  const [editing, setEditing] = useState(isNew);
 
   useEffect(() => {
     api.listSalespeople().then(({ salespeople }) => setSalespeople(salespeople));
@@ -52,7 +55,7 @@ export default function SalesOrderDetail() {
   useEffect(() => {
     if (isNew) return;
     api.getSalesOrder(id).then(({ salesOrder }) => {
-      setForm({
+      const loaded = {
         exhibitor_id: salesOrder.exhibitor_id,
         event_id: salesOrder.event_id,
         opportunity_id: salesOrder.opportunity_id || '',
@@ -67,7 +70,9 @@ export default function SalesOrderDetail() {
         remarks: salesOrder.remarks || '',
         discount_type: salesOrder.discount_type || '',
         discount_value: salesOrder.discount_value ?? '',
-      });
+      };
+      setForm(loaded);
+      setOriginal(loaded);
       setExhibitorName(salesOrder.company_name);
       setLoading(false);
     });
@@ -96,6 +101,8 @@ export default function SalesOrderDetail() {
     setExhibitorResults([]);
   }
 
+  const changes = computeChanges(original, form);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
@@ -105,6 +112,7 @@ export default function SalesOrderDetail() {
       return;
     }
 
+    if (!confirmSave(changes, 'contract', isNew)) return;
     setSaving(true);
     try {
       if (isNew) {
@@ -125,11 +133,15 @@ export default function SalesOrderDetail() {
   return (
     <div style={{ maxWidth: 600, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>{isNew ? 'New Contract' : 'Edit Contract'}</h2>
-        <button type="button" onClick={() => navigate('/sales-orders')}>Back to list</button>
+        <h2>{isNew ? 'New Contract' : editing ? 'Edit Contract' : 'Contract'}</h2>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          <button type="button" onClick={() => navigate('/sales-orders')}>Back to list</button>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit}>
+        <fieldset disabled={!editing} style={fieldsetStyle}>
         <label style={label}>Exhibitor *</label>
         {lockedExhibitorId || !isNew ? (
           <div style={{ padding: 8, background: '#F5F6FA', borderRadius: 4 }}>{exhibitorName}</div>
@@ -168,11 +180,14 @@ export default function SalesOrderDetail() {
           </p>
         )}
 
-        <label style={label}>Event</label>
+        <label style={label}>Event (or sub-event)</label>
         <select style={inputStyle} value={form.event_id} onChange={(e) => set('event_id', e.target.value)} disabled={!isNew}>
-          {events.map((ev) => (
-            <option key={ev.id} value={ev.id}>{ev.name}</option>
-          ))}
+          {events
+            .filter((ev) => !ev.parent_event_id)
+            .flatMap((main) => [main, ...events.filter((ev) => ev.parent_event_id === main.id)])
+            .map((ev) => (
+              <option key={ev.id} value={ev.id}>{ev.parent_event_id ? `— ${ev.name}` : ev.name}</option>
+            ))}
         </select>
 
         <label style={label}>Contract Type</label>
@@ -236,13 +251,17 @@ export default function SalesOrderDetail() {
 
         <label style={label}>Remarks</label>
         <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} />
+        </fieldset>
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
+        {editing && !isNew && <ChangesBanner changes={changes} />}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
-            {saving ? 'Saving...' : 'Save'}
-          </button>
+          {editing && (
+            <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          )}
           {!isNew && (
             <>
               <button type="button" onClick={() => navigate(`/sales-orders/${id}/print`)} style={{ padding: '8px 16px' }}>

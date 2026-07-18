@@ -1,8 +1,51 @@
-/* Printable documents (Contract Form, and later Invoice/Receipt) render
-   inside the normal app shell but hide the nav chrome when actually
-   printed — anything that shouldn't appear on paper gets .no-print. */
+/* LowForce branding — palette from the checkpoint doc Section 6:
+   Navy #1B3A6B · Orange #F47920 · Orange Dark #C45E10 · Surface #F5F6FA */
+
+body {
+  margin: 0;
+  background: #F5F6FA;
+  font-family: 'Open Sans', 'Segoe UI', Calibri, sans-serif;
+  color: #202330;
+}
+
+h2, h3, h4 {
+  color: #1B3A6B;
+}
+
+button {
+  background: #F47920;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+button:hover { background: #C45E10; }
+button:disabled { opacity: 0.5; cursor: default; }
+
+input, select, textarea {
+  border: 1px solid #cfd3dd;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  background: #fff;
+}
+input:disabled, select:disabled, textarea:disabled {
+  background: #eef0f5;
+  color: #3c4152;
+}
+
+th { color: #1B3A6B; }
+
+a { color: #1B3A6B; }
+
+/* Printable documents (Contract Form, Invoice, Receipt...) hide the nav
+   chrome when actually printed. */
 @media print {
   .no-print {
     display: none !important;
   }
+  body { background: #fff; }
 }
