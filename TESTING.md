@@ -57,7 +57,21 @@ manage events and per-user event access from the **Admin** page, and edit
 each event's rates on the **Price List** page (everyone else sees it
 read-only).
 
-## Latest changes to test (round 3)
+## Latest changes to test (round 4)
+
+- **Mobile & tablet**: every screen now works on phones/tablets — the nav
+  wraps, buttons are tappable, and list tables reflow into labelled cards
+  (no sideways scrolling). Try the site from your phone via the LAN URL.
+  This is a standing rule for all future screens.
+- **Download PDF** on Contract, Proforma, Invoice and Official Receipt —
+  produces a real .pdf file named after the document number (the Print
+  button remains for paper).
+- **Export to Excel** on Exhibitors, Opportunities, Contracts, Invoices,
+  Customer Aging and the Dashboard — exports the currently displayed
+  (filtered) rows as .xlsx. Standing pattern for future list screens.
+- Backend hardening: a database restart no longer crashes the app server.
+
+## Earlier changes (round 3)
 
 - **Main events only** in the top-bar switcher and in Admin's per-user event
   access — a grant on MIFB covers MCE/MYFT automatically, and selecting

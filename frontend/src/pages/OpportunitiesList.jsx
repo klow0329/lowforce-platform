@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
+import { exportToExcel } from '../utils/exportExcel';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
@@ -42,11 +43,32 @@ export default function OpportunitiesList({ user }) {
     return <p style={{ maxWidth: 900, margin: '40px auto' }}>No events set up yet — create one in Admin first.</p>;
   }
 
+  function handleExport() {
+    exportToExcel(
+      opportunities.map((o) => ({
+        'Exhibitor Name': o.exhibitor_name,
+        Event: o.event_name,
+        Stage: o.stage_name,
+        Sqm: o.booth_sqm || '',
+        'Booth Type': o.booth_type || '',
+        'Value (MYR)': o.estimated_value_myr,
+        Salesperson: o.salesperson_name || '',
+        'Follow-up': o.next_follow_up_date || '',
+        Remarks: o.remarks || '',
+      })),
+      'opportunities',
+      'Opportunities'
+    );
+  }
+
   return (
-    <div style={{ maxWidth: 900, margin: '40px auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <h2>Opportunities</h2>
-        <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={handleExport}>Export to Excel</button>
+          <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>
+        </div>
       </div>
 
       {summary && (
@@ -100,7 +122,7 @@ export default function OpportunitiesList({ user }) {
         </label>
       </div>
 
-      <table width="100%" cellPadding="6">
+      <table className="responsive" width="100%" cellPadding="6">
         <thead>
           <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
             <th>Company</th>
@@ -118,12 +140,12 @@ export default function OpportunitiesList({ user }) {
               onClick={() => navigate(`/opportunities/${o.id}`)}
               style={{ borderBottom: '1px solid #eee', cursor: 'pointer' }}
             >
-              <td>{o.exhibitor_name}</td>
-              <td style={{ color: o.is_won ? '#1A9C5B' : o.is_lost ? '#D13434' : 'inherit' }}>{o.stage_name}</td>
-              <td>{o.booth_sqm || '—'}</td>
-              <td>{fmtMYR(o.estimated_value_myr)}</td>
-              <td>{o.salesperson_name || '—'}</td>
-              <td>{o.next_follow_up_date || '—'}</td>
+              <td data-label="Company">{o.exhibitor_name}</td>
+              <td data-label="Stage" style={{ color: o.is_won ? '#1A9C5B' : o.is_lost ? '#D13434' : 'inherit' }}>{o.stage_name}</td>
+              <td data-label="Sqm">{o.booth_sqm || '—'}</td>
+              <td data-label="Value">{fmtMYR(o.estimated_value_myr)}</td>
+              <td data-label="Salesperson">{o.salesperson_name || '—'}</td>
+              <td data-label="Follow-up">{o.next_follow_up_date || '—'}</td>
             </tr>
           ))}
           {opportunities.length === 0 && (

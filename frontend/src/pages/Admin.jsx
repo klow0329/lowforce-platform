@@ -136,7 +136,7 @@ export default function Admin({ user }) {
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
       <h2>Admin</h2>
       {error && <p style={{ color: 'red' }}>{error}</p>}
 

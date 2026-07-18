@@ -75,7 +75,7 @@ export default function PaymentDetail() {
   if (loading) return <p style={{ maxWidth: 500, margin: '40px auto' }}>Loading...</p>;
 
   return (
-    <div style={{ maxWidth: 500, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 500, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2>{isNew ? 'Record Payment' : `Payment ${receiptNo}`}</h2>
         <div style={{ display: 'flex', gap: 8 }}>

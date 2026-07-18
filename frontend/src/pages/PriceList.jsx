@@ -93,7 +93,7 @@ export default function PriceList({ user }) {
   const tiers = [...new Set(items.map((i) => i.booth_type))];
 
   return (
-    <div style={{ maxWidth: 800, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 800, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2>Price List — {eventName}</h2>
         {isAdmin && (

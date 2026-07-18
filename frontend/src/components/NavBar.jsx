@@ -15,6 +15,7 @@ export default function NavBar({ user, onLogout }) {
   return (
     <div className="no-print" style={{ background: '#1B3A6B' }}>
       <div
+        className="nav-inner"
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -24,7 +25,7 @@ export default function NavBar({ user, onLogout }) {
           padding: '10px 0',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 6 }}>
           <img
             src="/logo.png"
             alt="ExpoCO"

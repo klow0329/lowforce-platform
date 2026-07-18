@@ -12,4 +12,12 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
+// Without this handler, an error on an idle connection (e.g. the database
+// restarting) is an unhandled 'error' event and crashes the whole server.
+// Log it instead — in-flight queries still fail cleanly and get retried by
+// the user, and the pool reconnects on the next query.
+pool.on('error', (err) => {
+  console.error('Idle database connection error (server stays up):', err.message);
+});
+
 module.exports = { pool };

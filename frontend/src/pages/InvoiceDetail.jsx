@@ -116,7 +116,7 @@ export default function InvoiceDetail() {
   if (loading) return <p style={{ maxWidth: 600, margin: '40px auto' }}>Loading...</p>;
 
   return (
-    <div style={{ maxWidth: 600, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 600, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2>{isNew ? 'New Invoice' : `Invoice ${invoiceNo}`}</h2>
         <div style={{ display: 'flex', gap: 8 }}>

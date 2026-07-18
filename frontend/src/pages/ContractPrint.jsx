@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { downloadPdf } from '../utils/pdf';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -39,12 +40,18 @@ export default function ContractPrint() {
   };
 
   return (
-    <div style={{ maxWidth: 700, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 700, margin: '40px auto' }}>
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <button type="button" onClick={() => navigate(`/sales-orders/${id}`)}>Back</button>
-        <button type="button" onClick={() => window.print()}>Print</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => downloadPdf('pdf-doc', `contract-${salesOrder.legacy_order_no || id.slice(0, 8)}`)}>
+            Download PDF
+          </button>
+          <button type="button" onClick={() => window.print()}>Print</button>
+        </div>
       </div>
 
+      <div id="pdf-doc">
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
         <img src="/logo.png" alt="" style={{ height: 48, marginBottom: 8 }} />
         <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
@@ -111,6 +118,7 @@ export default function ContractPrint() {
           <div style={{ borderTop: '1px solid #333', paddingTop: 4 }}>For and on behalf of {salesOrder.company_name}</div>
           <div style={{ marginTop: 32, borderTop: '1px solid #333', paddingTop: 4 }}>Date</div>
         </div>
+      </div>
       </div>
     </div>
   );

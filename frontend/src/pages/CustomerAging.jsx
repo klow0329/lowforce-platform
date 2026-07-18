@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
+import { exportToExcel } from '../utils/exportExcel';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
@@ -25,9 +26,27 @@ export default function CustomerAging() {
     ? report.invoices.filter((inv) => inv.bucket_label === bucketFilter)
     : report.invoices;
 
+  function handleExport() {
+    exportToExcel(
+      visibleInvoices.map((inv) => ({
+        'Exhibitor Name': inv.exhibitor_name,
+        'Invoice No': inv.invoice_no,
+        'Invoice Date': inv.invoice_date,
+        'Days Overdue': inv.days_overdue,
+        Bucket: inv.bucket_label || '',
+        'Balance (MYR)': Number(inv.balance_due),
+      })),
+      'customer-aging',
+      'Customer Aging'
+    );
+  }
+
   return (
-    <div style={{ maxWidth: 900, margin: '40px auto' }}>
-      <h2>Customer Aging</h2>
+    <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <h2>Customer Aging</h2>
+        <button onClick={handleExport}>Export to Excel</button>
+      </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '16px 0 24px' }}>
         {report.summary.map((b) => (
@@ -56,7 +75,7 @@ export default function CustomerAging() {
         </div>
       </div>
 
-      <table width="100%" cellPadding="6">
+      <table className="responsive" width="100%" cellPadding="6">
         <thead>
           <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
             <th>Company</th>
@@ -74,12 +93,12 @@ export default function CustomerAging() {
               onClick={() => navigate(`/invoices/${inv.id}`)}
               style={{ borderBottom: '1px solid #eee', cursor: 'pointer' }}
             >
-              <td>{inv.exhibitor_name}</td>
-              <td>{inv.invoice_no}</td>
-              <td>{inv.invoice_date}</td>
-              <td>{inv.days_overdue}</td>
-              <td>{inv.bucket_label || '—'}</td>
-              <td>{fmtMYR(inv.balance_due)}</td>
+              <td data-label="Company">{inv.exhibitor_name}</td>
+              <td data-label="Invoice No">{inv.invoice_no}</td>
+              <td data-label="Invoice Date">{inv.invoice_date}</td>
+              <td data-label="Days Overdue">{inv.days_overdue}</td>
+              <td data-label="Bucket">{inv.bucket_label || '—'}</td>
+              <td data-label="Balance">{fmtMYR(inv.balance_due)}</td>
             </tr>
           ))}
           {visibleInvoices.length === 0 && (

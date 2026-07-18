@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { downloadPdf } from '../utils/pdf';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -22,12 +23,16 @@ export default function ReceiptPrint() {
   if (!payment || !company) return <p style={{ maxWidth: 700, margin: '40px auto' }}>Loading...</p>;
 
   return (
-    <div style={{ maxWidth: 700, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 700, margin: '40px auto' }}>
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <button type="button" onClick={() => navigate(`/payments/${id}`)}>Back</button>
-        <button type="button" onClick={() => window.print()}>Print</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => downloadPdf('pdf-doc', payment.receipt_no || 'receipt')}>Download PDF</button>
+          <button type="button" onClick={() => window.print()}>Print</button>
+        </div>
       </div>
 
+      <div id="pdf-doc">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
         <div>
           <img src="/logo.png" alt="" style={{ height: 44, display: 'block', marginBottom: 6 }} />
@@ -57,6 +62,7 @@ export default function ReceiptPrint() {
         <div style={{ borderTop: '1px solid #333', paddingTop: 4, maxWidth: 300 }}>
           For and on behalf of {company.name}
         </div>
+      </div>
       </div>
     </div>
   );

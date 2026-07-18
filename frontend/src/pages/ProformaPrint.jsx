@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { downloadPdf } from '../utils/pdf';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -42,12 +43,16 @@ export default function ProformaPrint() {
     : `Exhibition Booth Space — ${salesOrder.event_name}`;
 
   return (
-    <div style={{ maxWidth: 700, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 700, margin: '40px auto' }}>
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <button type="button" onClick={() => navigate(`/sales-orders/${id}`)}>Back</button>
-        <button type="button" onClick={() => window.print()}>Print</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => downloadPdf('pdf-doc', proformaNo)}>Download PDF</button>
+          <button type="button" onClick={() => window.print()}>Print</button>
+        </div>
       </div>
 
+      <div id="pdf-doc">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
         <div>
           <img src="/logo.png" alt="" style={{ height: 44, display: 'block', marginBottom: 6 }} />
@@ -98,6 +103,7 @@ export default function ProformaPrint() {
         Full payment is due prior to the official Invoice and Official Receipt being issued.
         Please quote {proformaNo} as your payment reference.
       </p>
+      </div>
     </div>
   );
 }

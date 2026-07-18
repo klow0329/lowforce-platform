@@ -39,7 +39,7 @@ export default function ChangePassword() {
 
   if (done) {
     return (
-      <div style={{ maxWidth: 400, margin: '40px auto' }}>
+      <div className="page" style={{ maxWidth: 400, margin: '40px auto' }}>
         <h2>Password changed</h2>
         <p>Your password has been updated. Use the new one next time you log in.</p>
         <button onClick={() => navigate('/dashboard')} style={{ padding: '8px 16px' }}>Back to Dashboard</button>
@@ -48,7 +48,7 @@ export default function ChangePassword() {
   }
 
   return (
-    <div style={{ maxWidth: 400, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 400, margin: '40px auto' }}>
       <h2>Change Password</h2>
       <form onSubmit={handleSubmit}>
         <label style={label}>Current Password</label>

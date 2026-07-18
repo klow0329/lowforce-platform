@@ -169,8 +169,8 @@ export default function ExhibitorDetail() {
   if (loading) return <p style={{ maxWidth: 700, margin: '40px auto' }}>Loading...</p>;
 
   return (
-    <div style={{ maxWidth: 700, margin: '40px auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="page" style={{ maxWidth: 700, margin: '40px auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <h2>{isNew ? 'Add Exhibitor' : editing ? 'Edit Exhibitor' : 'Exhibitor'}</h2>
         <div style={{ display: 'flex', gap: 8 }}>
           {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}

@@ -41,6 +41,45 @@ th { color: #1B3A6B; }
 
 a { color: #1B3A6B; }
 
+/* ---------------------------------------------------------------------------
+   Mobile & tablet support — standing Phase 1 requirement: readable text,
+   tappable buttons, and NO sideways-scrolling tables (they reflow to cards).
+--------------------------------------------------------------------------- */
+
+.page { padding-left: 16px; padding-right: 16px; }
+
+.nav-inner { flex-wrap: wrap; row-gap: 6px; padding-left: 16px; padding-right: 16px; }
+
+@media (max-width: 700px) {
+  .page { margin: 16px auto !important; }
+
+  button { padding: 10px 16px; min-height: 40px; }
+  input, select, textarea { font-size: 16px; } /* prevents iOS zoom-on-focus */
+
+  /* Tables reflow into cards; each cell labels itself via data-label */
+  table.responsive, table.responsive tbody,
+  table.responsive tr, table.responsive td {
+    display: block;
+    width: 100% !important;
+    box-sizing: border-box;
+    text-align: left !important;
+  }
+  table.responsive thead { display: none; }
+  table.responsive tr {
+    background: #fff;
+    border: 1px solid #e2e5ec;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    padding: 8px 12px;
+  }
+  table.responsive td { border: none !important; padding: 3px 0; }
+  table.responsive td[data-label]::before {
+    content: attr(data-label) ": ";
+    font-weight: 600;
+    color: #1B3A6B;
+  }
+}
+
 /* Printable documents (Contract Form, Invoice, Receipt...) hide the nav
    chrome when actually printed. */
 @media print {

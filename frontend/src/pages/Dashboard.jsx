@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
+import { exportToExcel } from '../utils/exportExcel';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
@@ -32,9 +33,33 @@ export default function Dashboard() {
     return <p style={{ maxWidth: 900, margin: '40px auto' }}>No events set up yet — create one in Admin first.</p>;
   }
 
+  function handleExport() {
+    exportToExcel(
+      [
+        { Metric: 'Total Opportunities', Value: data.opportunities.total },
+        { Metric: 'Active', Value: data.opportunities.active },
+        { Metric: 'Won', Value: data.opportunities.won },
+        { Metric: 'Lost', Value: data.opportunities.lost },
+        { Metric: 'Conversion Rate (%)', Value: Number(data.opportunities.conversionRatePct.toFixed(1)) },
+        { Metric: 'Follow-Ups Due', Value: data.followUpsDue },
+        { Metric: 'Total Contract Value (MYR)', Value: data.totalContractValue },
+        { Metric: 'Contracted Not Yet Invoiced (count)', Value: data.contractedNotInvoiced.count },
+        { Metric: 'Contracted Not Yet Invoiced (MYR)', Value: data.contractedNotInvoiced.totalValue },
+        { Metric: 'Total Invoiced (MYR)', Value: data.totalInvoiced },
+        { Metric: 'Total Collected (MYR)', Value: data.totalCollected },
+        { Metric: 'Total Outstanding (MYR)', Value: data.totalOutstanding },
+      ],
+      'sales-dashboard',
+      'Dashboard'
+    );
+  }
+
   return (
-    <div style={{ maxWidth: 900, margin: '40px auto' }}>
-      <h2>Sales Dashboard</h2>
+    <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <h2>Sales Dashboard</h2>
+        <button onClick={handleExport}>Export to Excel</button>
+      </div>
 
       <h3 style={{ fontSize: 14, color: '#5c6070', marginTop: 24 }}>Pipeline</h3>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
