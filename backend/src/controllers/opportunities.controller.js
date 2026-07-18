@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { visibilityClause } = require('../utils/visibility');
 
 // Pipeline list — filterable by event, stage, salesperson ("My
 // Opportunities"), exhibitor (for the "linked opportunities" list on the
@@ -11,6 +12,8 @@ async function listOpportunities(req, res) {
   if (!event_id && !exhibitor_id) {
     return res.status(400).json({ error: 'event_id or exhibitor_id is required.' });
   }
+
+  const vis = visibilityClause(req, 'o.salesperson_id', 7);
 
   const result = await pool.query(
     `SELECT o.id, o.exhibitor_id, ex.company_name AS exhibitor_name,
@@ -31,8 +34,10 @@ async function listOpportunities(req, res) {
        AND ($4::uuid IS NULL OR o.salesperson_id = $4)
        AND ($5 = '' OR ex.company_name ILIKE '%' || $5 || '%')
        AND ($6::uuid IS NULL OR o.exhibitor_id = $6)
+       AND ${vis.sql}
      ORDER BY o.next_follow_up_date NULLS LAST, ex.company_name`,
-    [req.companyId, event_id || null, stage_id || null, salesperson_id || null, search || '', exhibitor_id || null]
+    [req.companyId, event_id || null, stage_id || null, salesperson_id || null, search || '', exhibitor_id || null,
+     ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   res.json({ opportunities: result.rows });
@@ -48,6 +53,8 @@ async function getOpportunitySummary(req, res) {
     return res.status(400).json({ error: 'event_id is required.' });
   }
 
+  const vis = visibilityClause(req, 'o.salesperson_id', 3);
+
   const result = await pool.query(
     `SELECT st.id AS stage_id, st.code, st.name, st.sort_order, st.is_won, st.is_lost,
             COUNT(o.id) AS opp_count,
@@ -59,10 +66,11 @@ async function getOpportunitySummary(req, res) {
        ON o.stage_id = st.id AND o.company_id = st.company_id
       AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
       AND o.is_active = TRUE
+      AND ${vis.sql}
      WHERE st.company_id = $1
      GROUP BY st.id, st.code, st.name, st.sort_order, st.is_won, st.is_lost
      ORDER BY st.sort_order`,
-    [req.companyId, event_id]
+    [req.companyId, event_id, ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   const wonCount = result.rows.filter((r) => r.is_won).reduce((sum, r) => sum + Number(r.opp_count), 0);
@@ -83,12 +91,13 @@ async function getOpportunitySummary(req, res) {
 }
 
 async function getOpportunity(req, res) {
+  const vis = visibilityClause(req, 'o.salesperson_id', 3);
   const result = await pool.query(
     `SELECT o.*, ex.company_name AS exhibitor_name
      FROM opportunities o
      JOIN exhibitors ex ON ex.id = o.exhibitor_id
-     WHERE o.id = $1 AND o.company_id = $2`,
-    [req.params.id, req.companyId]
+     WHERE o.id = $1 AND o.company_id = $2 AND ${vis.sql}`,
+    [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
   );
   const opportunity = result.rows[0];
   if (!opportunity) {

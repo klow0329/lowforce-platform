@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
-import { exportToExcel } from '../utils/exportExcel';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
@@ -14,9 +13,10 @@ const tile = {
   borderRadius: 8,
   background: '#fff',
   cursor: 'pointer',
+  color: '#202330', // cards are <button> elements; without this they inherit the global white button text
 };
 const tileLabel = { fontSize: 12, color: '#5c6070' };
-const tileValue = { fontSize: 22, fontWeight: 700 };
+const tileValue = { fontSize: 22, fontWeight: 700, color: '#1B3A6B' };
 
 export default function Dashboard() {
   const { selectedEventId, loading: eventLoading } = useEventContext();
@@ -33,33 +33,9 @@ export default function Dashboard() {
     return <p style={{ maxWidth: 900, margin: '40px auto' }}>No events set up yet — create one in Admin first.</p>;
   }
 
-  function handleExport() {
-    exportToExcel(
-      [
-        { Metric: 'Total Opportunities', Value: data.opportunities.total },
-        { Metric: 'Active', Value: data.opportunities.active },
-        { Metric: 'Won', Value: data.opportunities.won },
-        { Metric: 'Lost', Value: data.opportunities.lost },
-        { Metric: 'Conversion Rate (%)', Value: Number(data.opportunities.conversionRatePct.toFixed(1)) },
-        { Metric: 'Follow-Ups Due', Value: data.followUpsDue },
-        { Metric: 'Total Contract Value (MYR)', Value: data.totalContractValue },
-        { Metric: 'Contracted Not Yet Invoiced (count)', Value: data.contractedNotInvoiced.count },
-        { Metric: 'Contracted Not Yet Invoiced (MYR)', Value: data.contractedNotInvoiced.totalValue },
-        { Metric: 'Total Invoiced (MYR)', Value: data.totalInvoiced },
-        { Metric: 'Total Collected (MYR)', Value: data.totalCollected },
-        { Metric: 'Total Outstanding (MYR)', Value: data.totalOutstanding },
-      ],
-      'sales-dashboard',
-      'Dashboard'
-    );
-  }
-
   return (
     <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <h2>Sales Dashboard</h2>
-        <button onClick={handleExport}>Export to Excel</button>
-      </div>
+      <h2>Sales Dashboard</h2>
 
       <h3 style={{ fontSize: 14, color: '#5c6070', marginTop: 24 }}>Pipeline</h3>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -89,6 +65,11 @@ export default function Dashboard() {
         >
           <div style={tileLabel}>Follow-Ups Due</div>
           <div style={{ ...tileValue, color: data.followUpsDue > 0 ? '#F47920' : 'inherit' }}>{data.followUpsDue}</div>
+        </button>
+        <button style={tile} onClick={() => navigate('/opportunities')} title="Bare Space, Shell Scheme, Enhanced Shell, Walk-On Package and Custom Build only">
+          <div style={tileLabel}>Total Booths (Won)</div>
+          <div style={tileValue}>{data.totalBooths.count}</div>
+          <div style={tileLabel}>{data.totalBooths.totalSqm} sqm</div>
         </button>
       </div>
 

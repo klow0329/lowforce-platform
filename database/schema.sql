@@ -264,6 +264,20 @@ CREATE TABLE sales_orders (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Per-user, per-screen saved table views (visible columns) — lets each user
+-- pick which fields matter to them and save named/default presets, rather
+-- than every list screen showing a fixed column set.
+CREATE TABLE user_table_views (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL REFERENCES users(id),
+    screen_key  TEXT NOT NULL,        -- e.g. 'exhibitors', 'opportunities'
+    name        TEXT NOT NULL,
+    columns     JSONB NOT NULL,       -- ordered array of column keys
+    is_default  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, screen_key, name)
+);
+
 -- ----------------------------------------------------------------------------
 -- 11. Invoices, Payments / Official Receipts
 --     (Proforma is a pre-invoice document generated from a sales_order before

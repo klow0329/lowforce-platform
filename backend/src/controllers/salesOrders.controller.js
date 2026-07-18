@@ -1,10 +1,13 @@
 const { pool } = require('../config/db');
+const { visibilityClause } = require('../utils/visibility');
 
 async function listSalesOrders(req, res) {
   const { event_id, search } = req.query;
   if (!event_id) {
     return res.status(400).json({ error: 'event_id is required.' });
   }
+
+  const vis = visibilityClause(req, 'so.salesperson_id', 4);
 
   const result = await pool.query(
     `SELECT so.id, so.contract_type, so.contract_date, so.total_myr,
@@ -16,14 +19,16 @@ async function listSalesOrders(req, res) {
        AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
        AND so.is_active = TRUE
        AND ($3 = '' OR ex.company_name ILIKE '%' || $3 || '%')
+       AND ${vis.sql}
      ORDER BY so.contract_date DESC NULLS LAST, ex.company_name`,
-    [req.companyId, event_id, search || '']
+    [req.companyId, event_id, search || '', ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   res.json({ salesOrders: result.rows });
 }
 
 async function getSalesOrder(req, res) {
+  const vis = visibilityClause(req, 'so.salesperson_id', 3);
   const result = await pool.query(
     `SELECT so.*,
             ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email, ex.contact1_phone,
@@ -39,8 +44,8 @@ async function getSalesOrder(req, res) {
      JOIN events ev ON ev.id = so.event_id
      LEFT JOIN users u ON u.id = so.salesperson_id
      LEFT JOIN opportunities o ON o.id = so.opportunity_id
-     WHERE so.id = $1 AND so.company_id = $2`,
-    [req.params.id, req.companyId]
+     WHERE so.id = $1 AND so.company_id = $2 AND ${vis.sql}`,
+    [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   const salesOrder = result.rows[0];

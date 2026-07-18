@@ -91,4 +91,11 @@ export const api = {
     apiFetch('/admin/events', { method: 'POST', body: JSON.stringify(payload) }),
   adminUpdateEvent: (id, payload) =>
     apiFetch(`/admin/events/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+
+  listTableViews: (screen) => apiFetch(`/table-views?screen=${screen}`),
+  createTableView: (payload) =>
+    apiFetch('/table-views', { method: 'POST', body: JSON.stringify(payload) }),
+  updateTableView: (id, payload) =>
+    apiFetch(`/table-views/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteTableView: (id) => apiFetch(`/table-views/${id}`, { method: 'DELETE' }),
 };

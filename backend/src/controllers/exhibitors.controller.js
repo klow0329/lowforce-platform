@@ -1,11 +1,13 @@
 const { pool } = require('../config/db');
 const { getAccessibleEventIds } = require('../middleware/eventAccess');
+const { visibilityClause } = require('../utils/visibility');
 
 // Every query in here filters by req.companyId (set by middleware/tenant.js).
 // This is the pattern every other Phase 1 module (opportunities, sales
 // orders, invoices...) should follow.
 async function listExhibitors(req, res) {
   const search = req.query.search || '';
+  const vis = visibilityClause(req, 'salesperson_id', 3);
 
   const result = await pool.query(
     `SELECT id, company_name, country_code, contact1_name, contact1_email, is_active
@@ -13,9 +15,10 @@ async function listExhibitors(req, res) {
      WHERE company_id = $1
        AND is_active = TRUE
        AND company_name ILIKE $2
+       AND ${vis.sql}
      ORDER BY company_name
      LIMIT 200`,
-    [req.companyId, `%${search}%`]
+    [req.companyId, `%${search}%`, ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   res.json({ exhibitors: result.rows });
@@ -42,9 +45,10 @@ function pickExhibitorFields(body) {
 }
 
 async function getExhibitor(req, res) {
+  const vis = visibilityClause(req, 'salesperson_id', 3);
   const exhibitorResult = await pool.query(
-    `SELECT * FROM exhibitors WHERE id = $1 AND company_id = $2`,
-    [req.params.id, req.companyId]
+    `SELECT * FROM exhibitors WHERE id = $1 AND company_id = $2 AND ${vis.sql}`,
+    [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
   );
   const exhibitor = exhibitorResult.rows[0];
   if (!exhibitor) {

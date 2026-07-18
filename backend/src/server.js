@@ -16,6 +16,7 @@ const paymentsRoutes = require('./routes/payments.routes');
 const reportsRoutes = require('./routes/reports.routes');
 const adminRoutes = require('./routes/admin.routes');
 const priceListRoutes = require('./routes/priceList.routes');
+const tableViewsRoutes = require('./routes/tableViews.routes');
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use('/api/payments', paymentsRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/price-list', priceListRoutes);
+app.use('/api/table-views', tableViewsRoutes);
 
 // If the frontend has been built (npm run build in frontend/), serve it from
 // this same server — one port, one URL to share. During development the Vite

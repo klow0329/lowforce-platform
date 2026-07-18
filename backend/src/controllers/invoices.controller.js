@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { visibilityClause } = require('../utils/visibility');
 
 async function listInvoices(req, res) {
   const { event_id, sales_order_id, search } = req.query;
@@ -6,23 +7,30 @@ async function listInvoices(req, res) {
     return res.status(400).json({ error: 'event_id or sales_order_id is required.' });
   }
 
+  // invoices has no salesperson_id of its own — visibility rides on the
+  // contract's salesperson via sales_orders.
+  const vis = visibilityClause(req, 'so.salesperson_id', 5);
+
   const result = await pool.query(
     `SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr, inv.sales_order_id,
             ex.company_name AS exhibitor_name
      FROM invoices inv
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
+     JOIN sales_orders so ON so.id = inv.sales_order_id
      WHERE inv.company_id = $1
        AND ($2::uuid IS NULL OR inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2))
        AND ($3::uuid IS NULL OR inv.sales_order_id = $3)
        AND ($4 = '' OR ex.company_name ILIKE '%' || $4 || '%')
+       AND ${vis.sql}
      ORDER BY inv.invoice_date DESC NULLS LAST, inv.invoice_no DESC`,
-    [req.companyId, event_id || null, sales_order_id || null, search || '']
+    [req.companyId, event_id || null, sales_order_id || null, search || '', ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   res.json({ invoices: result.rows });
 }
 
 async function getInvoice(req, res) {
+  const vis = visibilityClause(req, 'so.salesperson_id', 3);
   const result = await pool.query(
     `SELECT inv.*,
             ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email, ex.contact1_phone,
@@ -39,8 +47,8 @@ async function getInvoice(req, res) {
      JOIN events ev ON ev.id = inv.event_id
      JOIN sales_orders so ON so.id = inv.sales_order_id
      LEFT JOIN opportunities o ON o.id = so.opportunity_id
-     WHERE inv.id = $1 AND inv.company_id = $2`,
-    [req.params.id, req.companyId]
+     WHERE inv.id = $1 AND inv.company_id = $2 AND ${vis.sql}`,
+    [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   const invoice = result.rows[0];

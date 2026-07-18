@@ -1,4 +1,9 @@
 const { pool } = require('../config/db');
+const { visibilityClause } = require('../utils/visibility');
+
+// The Excel LIST tab classifies sales items as BOOTH or OTHER — only the
+// BOOTH-category codes count toward the "total booths" management KPI.
+const BOOTH_TYPE_CODES = ['BAS', 'SSS', 'ESS', 'WOP', 'CUB'];
 
 // Customer Aging / AR report — every unpaid or partially-paid invoice,
 // bucketed by days overdue using the company's own aging_buckets (not a
@@ -9,6 +14,8 @@ async function getCustomerAging(req, res) {
     return res.status(400).json({ error: 'event_id is required.' });
   }
 
+  const vis = visibilityClause(req, 'so.salesperson_id', 3);
+
   const invoicesResult = await pool.query(
     `WITH invoice_balances AS (
        SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr,
@@ -18,8 +25,10 @@ async function getCustomerAging(req, res) {
               GREATEST(0, CURRENT_DATE - inv.invoice_date) AS days_overdue
        FROM invoices inv
        JOIN exhibitors ex ON ex.id = inv.exhibitor_id
+       JOIN sales_orders so ON so.id = inv.sales_order_id
        WHERE inv.company_id = $1
          AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND ${vis.sql}
      )
      SELECT ib.*, ab.label AS bucket_label, ab.sort_order AS bucket_sort_order
      FROM invoice_balances ib
@@ -29,7 +38,7 @@ async function getCustomerAging(req, res) {
       AND (ab.max_days IS NULL OR ib.days_overdue <= ab.max_days)
      WHERE ib.balance_due > 0.01
      ORDER BY ib.days_overdue DESC`,
-    [req.companyId, event_id]
+    [req.companyId, event_id, ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   const bucketsResult = await pool.query(
@@ -67,7 +76,7 @@ async function getDashboard(req, res) {
     return res.status(400).json({ error: 'event_id is required.' });
   }
 
-  const [oppResult, contractedNotInvoicedResult, contractValueResult, invoicedResult, collectedResult, followUpsResult] =
+  const [oppResult, contractedNotInvoicedResult, contractValueResult, invoicedResult, collectedResult, followUpsResult, boothsResult] =
     await Promise.all([
       pool.query(
         `SELECT
@@ -111,6 +120,17 @@ async function getDashboard(req, res) {
            AND o.next_follow_up_date IS NOT NULL AND o.next_follow_up_date <= CURRENT_DATE`,
         [req.companyId, event_id]
       ),
+      // "Total Booths" only counts BOOTH-category items (BAS/SSS/ESS/WOP/CUB
+      // per the product catalogue) on Won opportunities — OTHER-category
+      // items (Corner, Loading, MEP, Badge, Sponsorship...) aren't booths.
+      pool.query(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(o.booth_sqm), 0) AS total_sqm
+         FROM opportunities o
+         JOIN sales_stages st ON st.id = o.stage_id
+         WHERE o.company_id = $1 AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+           AND o.is_active = TRUE AND st.is_won AND o.booth_type = ANY($3)`,
+        [req.companyId, event_id, BOOTH_TYPE_CODES]
+      ),
     ]);
 
   const opp = oppResult.rows[0];
@@ -136,6 +156,10 @@ async function getDashboard(req, res) {
     totalCollected,
     totalOutstanding: totalInvoiced - totalCollected,
     followUpsDue: Number(followUpsResult.rows[0].count),
+    totalBooths: {
+      count: Number(boothsResult.rows[0].count),
+      totalSqm: Number(boothsResult.rows[0].total_sqm),
+    },
   });
 }
 

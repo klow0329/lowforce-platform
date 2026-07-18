@@ -16,6 +16,7 @@ function attachTenant(req, res, next) {
   }
   req.companyId = req.session.user.company_id;
   req.userId = req.session.user.id;
+  req.roleCode = req.session.user.role_code;
   next();
 }
 

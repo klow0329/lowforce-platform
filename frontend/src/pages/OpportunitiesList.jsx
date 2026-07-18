@@ -2,9 +2,23 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
-import { exportToExcel } from '../utils/exportExcel';
+import DataTable from '../components/DataTable';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+const columns = [
+  { key: 'exhibitor_name', label: 'Company', default: true },
+  {
+    key: 'stage_name', label: 'Stage', default: true,
+    render: (r) => <span style={{ color: r.is_won ? '#1A9C5B' : r.is_lost ? '#D13434' : 'inherit' }}>{r.stage_name}</span>,
+  },
+  { key: 'booth_sqm', label: 'Sqm', default: true },
+  { key: 'booth_type', label: 'Booth Type', default: false },
+  { key: 'estimated_value_myr', label: 'Value', default: true, value: (r) => fmtMYR(r.estimated_value_myr) },
+  { key: 'salesperson_name', label: 'Salesperson', default: true },
+  { key: 'next_follow_up_date', label: 'Follow-up', default: true },
+  { key: 'remarks', label: 'Remarks', default: false },
+];
 
 export default function OpportunitiesList({ user }) {
   const { selectedEventId, loading: eventLoading } = useEventContext();
@@ -43,32 +57,11 @@ export default function OpportunitiesList({ user }) {
     return <p style={{ maxWidth: 900, margin: '40px auto' }}>No events set up yet — create one in Admin first.</p>;
   }
 
-  function handleExport() {
-    exportToExcel(
-      opportunities.map((o) => ({
-        'Exhibitor Name': o.exhibitor_name,
-        Event: o.event_name,
-        Stage: o.stage_name,
-        Sqm: o.booth_sqm || '',
-        'Booth Type': o.booth_type || '',
-        'Value (MYR)': o.estimated_value_myr,
-        Salesperson: o.salesperson_name || '',
-        'Follow-up': o.next_follow_up_date || '',
-        Remarks: o.remarks || '',
-      })),
-      'opportunities',
-      'Opportunities'
-    );
-  }
-
   return (
     <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <h2>Opportunities</h2>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={handleExport}>Export to Excel</button>
-          <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>
-        </div>
+        <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>
       </div>
 
       {summary && (
@@ -76,15 +69,14 @@ export default function OpportunitiesList({ user }) {
           {summary.byStage.map((s) => (
             <button
               key={s.stage_id}
+              className="card-tile"
               onClick={() => setStageFilter(stageFilter === s.stage_id ? '' : s.stage_id)}
               style={{
                 flex: '1 1 140px',
                 textAlign: 'left',
                 padding: 12,
                 border: stageFilter === s.stage_id ? '2px solid #1B3A6B' : '1px solid #ddd',
-                borderRadius: 8,
                 background: s.is_won ? '#eafaf1' : s.is_lost ? '#fdecec' : '#fff',
-                cursor: 'pointer',
               }}
             >
               <div style={{ fontSize: 12, color: '#5c6070' }}>{s.name}</div>
@@ -93,7 +85,7 @@ export default function OpportunitiesList({ user }) {
               <div style={{ fontSize: 12, color: '#5c6070' }}>{s.company_count} companies</div>
             </button>
           ))}
-          <div style={{ flex: '1 1 140px', padding: 12, border: '1px solid #ddd', borderRadius: 8 }}>
+          <div className="card-tile" style={{ flex: '1 1 140px', padding: 12, border: '1px solid #ddd', borderRadius: 8 }}>
             <div style={{ fontSize: 12, color: '#5c6070' }}>Total</div>
             <div style={{ fontSize: 20, fontWeight: 700 }}>{summary.totals.opp_count}</div>
             <div style={{ fontSize: 12 }}>{fmtMYR(summary.totals.total_value_myr)} · {Number(summary.totals.total_sqm)} sqm</div>
@@ -104,12 +96,12 @@ export default function OpportunitiesList({ user }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
           placeholder="Search company name..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ flex: 1, padding: 8 }}
+          style={{ flex: 1, padding: 8, minWidth: 160 }}
         />
         <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
           <option value="">All stages</option>
@@ -122,37 +114,15 @@ export default function OpportunitiesList({ user }) {
         </label>
       </div>
 
-      <table className="responsive" width="100%" cellPadding="6">
-        <thead>
-          <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-            <th>Company</th>
-            <th>Stage</th>
-            <th>Sqm</th>
-            <th>Value</th>
-            <th>Salesperson</th>
-            <th>Follow-up</th>
-          </tr>
-        </thead>
-        <tbody>
-          {opportunities.map((o) => (
-            <tr
-              key={o.id}
-              onClick={() => navigate(`/opportunities/${o.id}`)}
-              style={{ borderBottom: '1px solid #eee', cursor: 'pointer' }}
-            >
-              <td data-label="Company">{o.exhibitor_name}</td>
-              <td data-label="Stage" style={{ color: o.is_won ? '#1A9C5B' : o.is_lost ? '#D13434' : 'inherit' }}>{o.stage_name}</td>
-              <td data-label="Sqm">{o.booth_sqm || '—'}</td>
-              <td data-label="Value">{fmtMYR(o.estimated_value_myr)}</td>
-              <td data-label="Salesperson">{o.salesperson_name || '—'}</td>
-              <td data-label="Follow-up">{o.next_follow_up_date || '—'}</td>
-            </tr>
-          ))}
-          {opportunities.length === 0 && (
-            <tr><td colSpan={6}>No opportunities for this event yet.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <DataTable
+        screenKey="opportunities"
+        columns={columns}
+        rows={opportunities}
+        getRowKey={(r) => r.id}
+        onRowClick={(r) => navigate(`/opportunities/${r.id}`)}
+        exportFilename="opportunities"
+        exportSheetName="Opportunities"
+      />
     </div>
   );
 }
