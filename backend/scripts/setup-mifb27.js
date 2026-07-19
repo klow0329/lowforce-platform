@@ -14,18 +14,18 @@ const COMPANY_ID = '00000000-0000-0000-0000-000000000001';
 // Real MIFB26 rates from the Excel LIST sheet (per-sqm unless noted).
 const RATE_TIERS = ['PUBLISHED RATE', 'EARLY BIRD', 'ONSITE REBOOKING', 'CONTRA'];
 const TIER_PRICES = {
-  //                     BAS            SSS         ESS         WOP         COC (corner, per unit)
-  'PUBLISHED RATE':   { BAS: [1350, 420], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COC: [800, 180] },
-  'EARLY BIRD':       { BAS: [1200, 366], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COC: [800, 180] },
-  'ONSITE REBOOKING': { BAS: [1080, 345], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COC: [800, 180] },
-  'CONTRA':           { BAS: [1350, 420], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COC: [800, 180] },
+  //                     BAS            SSS         ESS         WOP         COR (corner, per unit)
+  'PUBLISHED RATE':   { BAS: [1350, 420], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COR: [800, 180] },
+  'EARLY BIRD':       { BAS: [1200, 366], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COR: [800, 180] },
+  'ONSITE REBOOKING': { BAS: [1080, 345], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COR: [800, 180] },
+  'CONTRA':           { BAS: [1350, 420], SSS: [300, 40], ESS: [450, 80], WOP: [395, 60], COR: [800, 180] },
 };
 const ITEM_NAMES = {
   BAS: 'Bare Space (per sqm)',
   SSS: 'Shell Scheme (per sqm)',
   ESS: 'Enhanced Shell (per sqm)',
   WOP: 'Walk On Package (per sqm)',
-  COC: 'Corner Charge',
+  COR: 'Corner Charge',
 };
 // MEP (Marketing Exposure Package) — rates decoded from the Excel AO-column
 // formula: Onsite Rebooking 900/200, every other tier 1600/380.

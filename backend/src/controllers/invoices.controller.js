@@ -13,6 +13,7 @@ async function listInvoices(req, res) {
 
   const result = await pool.query(
     `SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr, inv.sales_order_id,
+            inv.currency, inv.amount_foreign, inv.exchange_rate, inv.status, inv.billing_pct,
             ex.company_name AS exhibitor_name
      FROM invoices inv
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
@@ -76,8 +77,16 @@ async function generateInvoiceNo(client, companyId) {
   return `${prefix}${String(lastSeq + 1).padStart(4, '0')}`;
 }
 
-async function createInvoice(req, res) {
-  const { sales_order_id, invoice_date, amount_myr } = req.body;
+// Sales no longer types invoice amounts by hand. The user clicks "Generate
+// Draft Invoice(s)" on the contract; the system splits the contract total by
+// percentage (a single 100% invoice, or several for milestone billing) and
+// creates DRAFT invoices Finance can then review. Contracts not yet invoiced
+// are valued at the company's default estimate rate (company_settings) —
+// once a draft is generated, Finance edits it with the REAL rate for that
+// specific invoice, since a USD contract split into 2-3 installments can
+// settle each at a different rate as the market moves.
+async function generateDraftInvoices(req, res) {
+  const { sales_order_id, splits } = req.body;
 
   if (!sales_order_id) {
     return res.status(400).json({ error: 'sales_order_id is required.' });
@@ -88,7 +97,8 @@ async function createInvoice(req, res) {
     await client.query('BEGIN');
 
     const soResult = await client.query(
-      `SELECT id, event_id, exhibitor_id, total_myr FROM sales_orders WHERE id = $1 AND company_id = $2`,
+      `SELECT id, event_id, exhibitor_id, currency, exchange_rate, total_foreign
+       FROM sales_orders WHERE id = $1 AND company_id = $2`,
       [sales_order_id, req.companyId]
     );
     const salesOrder = soResult.rows[0];
@@ -97,42 +107,60 @@ async function createInvoice(req, res) {
       return res.status(404).json({ error: 'Contract not found.' });
     }
 
-    // A contract can carry several installment invoices (the Excel workflow
-    // billed 20%/50%/100% milestones as IN1-IN4) — the only hard rule is
-    // that together they can't exceed the contract total.
+    // Together, all invoices on a contract can't exceed the contract total —
+    // tracked in the contract's OWN currency so a run of different actual
+    // rates across installments can't drift the balance check.
     const invoicedResult = await client.query(
-      `SELECT COALESCE(SUM(amount_myr), 0) AS total_invoiced
+      `SELECT COALESCE(SUM(amount_foreign), 0) AS total_invoiced
        FROM invoices WHERE sales_order_id = $1 AND company_id = $2`,
       [sales_order_id, req.companyId]
     );
-    const remaining = Number(salesOrder.total_myr) - Number(invoicedResult.rows[0].total_invoiced);
+    const contractTotal = Number(salesOrder.total_foreign);
+    const remaining = contractTotal - Number(invoicedResult.rows[0].total_invoiced);
     if (remaining <= 0.01) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'This contract is already fully invoiced.' });
     }
 
-    const invoiceAmount = amount_myr ? Number(amount_myr) : remaining;
-    if (invoiceAmount > remaining + 0.01) {
+    // Default: one draft invoice for the whole remaining balance. Milestone
+    // billing passes several {pct} entries (e.g. 20/50/30) that must sum to
+    // at most 100% of the remaining balance.
+    const splitList = splits && splits.length ? splits : [{ pct: 100 }];
+    const totalPct = splitList.reduce((sum, s) => sum + Number(s.pct), 0);
+    if (totalPct > 100.01) {
       await client.query('ROLLBACK');
-      return res.status(400).json({
-        error: `Invoice exceeds the contract's un-invoiced balance of RM ${remaining.toFixed(2)}.`,
-      });
+      return res.status(400).json({ error: 'Split percentages add up to more than 100%.' });
     }
 
-    const invoiceNo = await generateInvoiceNo(client, req.companyId);
+    const rate = Number(salesOrder.exchange_rate) || 1;
+    const created = [];
+    let allocated = 0;
+    for (let i = 0; i < splitList.length; i++) {
+      const pct = Number(splitList[i].pct);
+      // Last split absorbs any rounding remainder so the splits sum exactly.
+      const rawAmount = i === splitList.length - 1
+        ? (remaining * totalPct) / 100 - allocated
+        : (remaining * pct) / 100;
+      const amountForeign = Math.round(rawAmount * 100) / 100;
+      allocated += amountForeign;
+      const amountMyr = amountForeign * rate;
 
-    const result = await client.query(
-      `INSERT INTO invoices (company_id, event_id, sales_order_id, exhibitor_id, invoice_no, invoice_date, amount_myr)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id`,
-      [
-        req.companyId, salesOrder.event_id, sales_order_id, salesOrder.exhibitor_id,
-        invoiceNo, invoice_date || null, invoiceAmount,
-      ]
-    );
+      const invoiceNo = await generateInvoiceNo(client, req.companyId);
+      const result = await client.query(
+        `INSERT INTO invoices (company_id, event_id, sales_order_id, exhibitor_id, invoice_no, invoice_date,
+                               currency, amount_foreign, exchange_rate, amount_myr, status, billing_pct)
+         VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $9, 'DRAFT', $10)
+         RETURNING id, invoice_no`,
+        [
+          req.companyId, salesOrder.event_id, sales_order_id, salesOrder.exhibitor_id,
+          invoiceNo, salesOrder.currency, amountForeign, rate, amountMyr, pct,
+        ]
+      );
+      created.push(result.rows[0]);
+    }
 
     await client.query('COMMIT');
-    res.status(201).json({ invoice: { id: result.rows[0].id } });
+    res.status(201).json({ invoices: created });
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -142,10 +170,30 @@ async function createInvoice(req, res) {
 }
 
 async function updateInvoice(req, res) {
+  const { amount_foreign, exchange_rate } = req.body;
+
   const fields = {};
-  for (const field of ['invoice_date', 'amount_myr', 'discount_type', 'discount_value']) {
+  for (const field of ['invoice_no', 'invoice_date', 'status', 'discount_type', 'discount_value']) {
     if (field in req.body) fields[field] = req.body[field] === '' ? null : req.body[field];
   }
+
+  // amount_foreign/exchange_rate are linked — recompute amount_myr together
+  // whenever either changes, rather than letting them drift out of sync.
+  if (amount_foreign !== undefined || exchange_rate !== undefined) {
+    const current = await pool.query(
+      `SELECT amount_foreign, exchange_rate FROM invoices WHERE id = $1 AND company_id = $2`,
+      [req.params.id, req.companyId]
+    );
+    if (!current.rows[0]) {
+      return res.status(404).json({ error: 'Invoice not found.' });
+    }
+    const newForeign = amount_foreign !== undefined ? Number(amount_foreign) : Number(current.rows[0].amount_foreign);
+    const newRate = exchange_rate !== undefined ? Number(exchange_rate) : Number(current.rows[0].exchange_rate);
+    fields.amount_foreign = newForeign;
+    fields.exchange_rate = newRate;
+    fields.amount_myr = newForeign * newRate;
+  }
+
   const columns = Object.keys(fields);
 
   if (columns.length === 0) {
@@ -167,4 +215,4 @@ async function updateInvoice(req, res) {
   res.json({ invoice: { id: req.params.id } });
 }
 
-module.exports = { listInvoices, getInvoice, createInvoice, updateInvoice };
+module.exports = { listInvoices, getInvoice, generateDraftInvoices, updateInvoice };

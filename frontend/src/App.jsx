@@ -37,14 +37,14 @@ function OpportunityDetailRoute() {
   return <OpportunityDetail key={id || 'new'} />;
 }
 
-function SalesOrderDetailRoute() {
+function SalesOrderDetailRoute({ user }) {
   const { id } = useParams();
-  return <SalesOrderDetail key={id || 'new'} />;
+  return <SalesOrderDetail key={id || 'new'} user={user} />;
 }
 
 function InvoiceDetailRoute() {
   const { id } = useParams();
-  return <InvoiceDetail key={id || 'new'} />;
+  return <InvoiceDetail key={id} />;
 }
 
 function PaymentDetailRoute() {
@@ -87,12 +87,11 @@ export default function App() {
           <Route path="/opportunities/new" element={<OpportunityDetailRoute />} />
           <Route path="/opportunities/:id" element={<OpportunityDetailRoute />} />
           <Route path="/sales-orders" element={<SalesOrdersList />} />
-          <Route path="/sales-orders/new" element={<SalesOrderDetailRoute />} />
-          <Route path="/sales-orders/:id" element={<SalesOrderDetailRoute />} />
+          <Route path="/sales-orders/new" element={<SalesOrderDetailRoute user={user} />} />
+          <Route path="/sales-orders/:id" element={<SalesOrderDetailRoute user={user} />} />
           <Route path="/sales-orders/:id/print" element={<ContractPrint />} />
           <Route path="/sales-orders/:id/proforma" element={<ProformaPrint />} />
           <Route path="/invoices" element={<InvoicesList />} />
-          <Route path="/invoices/new" element={<InvoiceDetailRoute />} />
           <Route path="/invoices/:id" element={<InvoiceDetailRoute />} />
           <Route path="/invoices/:id/print" element={<InvoicePrint />} />
           <Route path="/payments/new" element={<PaymentDetailRoute />} />

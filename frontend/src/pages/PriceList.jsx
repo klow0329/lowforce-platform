@@ -6,13 +6,14 @@ const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
 const fmt = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2 }));
 
-const emptyForm = { id: null, booth_type: '', new_tier_name: '', sales_item_code: '', description: '', unit_price_myr: '', unit_price_usd: '' };
+const emptyForm = { id: null, booth_type: '', new_tier_name: '', sales_item_code: '', description: '', category: 'OTHER', default_tax_code_id: '', unit_price_myr: '', unit_price_usd: '' };
 
 export default function PriceList({ user }) {
   const { selectedEventId, events, loading: eventLoading } = useEventContext();
   const isAdmin = user.role_code === 'ADM';
 
   const [items, setItems] = useState([]);
+  const [taxCodes, setTaxCodes] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState('');
@@ -23,6 +24,7 @@ export default function PriceList({ user }) {
   }
 
   useEffect(load, [selectedEventId]);
+  useEffect(() => { api.listTaxCodes().then(({ taxCodes }) => setTaxCodes(taxCodes)); }, []);
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -35,6 +37,8 @@ export default function PriceList({ user }) {
       new_tier_name: '',
       sales_item_code: item.sales_item_code,
       description: item.description || '',
+      category: item.category || 'OTHER',
+      default_tax_code_id: item.default_tax_code_id || '',
       unit_price_myr: item.unit_price_myr ?? '',
       unit_price_usd: item.unit_price_usd ?? '',
     });
@@ -121,10 +125,28 @@ export default function PriceList({ user }) {
               <input style={inputStyle} value={form.new_tier_name} onChange={(e) => set('new_tier_name', e.target.value)} required />
             </>
           )}
-          <label style={label}>Item Code (e.g. BAS, SSS, ESS, WOP, COC)</label>
+          <label style={label}>Item Code (e.g. BAS, SSS, ESS, WOP, COR)</label>
           <input style={inputStyle} value={form.sales_item_code} onChange={(e) => set('sales_item_code', e.target.value)} required />
           <label style={label}>Description</label>
           <input style={inputStyle} value={form.description} onChange={(e) => set('description', e.target.value)} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Category</label>
+              <select style={inputStyle} value={form.category} onChange={(e) => set('category', e.target.value)}>
+                <option value="BOOTH">Booth (counts toward Total Booths)</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Default Tax Code</label>
+              <select style={inputStyle} value={form.default_tax_code_id} onChange={(e) => set('default_tax_code_id', e.target.value)}>
+                <option value="">— None —</option>
+                {taxCodes.map((tc) => (
+                  <option key={tc.id} value={tc.id}>{tc.code} ({tc.rate_pct}%)</option>
+                ))}
+              </select>
+            </div>
+          </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
               <label style={label}>Unit Price (MYR)</label>
@@ -157,8 +179,13 @@ export default function PriceList({ user }) {
             <tbody>
               {items.filter((i) => i.booth_type === tier).map((item) => (
                 <tr key={item.id} style={{ borderBottom: '1px solid #eee' }}>
-                  <td>{item.sales_item_code}</td>
-                  <td>{item.description || '—'}</td>
+                  <td>
+                    {item.sales_item_code}
+                    {item.category === 'BOOTH' && (
+                      <span style={{ marginLeft: 6, fontSize: 11, color: '#5c6070' }}>[Booth]</span>
+                    )}
+                  </td>
+                  <td>{item.description || '—'}{item.default_tax_code ? ` · ${item.default_tax_code}` : ''}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(item.unit_price_myr)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(item.unit_price_usd)}</td>
                   {isAdmin && (

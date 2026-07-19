@@ -20,9 +20,9 @@ export default function NavBar({ user, onLogout }) {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          maxWidth: 900,
-          margin: '0 auto',
-          padding: '10px 0',
+          flexWrap: 'wrap',
+          rowGap: 8,
+          padding: '10px 24px',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 6 }}>

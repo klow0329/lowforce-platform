@@ -10,7 +10,7 @@ async function listExhibitors(req, res) {
   const vis = visibilityClause(req, 'salesperson_id', 3);
 
   const result = await pool.query(
-    `SELECT id, company_name, country_code, contact1_name, contact1_email, is_active
+    `SELECT id, company_name, country_code, contact1_name, contact1_email, is_active, salesperson_id
      FROM exhibitors
      WHERE company_id = $1
        AND is_active = TRUE

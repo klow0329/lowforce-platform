@@ -10,6 +10,7 @@ const columns = [
   { key: 'invoice_no', label: 'Invoice No', default: true },
   { key: 'exhibitor_name', label: 'Company', default: true },
   { key: 'invoice_date', label: 'Invoice Date', default: true },
+  { key: 'status', label: 'Status', default: true, value: (r) => (r.status === 'DRAFT' ? 'Draft' : 'Confirmed') },
   { key: 'amount_myr', label: 'Amount', default: true, value: (r) => fmtMYR(r.amount_myr) },
 ];
 
@@ -33,8 +34,10 @@ export default function InvoicesList() {
     <div className="page" style={{ maxWidth: 800, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <h2>Invoices</h2>
-        <button onClick={() => navigate('/invoices/new')}>+ New Invoice</button>
       </div>
+      <p style={{ fontSize: 13, color: '#5c6070' }}>
+        Invoices are generated from a contract — open the contract and use "Generate Draft Invoice(s)".
+      </p>
 
       <input
         placeholder="Search company name..."

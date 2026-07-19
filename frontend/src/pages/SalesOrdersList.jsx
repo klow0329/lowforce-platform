@@ -8,7 +8,6 @@ const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionD
 
 const columns = [
   { key: 'exhibitor_name', label: 'Company', default: true },
-  { key: 'contract_type', label: 'Type', default: true, value: (r) => (r.contract_type === 'COEX' ? 'Co-Exhibitor' : 'Standard') },
   { key: 'contract_date', label: 'Contract Date', default: true },
   { key: 'total_myr', label: 'Total', default: true, value: (r) => fmtMYR(r.total_myr) },
   { key: 'salesperson_name', label: 'Salesperson', default: true },

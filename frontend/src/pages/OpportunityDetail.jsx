@@ -6,6 +6,7 @@ import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../ut
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
+const fmt = (n, ccy) => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
 
 export default function OpportunityDetail() {
   const { id } = useParams();
@@ -22,18 +23,25 @@ export default function OpportunityDetail() {
     event_id: selectedEventId,
     salesperson_id: '',
     stage_id: '',
+    booking_type: '',
+    currency: 'MYR',
     booth_sqm: '',
     booth_type: '',
+    hall: '',
+    booth_no: '',
+    dimension: '',
     estimated_value_myr: '',
     next_follow_up_date: '',
     remarks: '',
   });
+  const [orderType, setOrderType] = useState('BOOTH'); // BOOTH | OTHER — which price list items are offered
   const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [exhibitorSearch, setExhibitorSearch] = useState('');
   const [exhibitorResults, setExhibitorResults] = useState([]);
 
   const [stages, setStages] = useState([]);
   const [salespeople, setSalespeople] = useState([]);
+  const [priceList, setPriceList] = useState([]);
   const [original, setOriginal] = useState(null);
   const [editing, setEditing] = useState(isNew);
   const [loading, setLoading] = useState(!isNew);
@@ -56,8 +64,13 @@ export default function OpportunityDetail() {
         event_id: opportunity.event_id,
         salesperson_id: opportunity.salesperson_id || '',
         stage_id: opportunity.stage_id,
+        booking_type: opportunity.booking_type || '',
+        currency: opportunity.currency || 'MYR',
         booth_sqm: opportunity.booth_sqm ?? '',
         booth_type: opportunity.booth_type || '',
+        hall: opportunity.hall || '',
+        booth_no: opportunity.booth_no || '',
+        dimension: opportunity.dimension || '',
         estimated_value_myr: opportunity.estimated_value_myr ?? '',
         next_follow_up_date: opportunity.next_follow_up_date || '',
         remarks: opportunity.remarks || '',
@@ -70,6 +83,20 @@ export default function OpportunityDetail() {
   }, [id, isNew]);
 
   useEffect(() => {
+    if (!form.event_id) return;
+    api.listPriceList(form.event_id).then(({ priceList }) => setPriceList(priceList));
+  }, [form.event_id]);
+
+  // When loading an existing opportunity, infer which toggle (Booth/Other)
+  // matches its saved item code once the price list is available.
+  useEffect(() => {
+    if (isNew || !form.booth_type || priceList.length === 0) return;
+    const match = priceList.find((p) => p.sales_item_code === form.booth_type);
+    if (match) setOrderType(match.category === 'OTHER' ? 'OTHER' : 'BOOTH');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceList, isNew]);
+
+  useEffect(() => {
     if (!exhibitorSearch) {
       setExhibitorResults([]);
       return;
@@ -79,6 +106,18 @@ export default function OpportunityDetail() {
     }, 250);
     return () => clearTimeout(t);
   }, [exhibitorSearch]);
+
+  // New opportunities default to the exhibitor account's assigned
+  // salesperson rather than Unassigned — covers both picking one from the
+  // search dropdown and arriving here already locked to an exhibitor (e.g.
+  // from the Exhibitor detail page's "+ Add Opportunity").
+  useEffect(() => {
+    if (!isNew || !form.exhibitor_id || form.salesperson_id) return;
+    api.getExhibitor(form.exhibitor_id).then(({ exhibitor }) => {
+      if (exhibitor.salesperson_id) set('salesperson_id', exhibitor.salesperson_id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, form.exhibitor_id]);
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -91,7 +130,19 @@ export default function OpportunityDetail() {
     setExhibitorResults([]);
   }
 
+  function switchOrderType(next) {
+    setOrderType(next);
+    set('booth_type', ''); // the two lists don't overlap — a stale selection would be wrong
+    if (next === 'OTHER') set('booth_sqm', '');
+  }
+
   const changes = computeChanges(original, form);
+
+  const itemOptions = priceList.filter((p) => {
+    if (p.category !== orderType) return false;
+    if (!form.booking_type) return true;
+    return p.booth_type === form.booking_type || p.booth_type === 'ALL TIERS';
+  });
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -163,36 +214,104 @@ export default function OpportunityDetail() {
           </div>
         )}
 
-        <label style={label}>Event (or sub-event)</label>
+        <label style={label}>Event (main event)</label>
         <select style={inputStyle} value={form.event_id} onChange={(e) => set('event_id', e.target.value)}>
-          {events
-            .filter((ev) => !ev.parent_event_id)
-            .flatMap((main) => [main, ...events.filter((ev) => ev.parent_event_id === main.id)])
-            .map((ev) => (
-              <option key={ev.id} value={ev.id}>{ev.parent_event_id ? `— ${ev.name}` : ev.name}</option>
-            ))}
+          {isNew
+            ? events.filter((ev) => !ev.parent_event_id).map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.name}</option>
+              ))
+            // Existing opportunities may predate this rule and still sit
+            // under a sub-event — keep the full hierarchy available so the
+            // view doesn't go blank for them.
+            : events
+                .filter((ev) => !ev.parent_event_id)
+                .flatMap((main) => [main, ...events.filter((ev) => ev.parent_event_id === main.id)])
+                .map((ev) => (
+                  <option key={ev.id} value={ev.id}>{ev.parent_event_id ? `— ${ev.name}` : ev.name}</option>
+                ))}
         </select>
 
-        <label style={label}>Stage</label>
-        <select style={inputStyle} value={form.stage_id} onChange={(e) => set('stage_id', e.target.value)}>
-          {stages.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Stage</label>
+            <select style={inputStyle} value={form.stage_id} onChange={(e) => set('stage_id', e.target.value)}>
+              {stages.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Salesperson</label>
+            <select style={inputStyle} value={form.salesperson_id} onChange={(e) => set('salesperson_id', e.target.value)}>
+              <option value="">— Unassigned —</option>
+              {salespeople.map((s) => (
+                <option key={s.id} value={s.id}>{s.full_name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Tier</label>
+            <select style={inputStyle} value={form.booking_type} onChange={(e) => set('booking_type', e.target.value)}>
+              <option value="">— Select —</option>
+              <option value="PUBLISHED RATE">Published Rate</option>
+              <option value="EARLY BIRD">Early Bird</option>
+              <option value="ONSITE REBOOKING">Onsite Rebooking</option>
+              <option value="CONTRA">Contra</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Currency</label>
+            <select style={inputStyle} value={form.currency} onChange={(e) => set('currency', e.target.value)}>
+              <option value="MYR">MYR</option>
+              <option value="USD">USD</option>
+            </select>
+          </div>
+        </div>
+
+        <label style={label}>Order Type</label>
+        <div style={{ display: 'flex', gap: 16, padding: '4px 0' }}>
+          <label style={{ fontWeight: 400 }}>
+            <input type="radio" checked={orderType === 'BOOTH'} onChange={() => switchOrderType('BOOTH')} /> Booth order
+          </label>
+          <label style={{ fontWeight: 400 }}>
+            <input type="radio" checked={orderType === 'OTHER'} onChange={() => switchOrderType('OTHER')} /> Other sales item (badges, sponsorship, etc. — no booth)
+          </label>
+        </div>
+
+        <label style={label}>{orderType === 'BOOTH' ? 'Booth Type' : 'Sales Item'}</label>
+        <select style={inputStyle} value={form.booth_type} onChange={(e) => set('booth_type', e.target.value)}>
+          <option value="">— Select —</option>
+          {itemOptions.map((p) => (
+            <option key={p.id} value={p.sales_item_code}>
+              {p.sales_item_code}{p.description ? ` — ${p.description}` : ''} ({fmt(form.currency === 'USD' ? p.unit_price_usd : p.unit_price_myr, form.currency)})
+            </option>
           ))}
         </select>
 
-        <label style={label}>Salesperson</label>
-        <select style={inputStyle} value={form.salesperson_id} onChange={(e) => set('salesperson_id', e.target.value)}>
-          <option value="">— Unassigned —</option>
-          {salespeople.map((s) => (
-            <option key={s.id} value={s.id}>{s.full_name}</option>
-          ))}
-        </select>
+        {orderType === 'BOOTH' && (
+          <>
+            <label style={label}>Booth Sqm</label>
+            <input type="number" step="0.01" style={inputStyle} value={form.booth_sqm} onChange={(e) => set('booth_sqm', e.target.value)} />
+          </>
+        )}
 
-        <label style={label}>Booth Type</label>
-        <input style={inputStyle} value={form.booth_type} onChange={(e) => set('booth_type', e.target.value)} />
-
-        <label style={label}>Booth Sqm</label>
-        <input type="number" step="0.01" style={inputStyle} value={form.booth_sqm} onChange={(e) => set('booth_sqm', e.target.value)} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Hall (optional)</label>
+            <input style={inputStyle} value={form.hall} onChange={(e) => set('hall', e.target.value)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Booth No (optional)</label>
+            <input style={inputStyle} value={form.booth_no} onChange={(e) => set('booth_no', e.target.value)} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Dimension (optional)</label>
+            <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
+          </div>
+        </div>
 
         <label style={label}>Estimated Value (MYR)</label>
         <input type="number" step="0.01" style={inputStyle} value={form.estimated_value_myr} onChange={(e) => set('estimated_value_myr', e.target.value)} />
@@ -225,6 +344,12 @@ export default function OpportunityDetail() {
                   estimated_value: form.estimated_value_myr,
                   booth_sqm: form.booth_sqm,
                   booth_type: form.booth_type,
+                  booking_type: form.booking_type,
+                  currency: form.currency,
+                  hall: form.hall,
+                  booth_no: form.booth_no,
+                  dimension: form.dimension,
+                  salesperson_id: form.salesperson_id,
                 });
                 navigate(`/sales-orders/new?${params}`);
               }}

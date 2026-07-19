@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { visibilityClause } = require('../utils/visibility');
+const { checkNewContract } = require('../utils/approvalTriggers');
 
 async function listSalesOrders(req, res) {
   const { event_id, search } = req.query;
@@ -57,8 +58,8 @@ async function getSalesOrder(req, res) {
 }
 
 async function createSalesOrder(req, res) {
-  const { exhibitor_id, event_id, opportunity_id, salesperson_id, contract_type, contract_date, total_myr,
-          hall, booth_no, dimension, booking_type, remarks, discount_type, discount_value } = req.body;
+  const { exhibitor_id, event_id, opportunity_id, salesperson_id, contract_type, contract_date, currency,
+          hall, booth_no, dimension, booking_type, remarks } = req.body;
 
   if (!exhibitor_id || !event_id) {
     return res.status(400).json({ error: 'exhibitor_id and event_id are required.' });
@@ -68,19 +69,36 @@ async function createSalesOrder(req, res) {
   try {
     await client.query('BEGIN');
 
+    // Totals are no longer typed in — they're built up from line items after
+    // creation. A new contract's exchange rate snapshots the company's
+    // current default estimate (admin-configurable), used only until it's
+    // actually invoiced — each invoice then carries Finance's real rate.
+    const contractCurrency = currency || 'MYR';
+    let exchangeRate = 1;
+    if (contractCurrency !== 'MYR') {
+      const settings = await client.query(
+        `SELECT usd_to_myr_rate FROM company_settings WHERE company_id = $1`,
+        [req.companyId]
+      );
+      exchangeRate = settings.rows[0] ? Number(settings.rows[0].usd_to_myr_rate) : 4;
+    }
+
     const result = await client.query(
       `INSERT INTO sales_orders (company_id, exhibitor_id, event_id, opportunity_id, salesperson_id,
-                                 contract_type, contract_date, total_myr, hall, booth_no, dimension, booking_type, remarks,
-                                 discount_type, discount_value)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                                 contract_type, contract_date, currency, exchange_rate, total_myr, total_foreign,
+                                 hall, booth_no, dimension, booking_type, remarks)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, $10, $11, $12, $13, $14)
        RETURNING id`,
       [
         req.companyId, exhibitor_id, event_id, opportunity_id || null, salesperson_id || null,
-        contract_type || 'STANDARD', contract_date || null, total_myr || 0,
+        contract_type || 'STANDARD', contract_date || null, contractCurrency, exchangeRate,
         hall || null, booth_no || null, dimension || null, booking_type || null, remarks || null,
-        discount_type || null, discount_value || null,
       ]
     );
+
+    // If the company has a NEW_CONTRACT approval rule configured, this drops
+    // the contract into PENDING_APPROVAL instead of the default APPROVED.
+    await checkNewContract(client, req.companyId, result.rows[0].id, req.userId);
 
     // Signing a contract means the deal is won — move the source opportunity
     // to the company's "won" stage so the pipeline reflects it automatically.
@@ -104,7 +122,11 @@ async function createSalesOrder(req, res) {
   }
 }
 
-const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'total_myr', 'hall', 'booth_no', 'dimension', 'booking_type', 'remarks', 'discount_type', 'discount_value'];
+// total_myr/total_foreign are NOT editable here — they're derived from line
+// items (see salesOrderItems.controller.js recomputeTotals). currency and
+// exchange_rate remain editable so the contract's estimate rate can be
+// corrected before it's invoiced.
+const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'currency', 'exchange_rate', 'hall', 'booth_no', 'dimension', 'booking_type', 'remarks'];
 
 async function updateSalesOrder(req, res) {
   const fields = {};

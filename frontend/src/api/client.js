@@ -1,11 +1,14 @@
 // Small fetch wrapper. `credentials: 'include'` is what lets the browser
 // send/receive the session cookie that keeps a user logged in.
 async function apiFetch(path, options = {}) {
+  // FormData (file uploads) needs its own browser-set Content-Type with the
+  // multipart boundary — never force JSON on top of it.
+  const isFormData = options.body instanceof FormData;
   const res = await fetch(`/api${path}`, {
     ...options,
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(options.headers || {}),
     },
   });
@@ -54,10 +57,49 @@ export const api = {
 
   listInvoices: (params) => apiFetch(`/invoices?${new URLSearchParams(params)}`),
   getInvoice: (id) => apiFetch(`/invoices/${id}`),
-  createInvoice: (payload) =>
-    apiFetch('/invoices', { method: 'POST', body: JSON.stringify(payload) }),
+  generateDraftInvoices: (payload) =>
+    apiFetch('/invoices/generate-draft', { method: 'POST', body: JSON.stringify(payload) }),
   updateInvoice: (id, payload) =>
     apiFetch(`/invoices/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+
+  listSalesOrderItems: (soId) => apiFetch(`/sales-orders/${soId}/items`),
+  addSalesOrderItem: (soId, payload) =>
+    apiFetch(`/sales-orders/${soId}/items`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateSalesOrderItem: (soId, itemId, payload) =>
+    apiFetch(`/sales-orders/${soId}/items/${itemId}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteSalesOrderItem: (soId, itemId) =>
+    apiFetch(`/sales-orders/${soId}/items/${itemId}`, { method: 'DELETE' }),
+
+  listAttachments: (soId) => apiFetch(`/sales-orders/${soId}/attachments`),
+  uploadAttachment: (soId, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch(`/sales-orders/${soId}/attachments`, { method: 'POST', body: formData });
+  },
+  attachmentDownloadUrl: (soId, attachmentId) => `/api/sales-orders/${soId}/attachments/${attachmentId}/download`,
+  deleteAttachment: (soId, attachmentId) =>
+    apiFetch(`/sales-orders/${soId}/attachments/${attachmentId}`, { method: 'DELETE' }),
+
+  listApprovalLog: (soId) => apiFetch(`/sales-orders/${soId}/approval-log`),
+  approveSalesOrder: (soId, payload) =>
+    apiFetch(`/sales-orders/${soId}/approve`, { method: 'POST', body: JSON.stringify(payload || {}) }),
+  rejectSalesOrder: (soId, payload) =>
+    apiFetch(`/sales-orders/${soId}/reject`, { method: 'POST', body: JSON.stringify(payload || {}) }),
+
+  getSettings: () => apiFetch('/settings'),
+  updateSettings: (payload) => apiFetch('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  listTaxCodes: () => apiFetch('/settings/tax-codes'),
+  createTaxCode: (payload) =>
+    apiFetch('/settings/tax-codes', { method: 'POST', body: JSON.stringify(payload) }),
+  updateTaxCode: (id, payload) =>
+    apiFetch(`/settings/tax-codes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+
+  listApprovalRules: () => apiFetch('/approval-rules'),
+  createApprovalRule: (payload) =>
+    apiFetch('/approval-rules', { method: 'POST', body: JSON.stringify(payload) }),
+  updateApprovalRule: (id, payload) =>
+    apiFetch(`/approval-rules/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteApprovalRule: (id) => apiFetch(`/approval-rules/${id}`, { method: 'DELETE' }),
 
   listPayments: (invoiceId) => apiFetch(`/payments?invoice_id=${invoiceId}`),
   getPayment: (id) => apiFetch(`/payments/${id}`),

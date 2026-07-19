@@ -21,7 +21,7 @@ async function listOpportunities(req, res) {
             o.salesperson_id, u.full_name AS salesperson_name,
             o.stage_id, st.code AS stage_code, st.name AS stage_name,
             st.probability_pct, st.is_won, st.is_lost,
-            o.booth_sqm, o.booth_type, o.estimated_value_myr, o.next_follow_up_date
+            o.booth_sqm, o.booth_type, o.booking_type, o.currency, o.estimated_value_myr, o.next_follow_up_date
      FROM opportunities o
      JOIN exhibitors ex ON ex.id = o.exhibitor_id
      JOIN events ev ON ev.id = o.event_id
@@ -107,8 +107,9 @@ async function getOpportunity(req, res) {
 }
 
 const OPPORTUNITY_FIELDS = [
-  'exhibitor_id', 'event_id', 'salesperson_id', 'stage_id',
-  'booth_sqm', 'booth_type', 'estimated_value_myr', 'next_follow_up_date', 'remarks',
+  'exhibitor_id', 'event_id', 'salesperson_id', 'stage_id', 'booking_type', 'currency',
+  'booth_sqm', 'booth_type', 'hall', 'booth_no', 'dimension',
+  'estimated_value_myr', 'next_follow_up_date', 'remarks',
 ];
 
 function pickOpportunityFields(body) {

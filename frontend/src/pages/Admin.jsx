@@ -7,6 +7,15 @@ const section = { marginBottom: 40 };
 
 const emptyUserForm = { email: '', full_name: '', role_id: '', temp_password: '' };
 const emptyEventForm = { id: null, code: '', name: '', event_year: '', start_date: '', end_date: '', parent_event_id: '' };
+const emptyTaxCodeForm = { id: null, code: '', name: '', rate_pct: '' };
+const emptyRuleForm = { id: null, trigger_type: 'NEW_CONTRACT', threshold_type: '', threshold_value: '', approver_role_code: 'ADM' };
+
+const TRIGGER_LABELS = {
+  NEW_CONTRACT: 'New contract submitted',
+  DISCOUNT_ABOVE_THRESHOLD: 'Line item discount above threshold',
+  TAX_CHANGE: 'Tax code changed on an approved contract',
+  POST_APPROVAL_EDIT: 'Contract edited after approval',
+};
 
 export default function Admin({ user }) {
   const [users, setUsers] = useState([]);
@@ -18,15 +27,130 @@ export default function Admin({ user }) {
   const [showEventForm, setShowEventForm] = useState(false);
   const [error, setError] = useState('');
 
+  const [taxCodes, setTaxCodes] = useState([]);
+  const [taxCodeForm, setTaxCodeForm] = useState(emptyTaxCodeForm);
+  const [showTaxCodeForm, setShowTaxCodeForm] = useState(false);
+  const [exchangeRate, setExchangeRate] = useState('');
+  const [savingRate, setSavingRate] = useState(false);
+  const [rules, setRules] = useState([]);
+  const [ruleForm, setRuleForm] = useState(emptyRuleForm);
+  const [showRuleForm, setShowRuleForm] = useState(false);
+
   function loadAll() {
     api.adminListUsers().then(({ users }) => setUsers(users));
     api.adminListEvents().then(({ events }) => setEvents(events));
   }
 
+  function loadCurrencyAndApprovals() {
+    api.listTaxCodes().then(({ taxCodes }) => setTaxCodes(taxCodes));
+    api.getSettings().then(({ settings }) => setExchangeRate(settings.usd_to_myr_rate));
+    api.listApprovalRules().then(({ rules }) => setRules(rules));
+  }
+
   useEffect(() => {
     loadAll();
+    loadCurrencyAndApprovals();
     api.adminListRoles().then(({ roles }) => setRoles(roles));
   }, []);
+
+  // --- Tax codes & exchange rate --------------------------------------------
+
+  async function handleSaveTaxCode(e) {
+    e.preventDefault();
+    setError('');
+    if (!window.confirm(taxCodeForm.id ? `Save changes to ${taxCodeForm.code}?` : `Add tax code ${taxCodeForm.code}?`)) return;
+    try {
+      const { id, ...payload } = taxCodeForm;
+      if (id) {
+        await api.updateTaxCode(id, { name: payload.name, rate_pct: payload.rate_pct });
+      } else {
+        await api.createTaxCode(payload);
+      }
+      setTaxCodeForm(emptyTaxCodeForm);
+      setShowTaxCodeForm(false);
+      loadCurrencyAndApprovals();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleToggleTaxCodeActive(tc) {
+    setError('');
+    if (!window.confirm(`${tc.is_active ? 'Deactivate' : 'Activate'} ${tc.code}?`)) return;
+    try {
+      await api.updateTaxCode(tc.id, { is_active: !tc.is_active });
+      loadCurrencyAndApprovals();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleSaveExchangeRate(e) {
+    e.preventDefault();
+    setError('');
+    if (!window.confirm(`Set the default USD:MYR rate to 1:${exchangeRate}? This only affects contracts not yet invoiced — Finance enters the real rate per invoice.`)) return;
+    setSavingRate(true);
+    try {
+      await api.updateSettings({ usd_to_myr_rate: exchangeRate });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingRate(false);
+    }
+  }
+
+  // --- Approval rules ---------------------------------------------------------
+
+  async function handleSaveRule(e) {
+    e.preventDefault();
+    setError('');
+    if (!window.confirm(ruleForm.id ? 'Save changes to this rule?' : 'Add this approval rule?')) return;
+    try {
+      const { id, ...payload } = ruleForm;
+      if (id) {
+        await api.updateApprovalRule(id, payload);
+      } else {
+        await api.createApprovalRule(payload);
+      }
+      setRuleForm(emptyRuleForm);
+      setShowRuleForm(false);
+      loadCurrencyAndApprovals();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function startEditRule(r) {
+    setRuleForm({
+      id: r.id,
+      trigger_type: r.trigger_type,
+      threshold_type: r.threshold_type || '',
+      threshold_value: r.threshold_value ?? '',
+      approver_role_code: r.approver_role_code || '',
+    });
+    setShowRuleForm(true);
+  }
+
+  async function handleToggleRuleActive(r) {
+    setError('');
+    try {
+      await api.updateApprovalRule(r.id, { is_active: !r.is_active });
+      loadCurrencyAndApprovals();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDeleteRule(r) {
+    if (!window.confirm('Delete this approval rule?')) return;
+    setError('');
+    try {
+      await api.deleteApprovalRule(r.id);
+      loadCurrencyAndApprovals();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   // --- Users ---------------------------------------------------------------
 
@@ -291,6 +415,136 @@ export default function Admin({ user }) {
         <p style={{ fontSize: 12, color: '#5c6070' }}>
           The event dropdown in the top bar picks up event changes on the next page reload.
         </p>
+      </div>
+
+      <div style={section}>
+        <h3>Exchange Rate</h3>
+        <p style={{ fontSize: 13, color: '#5c6070' }}>
+          Default USD:MYR estimate used for contracts that aren't invoiced yet (pipeline valuation only).
+          Once Finance generates an invoice, they enter the actual rate for that specific invoice — this
+          default has no effect on invoiced amounts.
+        </p>
+        <form onSubmit={handleSaveExchangeRate} style={{ display: 'flex', gap: 8, alignItems: 'center', maxWidth: 300 }}>
+          <span>1 USD =</span>
+          <input
+            type="number" step="0.0001" style={{ ...inputStyle, width: 120 }}
+            value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} required
+          />
+          <span>MYR</span>
+          <button type="submit" disabled={savingRate}>{savingRate ? 'Saving...' : 'Save'}</button>
+        </form>
+      </div>
+
+      <div style={section}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3>Tax Codes</h3>
+          <button onClick={() => { setTaxCodeForm(emptyTaxCodeForm); setShowTaxCodeForm(!showTaxCodeForm); }}>
+            {showTaxCodeForm ? 'Cancel' : '+ Add Tax Code'}
+          </button>
+        </div>
+
+        {showTaxCodeForm && (
+          <form onSubmit={handleSaveTaxCode} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+            <label style={label}>Code (e.g. SV-6)</label>
+            <input style={inputStyle} value={taxCodeForm.code} onChange={(e) => setTaxCodeForm({ ...taxCodeForm, code: e.target.value })} required disabled={!!taxCodeForm.id} />
+            <label style={label}>Name</label>
+            <input style={inputStyle} value={taxCodeForm.name} onChange={(e) => setTaxCodeForm({ ...taxCodeForm, name: e.target.value })} required />
+            <label style={label}>Rate (%)</label>
+            <input type="number" step="0.01" style={inputStyle} value={taxCodeForm.rate_pct} onChange={(e) => setTaxCodeForm({ ...taxCodeForm, rate_pct: e.target.value })} required />
+            <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>{taxCodeForm.id ? 'Save Changes' : 'Add Tax Code'}</button>
+          </form>
+        )}
+
+        <table width="100%" cellPadding="6">
+          <thead>
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+              <th>Code</th><th>Name</th><th>Rate</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {taxCodes.map((tc) => (
+              <tr key={tc.id} style={{ borderBottom: '1px solid #eee', opacity: tc.is_active ? 1 : 0.5 }}>
+                <td>{tc.code}</td>
+                <td>{tc.name}</td>
+                <td>{tc.rate_pct}%</td>
+                <td>{tc.is_active ? 'Active' : 'Inactive'}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button onClick={() => { setTaxCodeForm({ id: tc.id, code: tc.code, name: tc.name, rate_pct: tc.rate_pct }); setShowTaxCodeForm(true); }}>Edit</button>{' '}
+                  <button onClick={() => handleToggleTaxCodeActive(tc)}>{tc.is_active ? 'Deactivate' : 'Activate'}</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={section}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3>Approval Rules</h3>
+          <button onClick={() => { setRuleForm(emptyRuleForm); setShowRuleForm(!showRuleForm); }}>
+            {showRuleForm ? 'Cancel' : '+ Add Rule'}
+          </button>
+        </div>
+        <p style={{ fontSize: 13, color: '#5c6070' }}>
+          When a rule is active, a matching contract or edit is flagged PENDING_APPROVAL until an Admin/Management user approves or rejects it.
+          With no rules configured, contracts are approved automatically as today.
+        </p>
+
+        {showRuleForm && (
+          <form onSubmit={handleSaveRule} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+            <label style={label}>Trigger</label>
+            <select style={inputStyle} value={ruleForm.trigger_type} onChange={(e) => setRuleForm({ ...ruleForm, trigger_type: e.target.value })} disabled={!!ruleForm.id}>
+              {Object.entries(TRIGGER_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+            {ruleForm.trigger_type === 'DISCOUNT_ABOVE_THRESHOLD' && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Threshold Type</label>
+                  <select style={inputStyle} value={ruleForm.threshold_type} onChange={(e) => setRuleForm({ ...ruleForm, threshold_type: e.target.value })}>
+                    <option value="PERCENT">Percent (%)</option>
+                    <option value="FLAT">Flat amount</option>
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Threshold Value</label>
+                  <input type="number" step="0.01" style={inputStyle} value={ruleForm.threshold_value} onChange={(e) => setRuleForm({ ...ruleForm, threshold_value: e.target.value })} required />
+                </div>
+              </div>
+            )}
+            <label style={label}>Approver Role</label>
+            <select style={inputStyle} value={ruleForm.approver_role_code} onChange={(e) => setRuleForm({ ...ruleForm, approver_role_code: e.target.value })}>
+              <option value="ADM">Admin</option>
+              <option value="MGT">Management</option>
+            </select>
+            <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>{ruleForm.id ? 'Save Changes' : 'Add Rule'}</button>
+          </form>
+        )}
+
+        <table width="100%" cellPadding="6">
+          <thead>
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+              <th>Trigger</th><th>Threshold</th><th>Approver</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rules.map((r) => (
+              <tr key={r.id} style={{ borderBottom: '1px solid #eee', opacity: r.is_active ? 1 : 0.5 }}>
+                <td>{TRIGGER_LABELS[r.trigger_type] || r.trigger_type}</td>
+                <td>{r.threshold_value !== null ? `${r.threshold_value}${r.threshold_type === 'PERCENT' ? '%' : ''}` : '—'}</td>
+                <td>{r.approver_role_code || '—'}</td>
+                <td>{r.is_active ? 'Active' : 'Inactive'}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button onClick={() => startEditRule(r)}>Edit</button>{' '}
+                  <button onClick={() => handleToggleRuleActive(r)}>{r.is_active ? 'Deactivate' : 'Activate'}</button>{' '}
+                  <button onClick={() => handleDeleteRule(r)}>Delete</button>
+                </td>
+              </tr>
+            ))}
+            {rules.length === 0 && <tr><td colSpan={5}>No approval rules configured — all contracts auto-approve.</td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   );
