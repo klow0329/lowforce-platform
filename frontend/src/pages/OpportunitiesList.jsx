@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import DataTable from '../components/DataTable';
+import TaskToDoBox from '../components/TaskToDoBox';
+import { isViewOnly } from '../utils/permissions';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
@@ -17,7 +19,7 @@ const columns = [
   { key: 'estimated_value_myr', label: 'Value', default: true, value: (r) => fmtMYR(r.estimated_value_myr) },
   { key: 'salesperson_name', label: 'Salesperson', default: true },
   { key: 'next_follow_up_date', label: 'Follow-up', default: true },
-  { key: 'remarks', label: 'Remarks', default: false },
+  { key: 'remarks', label: 'Remarks / Latest Correspondence', default: true },
 ];
 
 export default function OpportunitiesList({ user }) {
@@ -30,6 +32,7 @@ export default function OpportunitiesList({ user }) {
   const [stageFilter, setStageFilter] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
   const [search, setSearch] = useState('');
+  const [tasks, setTasks] = useState(null);
 
   useEffect(() => {
     api.listStages().then(({ stages }) => setStages(stages));
@@ -38,6 +41,7 @@ export default function OpportunitiesList({ user }) {
   useEffect(() => {
     if (!selectedEventId) return;
     api.getOpportunitySummary(selectedEventId).then(setSummary);
+    api.getTasks(selectedEventId).then(setTasks);
   }, [selectedEventId]);
 
   useEffect(() => {
@@ -61,8 +65,20 @@ export default function OpportunitiesList({ user }) {
     <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <h2>Opportunities</h2>
-        <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>
+        {!isViewOnly(user) && <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>}
       </div>
+
+      {tasks && (
+        <TaskToDoBox
+          title="Follow-Ups Due"
+          items={tasks.opportunityFollowUps.map((t) => ({
+            key: t.id, urgency: t.urgency,
+            label: t.exhibitor_name, meta: t.remarks || t.next_follow_up_date,
+            href: `/opportunities/${t.id}`,
+          }))}
+          emptyText="No follow-ups due, urgent or coming up in the next 7 days."
+        />
+      )}
 
       {summary && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '16px 0 24px' }}>

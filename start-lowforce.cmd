@@ -16,6 +16,11 @@ if errorlevel 1 (
 echo [2/3] Starting the LowForce server...
 cd /d "%~dp0backend"
 
+REM Floor Plan's PDF upload/auto-detect needs poppler-utils (pdftoppm,
+REM pdftotext) on PATH — added here so it works when launched this way,
+REM not just from a dev terminal that happens to have it already.
+set "PATH=C:\Users\SewWahLow\AppData\Local\Microsoft\WinGet\Packages\oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe\poppler-25.07.0\Library\bin;%PATH%"
+
 echo [3/3] Server starting - keep this window open while people are using the app.
 echo.
 echo       Local access:    http://localhost:3001

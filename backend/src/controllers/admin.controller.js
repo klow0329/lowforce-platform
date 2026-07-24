@@ -11,7 +11,13 @@ async function listUsers(req, res) {
               (SELECT array_agg(uea.event_id) FROM user_event_access uea
                WHERE uea.user_id = u.id AND uea.is_active = TRUE),
               '{}'
-            ) AS event_ids
+            ) AS event_ids,
+            COALESCE(
+              (SELECT jsonb_agg(jsonb_build_object('id', ur_r.id, 'code', ur_r.code, 'name', ur_r.name) ORDER BY ur_r.sort_order)
+               FROM user_roles ur JOIN roles ur_r ON ur_r.id = ur.role_id
+               WHERE ur.user_id = u.id),
+              '[]'
+            ) AS assigned_roles
      FROM users u
      LEFT JOIN roles r ON r.id = u.role_id
      WHERE u.company_id = $1
@@ -19,6 +25,49 @@ async function listUsers(req, res) {
     [req.companyId]
   );
   res.json({ users: result.rows });
+}
+
+// Replaces a user's full set of switchable roles. The primary role_id is
+// always kept in the set — you can't remove someone's default role from
+// here, only add/remove the extra ones they can switch into.
+async function setUserRoles(req, res) {
+  const { role_ids } = req.body;
+  if (!Array.isArray(role_ids)) {
+    return res.status(400).json({ error: 'role_ids must be an array.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const userCheck = await client.query(
+      `SELECT role_id FROM users WHERE id = $1 AND company_id = $2`,
+      [req.params.id, req.companyId]
+    );
+    if (!userCheck.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    const primaryRoleId = userCheck.rows[0].role_id;
+    const finalRoleIds = Array.from(new Set([primaryRoleId, ...role_ids].filter(Boolean)));
+
+    await client.query(`DELETE FROM user_roles WHERE user_id = $1`, [req.params.id]);
+    for (const roleId of finalRoleIds) {
+      await client.query(
+        `INSERT INTO user_roles (user_id, role_id)
+         SELECT $1, id FROM roles WHERE id = $2 AND company_id = $3`,
+        [req.params.id, roleId, req.companyId]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // Replaces a user's full event-access set in one call. Admin/Management see
@@ -88,6 +137,11 @@ async function createUser(req, res) {
     [req.companyId, role_id, email, passwordHash, full_name]
   );
 
+  // A new user's only assigned (switchable) role is their primary one —
+  // Admin adds more later via setUserRoles if this person needs to switch
+  // between roles (e.g. Admin + Finance).
+  await pool.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, [result.rows[0].id, role_id]);
+
   res.status(201).json({ user: { id: result.rows[0].id } });
 }
 
@@ -118,6 +172,16 @@ async function updateUser(req, res) {
 
   if (!result.rows[0]) {
     return res.status(404).json({ error: 'User not found.' });
+  }
+
+  // Changing someone's primary role should always keep it in their
+  // switchable set too, so they're never assigned a default role they
+  // can't actually be "acting as".
+  if (fields.role_id) {
+    await pool.query(
+      `INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [req.params.id, fields.role_id]
+    );
   }
 
   res.json({ user: { id: req.params.id } });
@@ -226,6 +290,6 @@ async function updateEvent(req, res) {
 }
 
 module.exports = {
-  listUsers, createUser, updateUser, resetPassword, listRoles, setUserEventAccess,
+  listUsers, createUser, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
   listEvents, createEvent, updateEvent,
 };

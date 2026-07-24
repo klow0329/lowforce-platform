@@ -1,36 +1,93 @@
 const { pool } = require('../config/db');
 const { verifyPassword, hashPassword } = require('../utils/password');
+const { recordAudit } = require('../utils/auditLog');
+
+async function getAvailableRoles(userId) {
+  const result = await pool.query(
+    `SELECT r.code, r.name FROM user_roles ur
+     JOIN roles r ON r.id = ur.role_id
+     WHERE ur.user_id = $1
+     ORDER BY r.sort_order`,
+    [userId]
+  );
+  return result.rows;
+}
 
 async function login(req, res) {
-  const { email, password } = req.body;
+  const { email, password, company_id } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
+  // A person who consults for or works at several client companies (e.g. an
+  // agent or a shared services user) can have a separate account under the
+  // same email in each — the schema already allows this (UNIQUE is
+  // company_id+email, not email alone). company_id narrows to one specific
+  // account once the user has picked which company to log into; omitted on
+  // the first attempt, when it isn't known yet.
   const result = await pool.query(
     `SELECT u.id, u.company_id, u.email, u.password_hash, u.full_name, u.is_active,
-            r.code AS role_code
+            r.code AS role_code, c.name AS company_name
      FROM users u
+     JOIN companies c ON c.id = u.company_id
      LEFT JOIN roles r ON r.id = u.role_id
-     WHERE LOWER(u.email) = LOWER($1)`,
-    [email]
+     WHERE LOWER(u.email) = LOWER($1)
+       AND ($2::uuid IS NULL OR u.company_id = $2)`,
+    [email, company_id || null]
   );
 
-  const user = result.rows[0];
+  const active = result.rows.filter((u) => u.is_active);
 
-  // Deliberately vague error message on both "no such user" and
-  // "wrong password" — doesn't tell an attacker which one was wrong.
+  // More than one company has an active account under this email, and the
+  // caller hasn't said which one yet — can't verify a password without
+  // knowing that, since each company's account is independently
+  // administered and may have a different password. Ask which company
+  // before touching credentials at all (same pattern as Slack's "this email
+  // is in multiple workspaces" picker); the frontend resubmits with
+  // company_id once the person picks one.
+  if (!company_id && active.length > 1) {
+    return res.json({
+      requiresCompanySelection: true,
+      companies: active.map((u) => ({ id: u.company_id, name: u.company_name })),
+    });
+  }
+
+  // Otherwise this is a normal single-account login: either company_id
+  // narrowed the query to exactly one candidate row, or this email only
+  // ever had one account to begin with. Falls back to an inactive match
+  // (if that's all there is) purely so the failed-login audit entry below
+  // can still record the real reason, matching the original behaviour.
+  const user = active[0] || result.rows[0];
+
+  // Deliberately vague error message on both "no such user" and "wrong
+  // password" — doesn't tell an attacker which one was wrong. Only logged
+  // to the audit trail when the email matched a real account (whether
+  // inactive or wrong password) — an unknown email has no company to
+  // attribute the attempt to, and per multi-tenant isolation no one could
+  // ever view it anyway.
   if (!user || !user.is_active) {
+    if (user) {
+      recordAudit({
+        companyId: user.company_id, userId: user.id, userName: user.full_name, roleCode: user.role_code,
+        action: 'FAILED_LOGIN', entityType: 'auth', entityId: user.id, details: { email, reason: 'inactive_account' },
+      });
+    }
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
   const passwordMatches = await verifyPassword(password, user.password_hash);
   if (!passwordMatches) {
+    recordAudit({
+      companyId: user.company_id, userId: user.id, userName: user.full_name, roleCode: user.role_code,
+      action: 'FAILED_LOGIN', entityType: 'auth', entityId: user.id, details: { email, reason: 'wrong_password' },
+    });
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
   // Store only what's needed in the session — never the password hash.
+  // role_code here is the user's ACTIVE role for this session, seeded from
+  // their default/primary role — see switchRole for how it changes.
   req.session.user = {
     id: user.id,
     company_id: user.company_id,
@@ -39,10 +96,23 @@ async function login(req, res) {
     role_code: user.role_code,
   };
 
-  res.json({ user: req.session.user });
+  recordAudit({
+    companyId: user.company_id, userId: user.id, userName: user.full_name, roleCode: user.role_code,
+    action: 'LOGIN', entityType: 'auth', entityId: user.id, details: { email, company: user.company_name },
+  });
+
+  const availableRoles = await getAvailableRoles(user.id);
+  res.json({ user: req.session.user, availableRoles });
 }
 
 function logout(req, res) {
+  const user = req.session && req.session.user;
+  if (user) {
+    recordAudit({
+      companyId: user.company_id, userId: user.id, userName: user.full_name, roleCode: user.role_code,
+      action: 'LOGOUT', entityType: 'auth', entityId: user.id,
+    });
+  }
   req.session.destroy(() => {
     res.json({ success: true });
   });
@@ -70,14 +140,41 @@ async function me(req, res) {
     return req.session.destroy(() => res.json({ user: null }));
   }
 
+  const availableRoles = await getAvailableRoles(user.id);
+
+  // Preserve whichever role the user last switched to, as long as it's
+  // still one of their assigned roles — otherwise every page load (this
+  // runs on each one) would silently snap them back to their primary role
+  // mid-session. Falls back to primary if that role was revoked.
+  const stillAssigned = availableRoles.some((r) => r.code === req.session.user.role_code);
+  const activeRoleCode = stillAssigned ? req.session.user.role_code : user.role_code;
+
   req.session.user = {
     id: user.id,
     company_id: user.company_id,
     email: user.email,
     full_name: user.full_name,
-    role_code: user.role_code,
+    role_code: activeRoleCode,
   };
 
+  res.json({ user: req.session.user, availableRoles });
+}
+
+// Switches which of the user's assigned roles is "active" for this
+// session — every subsequent request's req.roleCode (see middleware/
+// tenant.js) reflects it immediately.
+async function switchRole(req, res) {
+  const { role_code } = req.body;
+  if (!role_code) {
+    return res.status(400).json({ error: 'role_code is required.' });
+  }
+
+  const availableRoles = await getAvailableRoles(req.session.user.id);
+  if (!availableRoles.some((r) => r.code === role_code)) {
+    return res.status(403).json({ error: 'That role is not assigned to your account.' });
+  }
+
+  req.session.user.role_code = role_code;
   res.json({ user: req.session.user });
 }
 
@@ -107,4 +204,4 @@ async function changePassword(req, res) {
   res.json({ success: true });
 }
 
-module.exports = { login, logout, me, changePassword };
+module.exports = { login, logout, me, switchRole, changePassword };

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
+import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -52,8 +53,9 @@ export default function ContractPrint() {
       </div>
 
       <div id="pdf-doc">
+      <LetterheadBand company={company} />
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
-        <img src="/logo.png" alt="" style={{ height: 48, marginBottom: 8 }} />
+        <BrandLogo company={company} height={48} style={{ margin: '0 auto 8px' }} />
         <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
         <div style={{ fontSize: 14, color: '#5c6070' }}>{salesOrder.event_name}</div>
         <h2 style={{ marginTop: 16, marginBottom: 0 }}>{docTitle}</h2>
@@ -119,6 +121,7 @@ export default function ContractPrint() {
           <div style={{ marginTop: 32, borderTop: '1px solid #333', paddingTop: 4 }}>Date</div>
         </div>
       </div>
+      <FooterBand company={company} />
       </div>
     </div>
   );

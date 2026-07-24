@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const { visibilityClause } = require('../utils/visibility');
-const { checkNewContract } = require('../utils/approvalTriggers');
+const { syncFloorPlanBooth, releaseFloorPlanBooth } = require('../utils/floorPlanSync');
+const { getRequiredApprover, canActOnTier } = require('../utils/approverMatrix');
 
 async function listSalesOrders(req, res) {
   const { event_id, search } = req.query;
@@ -11,7 +12,8 @@ async function listSalesOrders(req, res) {
   const vis = visibilityClause(req, 'so.salesperson_id', 4);
 
   const result = await pool.query(
-    `SELECT so.id, so.contract_type, so.contract_date, so.total_myr,
+    `SELECT so.id, so.contract_type, so.contract_date, so.total_myr, so.status,
+            so.hall, so.booth_no,
             ex.company_name AS exhibitor_name, u.full_name AS salesperson_name
      FROM sales_orders so
      JOIN exhibitors ex ON ex.id = so.exhibitor_id
@@ -54,7 +56,21 @@ async function getSalesOrder(req, res) {
     return res.status(404).json({ error: 'Sales order not found.' });
   }
 
-  res.json({ salesOrder });
+  // Tells the frontend exactly who's allowed to Approve/Reject this specific
+  // contract (a tiered-matrix approver may not be Admin/Management at all),
+  // and whether the CURRENT user is one of them — so the buttons show for
+  // the right person instead of only ever showing for isElevated.
+  let requiredApprover = null;
+  let canApprove = false;
+  if (salesOrder.status === 'PENDING_APPROVAL') {
+    const tier = await getRequiredApprover(req.companyId, Number(salesOrder.total_myr) || 0);
+    requiredApprover = tier
+      ? { role_code: tier.approver_role_code, user_name: tier.approver_user_name }
+      : { role_code: null, user_name: null }; // null/null = default Admin/Management gate
+    canApprove = canActOnTier(req, tier);
+  }
+
+  res.json({ salesOrder, requiredApprover, canApprove });
 }
 
 async function createSalesOrder(req, res) {
@@ -83,11 +99,18 @@ async function createSalesOrder(req, res) {
       exchangeRate = settings.rows[0] ? Number(settings.rows[0].usd_to_myr_rate) : 4;
     }
 
+    // Every new contract starts as a Draft — it only becomes APPROVED after
+    // an explicit "Send for Approval" step and an Admin/Management approval
+    // (see approvals.controller.js). Nothing auto-approves anymore. Creating
+    // a contract also does NOT move the linked opportunity to Won by itself
+    // — that's still just a draft at this point, not a closed deal; the
+    // opportunity only advances via the explicit prompts tied to actually
+    // sending the (approved) contract and issuing the invoice.
     const result = await client.query(
       `INSERT INTO sales_orders (company_id, exhibitor_id, event_id, opportunity_id, salesperson_id,
                                  contract_type, contract_date, currency, exchange_rate, total_myr, total_foreign,
-                                 hall, booth_no, dimension, booking_type, remarks)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, $10, $11, $12, $13, $14)
+                                 hall, booth_no, dimension, booking_type, remarks, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, $10, $11, $12, $13, $14, 'DRAFT')
        RETURNING id`,
       [
         req.companyId, exhibitor_id, event_id, opportunity_id || null, salesperson_id || null,
@@ -95,22 +118,6 @@ async function createSalesOrder(req, res) {
         hall || null, booth_no || null, dimension || null, booking_type || null, remarks || null,
       ]
     );
-
-    // If the company has a NEW_CONTRACT approval rule configured, this drops
-    // the contract into PENDING_APPROVAL instead of the default APPROVED.
-    await checkNewContract(client, req.companyId, result.rows[0].id, req.userId);
-
-    // Signing a contract means the deal is won — move the source opportunity
-    // to the company's "won" stage so the pipeline reflects it automatically.
-    if (opportunity_id) {
-      await client.query(
-        `UPDATE opportunities SET stage_id = (
-           SELECT id FROM sales_stages WHERE company_id = $1 AND is_won = TRUE LIMIT 1
-         )
-         WHERE id = $2 AND company_id = $1`,
-        [req.companyId, opportunity_id]
-      );
-    }
 
     await client.query('COMMIT');
     res.status(201).json({ salesOrder: { id: result.rows[0].id } });
@@ -135,23 +142,58 @@ async function updateSalesOrder(req, res) {
   }
   const columns = Object.keys(fields);
 
-  if (columns.length === 0) {
+  if (columns.length === 0 && !('floor_plan_booth_id' in req.body)) {
     return res.json({ salesOrder: { id: req.params.id } });
   }
 
-  const setClause = columns.map((c, i) => `${c} = $${i + 3}`).join(', ');
-  const result = await pool.query(
-    `UPDATE sales_orders SET ${setClause}
-     WHERE id = $1 AND company_id = $2
-     RETURNING id`,
-    [req.params.id, req.companyId, ...columns.map((c) => fields[c])]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (!result.rows[0]) {
-    return res.status(404).json({ error: 'Sales order not found.' });
+    if (columns.length > 0) {
+      const setClause = columns.map((c, i) => `${c} = $${i + 3}`).join(', ');
+      const result = await client.query(
+        `UPDATE sales_orders SET ${setClause}
+         WHERE id = $1 AND company_id = $2
+         RETURNING id`,
+        [req.params.id, req.companyId, ...columns.map((c) => fields[c])]
+      );
+      if (!result.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Sales order not found.' });
+      }
+
+      // Same reasoning as the Opportunity side: Booth No is a plain editable
+      // text field too, not just set via the picker — clearing it by hand
+      // without picking a replacement should release the linked booth.
+      if ('booth_no' in fields && fields.booth_no === null && !('floor_plan_booth_id' in req.body)) {
+        await releaseFloorPlanBooth(client, req.companyId, 'sales_order_id', req.params.id);
+      }
+    }
+
+    // Same "only lock once the save genuinely succeeds" rule as the
+    // Opportunity picker — picking a booth on the Floor Plan screen itself
+    // doesn't touch it; it only commits here, as SOLD (a contract is a
+    // signed deal, not just a quote).
+    if ('floor_plan_booth_id' in req.body) {
+      const sync = await syncFloorPlanBooth(client, req.companyId, {
+        linkColumn: 'sales_order_id', linkId: req.params.id,
+        floorPlanBoothId: req.body.floor_plan_booth_id, exhibitorName: req.body.exhibitor_name,
+      });
+      if (!sync.ok) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: sync.error });
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ salesOrder: { id: req.params.id } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-
-  res.json({ salesOrder: { id: req.params.id } });
 }
 
 module.exports = { listSalesOrders, getSalesOrder, createSalesOrder, updateSalesOrder };

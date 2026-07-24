@@ -4,7 +4,7 @@ const { attachTenant } = require('../middleware/tenant');
 const { requireAdmin } = require('../middleware/admin');
 const { asyncHandler } = require('../utils/asyncHandler');
 const {
-  listUsers, createUser, updateUser, resetPassword, listRoles, setUserEventAccess,
+  listUsers, createUser, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
   listEvents, createEvent, updateEvent,
 } = require('../controllers/admin.controller');
 
@@ -16,6 +16,7 @@ router.post('/users', asyncHandler(createUser));
 router.put('/users/:id', asyncHandler(updateUser));
 router.post('/users/:id/reset-password', asyncHandler(resetPassword));
 router.put('/users/:id/events', asyncHandler(setUserEventAccess));
+router.put('/users/:id/roles', asyncHandler(setUserRoles));
 router.get('/roles', asyncHandler(listRoles));
 
 router.get('/events', asyncHandler(listEvents));

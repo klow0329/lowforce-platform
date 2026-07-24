@@ -1,5 +1,5 @@
 const { pool } = require('../config/db');
-const { checkDiscount, checkTaxChange, checkPostApprovalEdit } = require('../utils/approvalTriggers');
+const { checkDiscount, checkPostApprovalEdit, checkRevenueThreshold } = require('../utils/approvalTriggers');
 
 // Server always recomputes the money — never trust a client-submitted total.
 // total_foreign stays in the contract's own currency (what "un-invoiced
@@ -31,6 +31,7 @@ async function recomputeTotals(client, salesOrderId, companyId) {
     [salesOrderId]
   )).rows[0];
 
+  const totalMyr = Number(totals.grand_total) * rate;
   await client.query(
     `UPDATE sales_orders
      SET total_foreign = $1, subtotal_myr = $2, tax_total_myr = $3, total_myr = $4
@@ -39,10 +40,11 @@ async function recomputeTotals(client, salesOrderId, companyId) {
       totals.grand_total,
       Number(totals.net_subtotal) * rate,
       Number(totals.tax_total) * rate,
-      Number(totals.grand_total) * rate,
+      totalMyr,
       salesOrderId, companyId,
     ]
   );
+  return totalMyr;
 }
 
 async function listItems(req, res) {
@@ -66,6 +68,11 @@ async function addItem(req, res) {
   if (!sales_item_code || qty === undefined || unit_price === undefined) {
     return res.status(400).json({ error: 'sales_item_code, qty and unit_price are required.' });
   }
+  // qty/unit_price are NOT NULL numeric columns — a row can be checked in
+  // the UI before the Price List has a rate for it, which sends ''. Coerce
+  // rather than let that hit the database as an invalid numeric literal.
+  const qtyNum = Number(qty) || 0;
+  const unitPriceNum = Number(unit_price) || 0;
 
   const client = await pool.connect();
   try {
@@ -91,7 +98,7 @@ async function addItem(req, res) {
     }
 
     const { subtotal, discountAmount, taxAmount, lineTotal } = calcLine({
-      qty, unit_price, discount_type, discount_value, tax_rate_pct: taxRatePct,
+      qty: qtyNum, unit_price: unitPriceNum, discount_type, discount_value, tax_rate_pct: taxRatePct,
     });
 
     const sortResult = await client.query(
@@ -107,12 +114,12 @@ async function addItem(req, res) {
        RETURNING id`,
       [
         req.params.id, price_list_id || null, sales_item_code, description || null, category || 'OTHER',
-        qty, unit_price, discount_type || null, discount_value || null, tax_code_id || null, taxRatePct,
+        qtyNum, unitPriceNum, discount_type || null, discount_value || null, tax_code_id || null, taxRatePct,
         subtotal, discountAmount, taxAmount, lineTotal, sortResult.rows[0].next,
       ]
     );
 
-    await recomputeTotals(client, req.params.id, req.companyId);
+    const totalMyr = await recomputeTotals(client, req.params.id, req.companyId);
 
     const discountFlagged = await checkDiscount(
       client, req.companyId, req.params.id, discount_type, discount_value, subtotal, req.userId
@@ -120,6 +127,10 @@ async function addItem(req, res) {
     if (!discountFlagged) {
       await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId);
     }
+    // Revenue threshold is about the contract's absolute value, independent
+    // of why this particular line changed — always checked, not gated
+    // behind the discount/post-approval-edit flags above.
+    await checkRevenueThreshold(client, req.companyId, req.params.id, totalMyr, req.userId);
 
     await client.query('COMMIT');
     res.status(201).json({ item: { id: result.rows[0].id } });
@@ -149,11 +160,10 @@ async function updateItem(req, res) {
       return res.status(404).json({ error: 'Line item not found.' });
     }
     const wasApproved = item.so_status === 'APPROVED';
-    const taxCodeChanged = 'tax_code_id' in req.body && req.body.tax_code_id !== item.tax_code_id;
 
     const merged = {
-      qty: req.body.qty !== undefined ? req.body.qty : item.qty,
-      unit_price: req.body.unit_price !== undefined ? req.body.unit_price : item.unit_price,
+      qty: Number(req.body.qty !== undefined ? req.body.qty : item.qty) || 0,
+      unit_price: Number(req.body.unit_price !== undefined ? req.body.unit_price : item.unit_price) || 0,
       discount_type: 'discount_type' in req.body ? req.body.discount_type : item.discount_type,
       discount_value: 'discount_value' in req.body ? req.body.discount_value : item.discount_value,
       tax_code_id: 'tax_code_id' in req.body ? req.body.tax_code_id : item.tax_code_id,
@@ -190,17 +200,18 @@ async function updateItem(req, res) {
       ]
     );
 
-    await recomputeTotals(client, req.params.id, req.companyId);
+    const totalMyr = await recomputeTotals(client, req.params.id, req.companyId);
 
-    let flagged = await checkDiscount(
+    const flagged = await checkDiscount(
       client, req.companyId, req.params.id, merged.discount_type, merged.discount_value, subtotal, req.userId
     );
-    if (!flagged && taxCodeChanged) {
-      flagged = await checkTaxChange(client, req.companyId, req.params.id, wasApproved, req.userId);
-    }
     if (!flagged) {
+      // Covers every other kind of change to an already-approved contract —
+      // including a tax code change, which used to be its own separate
+      // trigger but is really just one flavour of "edited after approval".
       await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId);
     }
+    await checkRevenueThreshold(client, req.companyId, req.params.id, totalMyr, req.userId);
 
     await client.query('COMMIT');
     res.json({ item: { id: req.params.itemId } });

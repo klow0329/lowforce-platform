@@ -5,6 +5,7 @@ import { useEventContext } from '../context/EventContext';
 import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+const fmtMYR2dp = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const emptyForm = {
   company_name: '',
@@ -54,7 +55,7 @@ export default function ExhibitorDetail() {
   const isNew = !id;
   const navigate = useNavigate();
 
-  const { events } = useEventContext();
+  const { events, selectedEventId } = useEventContext();
   const [form, setForm] = useState(emptyForm);
   const [original, setOriginal] = useState(null);
   const [editing, setEditing] = useState(isNew);
@@ -66,6 +67,7 @@ export default function ExhibitorDetail() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [opportunities, setOpportunities] = useState([]);
+  const [statement, setStatement] = useState(null);
 
   useEffect(() => {
     Promise.all([api.listCountries(), api.listAgents(), api.listSalespeople(), api.listSegments()]).then(
@@ -90,7 +92,13 @@ export default function ExhibitorDetail() {
       setLoading(false);
     });
     api.listOpportunities({ exhibitor_id: id }).then(({ opportunities }) => setOpportunities(opportunities));
+    loadStatement();
   }, [id, isNew]);
+
+  function loadStatement() {
+    if (isNew) return;
+    api.getStatementOfAccount(id).then(setStatement);
+  }
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -478,6 +486,68 @@ export default function ExhibitorDetail() {
               ))}
               {opportunities.length === 0 && (
                 <tr><td colSpan={4}>No opportunities yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!isNew && statement && (
+        <div style={{ ...section, marginTop: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <h3>Statement of Account</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const params = new URLSearchParams({
+                    exhibitor_id: id, exhibitor_name: form.company_name, event_id: selectedEventId || '',
+                  });
+                  navigate(`/payments/new?${params}`);
+                }}
+              >
+                Record Payment
+              </button>
+              <button type="button" onClick={() => navigate(`/exhibitors/${id}/statement`)}>View / Print Statement</button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, margin: '12px 0' }}>
+            <div style={{ flex: 1, border: '1px solid #ddd', borderRadius: 8, padding: 12, background: statement.totalOutstanding > 0.01 ? '#fdecec' : '#fff' }}>
+              <div style={{ fontSize: 12, color: '#5c6070' }}>Total Outstanding</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: statement.totalOutstanding > 0.01 ? '#D13434' : 'inherit' }}>{fmtMYR2dp(statement.totalOutstanding)}</div>
+            </div>
+            {statement.creditBalance > 0.01 && (
+              <div style={{ flex: 1, border: '1px solid #ddd', borderRadius: 8, padding: 12, background: '#eafaf1' }}>
+                <div style={{ fontSize: 12, color: '#5c6070' }}>Available Credit</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#1A9C5B' }}>{fmtMYR2dp(statement.creditBalance)}</div>
+              </div>
+            )}
+          </div>
+          <table width="100%" cellPadding="6">
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                <th>Date</th><th>Description</th>
+                <th style={{ textAlign: 'right' }}>Invoiced</th>
+                <th style={{ textAlign: 'right' }}>Received</th>
+                <th style={{ textAlign: 'right' }}>Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {statement.activities.map((a) => (
+                <tr
+                  key={`${a.type}-${a.id}`}
+                  style={{ borderBottom: '1px solid #eee', cursor: a.type === 'INVOICE' ? 'pointer' : 'default' }}
+                  onClick={() => a.type === 'INVOICE' && navigate(`/invoices/${a.id}`)}
+                >
+                  <td>{a.date || '—'}</td>
+                  <td>{a.label}</td>
+                  <td style={{ textAlign: 'right' }}>{a.debit > 0 ? fmtMYR2dp(a.debit) : '—'}</td>
+                  <td style={{ textAlign: 'right' }}>{a.credit > 0 ? fmtMYR2dp(a.credit) : '—'}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtMYR2dp(a.balance)}</td>
+                </tr>
+              ))}
+              {statement.activities.length === 0 && (
+                <tr><td colSpan={5}>No account activity yet.</td></tr>
               )}
             </tbody>
           </table>

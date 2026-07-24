@@ -14,14 +14,20 @@ import InvoiceDetail from './pages/InvoiceDetail';
 import InvoicePrint from './pages/InvoicePrint';
 import PaymentDetail from './pages/PaymentDetail';
 import ReceiptPrint from './pages/ReceiptPrint';
-import CustomerAging from './pages/CustomerAging';
+import Reports from './pages/Reports';
 import Dashboard from './pages/Dashboard';
 import ChangePassword from './pages/ChangePassword';
 import Admin from './pages/Admin';
 import PriceList from './pages/PriceList';
+import FloorPlan from './pages/FloorPlan';
+import Management from './pages/Management';
+import Budget from './pages/Budget';
+import StatementPrint from './pages/StatementPrint';
 import NavBar from './components/NavBar';
+import ErrorBoundary from './components/ErrorBoundary';
 import { EventProvider } from './context/EventContext';
 import { api } from './api/client';
+import { isViewOnly } from './utils/permissions';
 
 // Forces the detail pages to fully remount when navigating between two
 // different record ids (e.g. new -> the just-created record) — without
@@ -32,9 +38,9 @@ function ExhibitorDetailRoute() {
   return <ExhibitorDetail key={id || 'new'} />;
 }
 
-function OpportunityDetailRoute() {
+function OpportunityDetailRoute({ user }) {
   const { id } = useParams();
-  return <OpportunityDetail key={id || 'new'} />;
+  return <OpportunityDetail key={id || 'new'} user={user} />;
 }
 
 function SalesOrderDetailRoute({ user }) {
@@ -42,9 +48,9 @@ function SalesOrderDetailRoute({ user }) {
   return <SalesOrderDetail key={id || 'new'} user={user} />;
 }
 
-function InvoiceDetailRoute() {
+function InvoiceDetailRoute({ user }) {
   const { id } = useParams();
-  return <InvoiceDetail key={id} />;
+  return <InvoiceDetail key={id} user={user} />;
 }
 
 function PaymentDetailRoute() {
@@ -54,58 +60,98 @@ function PaymentDetailRoute() {
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [availableRoles, setAvailableRoles] = useState([]);
   const [checkingSession, setCheckingSession] = useState(true);
 
   // The backend session is cookie-based and outlives a page reload, but the
   // React state doesn't — without this, every refresh looks logged-out even
   // though the session cookie is still valid.
   useEffect(() => {
-    api.me().then(({ user }) => setUser(user)).finally(() => setCheckingSession(false));
+    api.me().then(({ user, availableRoles }) => {
+      setUser(user);
+      setAvailableRoles(availableRoles || []);
+    }).finally(() => setCheckingSession(false));
   }, []);
 
   if (checkingSession) return null;
 
   if (!user) {
-    return <Login onLoggedIn={setUser} />;
+    return <Login onLoggedIn={(u, roles) => { setUser(u); setAvailableRoles(roles || []); }} />;
   }
 
   const handleLogout = async () => {
     await api.logout();
     setUser(null);
+    setAvailableRoles([]);
+  };
+
+  // Switching "acting as" role changes req.roleCode server-side for every
+  // subsequent request in this session — every role-gated check already in
+  // the app (isElevated, CAN_CONFIRM_ROLES, the Admin nav link, etc.) reads
+  // off user.role_code, so updating it here is all that's needed to cascade
+  // through the whole UI.
+  const handleSwitchRole = async (roleCode) => {
+    const { user: updated } = await api.switchRole(roleCode);
+    setUser(updated);
   };
 
   return (
     <BrowserRouter>
       <EventProvider>
-        <NavBar user={user} onLogout={handleLogout} />
+        <NavBar user={user} onLogout={handleLogout} availableRoles={availableRoles} onSwitchRole={handleSwitchRole} />
+        {/* A bug on any one page (React 18 otherwise unmounts the whole app
+            to a blank white screen on an uncaught render error, with no way
+            back except a hard refresh) is contained here instead — the nav
+            bar above stays usable, and "Close and Return" does a full
+            reload to a known-good page rather than trusting router state
+            that may have been mid-crash. */}
+        <ErrorBoundary label="This page" onReset={() => { window.location.href = '/dashboard'; }}>
         <Routes>
-          <Route path="/dashboard" element={<Dashboard />} />
+          {/* Management's landing page IS the Management Overview — no
+              separate screen duplicating the same underlying data. */}
+          <Route path="/dashboard" element={['ADM', 'MGT'].includes(user.role_code) ? <Management user={user} /> : <Dashboard />} />
           <Route path="/exhibitors" element={<ExhibitorsList />} />
           <Route path="/exhibitors/new" element={<ExhibitorDetailRoute />} />
           <Route path="/exhibitors/:id" element={<ExhibitorDetailRoute />} />
+          <Route path="/exhibitors/:id/statement" element={<StatementPrint />} />
           <Route path="/opportunities" element={<OpportunitiesList user={user} />} />
-          <Route path="/opportunities/new" element={<OpportunityDetailRoute />} />
-          <Route path="/opportunities/:id" element={<OpportunityDetailRoute />} />
+          <Route
+            path="/opportunities/new"
+            element={isViewOnly(user) ? <Navigate to="/opportunities" replace /> : <OpportunityDetailRoute user={user} />}
+          />
+          <Route path="/opportunities/:id" element={<OpportunityDetailRoute user={user} />} />
           <Route path="/sales-orders" element={<SalesOrdersList />} />
-          <Route path="/sales-orders/new" element={<SalesOrderDetailRoute user={user} />} />
+          <Route
+            path="/sales-orders/new"
+            element={isViewOnly(user) ? <Navigate to="/sales-orders" replace /> : <SalesOrderDetailRoute user={user} />}
+          />
           <Route path="/sales-orders/:id" element={<SalesOrderDetailRoute user={user} />} />
           <Route path="/sales-orders/:id/print" element={<ContractPrint />} />
           <Route path="/sales-orders/:id/proforma" element={<ProformaPrint />} />
           <Route path="/invoices" element={<InvoicesList />} />
-          <Route path="/invoices/:id" element={<InvoiceDetailRoute />} />
+          <Route path="/invoices/:id" element={<InvoiceDetailRoute user={user} />} />
           <Route path="/invoices/:id/print" element={<InvoicePrint />} />
           <Route path="/payments/new" element={<PaymentDetailRoute />} />
           <Route path="/payments/:id" element={<PaymentDetailRoute />} />
           <Route path="/payments/:id/print" element={<ReceiptPrint />} />
-          <Route path="/customer-aging" element={<CustomerAging />} />
+          <Route path="/reports" element={<Reports user={user} />} />
+          <Route path="/reports/:section" element={<Reports user={user} />} />
+          {/* Old bookmark/tile links keep working — Aging now lives under Reports */}
+          <Route path="/customer-aging" element={<Navigate to="/reports/aging" replace />} />
           <Route path="/change-password" element={<ChangePassword />} />
           <Route path="/price-list" element={<PriceList user={user} />} />
+          <Route path="/floor-plan" element={<FloorPlan user={user} />} />
+          <Route
+            path="/budget"
+            element={['ADM', 'MGT', 'FIN'].includes(user.role_code) ? <Budget user={user} /> : <Navigate to="/dashboard" replace />}
+          />
           <Route
             path="/admin"
             element={user.role_code === 'ADM' ? <Admin user={user} /> : <Navigate to="/dashboard" replace />}
           />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        </ErrorBoundary>
       </EventProvider>
     </BrowserRouter>
   );

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
+import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -33,9 +34,10 @@ export default function ReceiptPrint() {
       </div>
 
       <div id="pdf-doc">
+      <LetterheadBand company={company} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
         <div>
-          <img src="/logo.png" alt="" style={{ height: 44, display: 'block', marginBottom: 6 }} />
+          <BrandLogo company={company} height={44} />
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{payment.event_name}</div>
         </div>
@@ -51,18 +53,25 @@ export default function ReceiptPrint() {
         <div>{payment.company_name}</div>
       </div>
 
-      <div style={line}><span>Being payment for Invoice No.</span><span>{payment.invoice_no}</span></div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: '#5c6070', paddingBottom: 2 }}>Being payment for:</div>
+        {payment.allocations.map((a) => (
+          <div key={a.id} style={line}><span>Invoice No. {a.invoice_no}</span><span>{fmtMYR(a.amount_myr)}</span></div>
+        ))}
+        {payment.unallocated_myr > 0.01 && (
+          <div style={line}><span>Unallocated (on account)</span><span>{fmtMYR(payment.unallocated_myr)}</span></div>
+        )}
+      </div>
       <div style={line}><span>Payment Method</span><span>{payment.payment_method || '—'}</span></div>
       <div style={line}><span>Bank Reference</span><span>{payment.bank_ref || '—'}</span></div>
       <div style={{ ...line, fontWeight: 700, fontSize: 16, borderBottom: '2px solid #1B3A6B' }}>
         <span>Amount Received</span><span>{fmtMYR(payment.amount_myr)}</span>
       </div>
 
-      <div style={{ marginTop: 64 }}>
-        <div style={{ borderTop: '1px solid #333', paddingTop: 4, maxWidth: 300 }}>
-          For and on behalf of {company.name}
-        </div>
-      </div>
+      <p style={{ marginTop: 48, fontSize: 11, color: '#5c6070', fontStyle: 'italic' }}>
+        This is a system-generated receipt and does not require a signature.
+      </p>
+      <FooterBand company={company} />
       </div>
     </div>
   );

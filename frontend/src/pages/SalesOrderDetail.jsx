@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useEffect, useState, useRef } from 'react';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
-import BillingTemplate, { TEMPLATE_CODES } from '../components/BillingTemplate';
+import BillingTemplate from '../components/BillingTemplate';
+import { isViewOnly } from '../utils/permissions';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -24,18 +25,16 @@ function StatusBadge({ status }) {
   );
 }
 
-const emptyItemForm = {
-  price_list_id: '', sales_item_code: '', description: '', category: 'OTHER',
-  qty: 1, unit_price: '', discount_type: '', discount_value: '', tax_code_id: '',
-};
-
 export default function SalesOrderDetail({ user }) {
   const { id } = useParams();
   const isNew = !id;
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const { events, selectedEventId } = useEventContext();
-  const isElevated = ['ADM', 'MGT'].includes(user?.role_code);
+  const billingRef = useRef(null);
+  const pickedBooth = location.state?.pickedBooth;
+  const boothAppliedRef = useRef(false);
 
   const lockedOpportunityId = searchParams.get('opportunity_id') || '';
   const lockedExhibitorId = searchParams.get('exhibitor_id') || '';
@@ -65,10 +64,13 @@ export default function SalesOrderDetail({ user }) {
     remarks: '',
   });
   const [salesOrder, setSalesOrder] = useState(null); // full record incl. totals/status/exchange_rate
+  const [requiredApprover, setRequiredApprover] = useState(null); // { role_code, user_name } | null — from the tiered revenue matrix, null/null means default Admin/Management
+  const [canApprove, setCanApprove] = useState(false); // whether the CURRENT user is the one required above
   const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [exhibitorSearch, setExhibitorSearch] = useState('');
   const [exhibitorResults, setExhibitorResults] = useState([]);
   const [salespeople, setSalespeople] = useState([]);
+  const [stages, setStages] = useState([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -78,9 +80,6 @@ export default function SalesOrderDetail({ user }) {
   const [items, setItems] = useState([]);
   const [priceList, setPriceList] = useState([]);
   const [taxCodes, setTaxCodes] = useState([]);
-  const [itemForm, setItemForm] = useState(emptyItemForm);
-  const [showItemForm, setShowItemForm] = useState(false);
-  const [editingItemId, setEditingItemId] = useState(null);
 
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -111,7 +110,9 @@ export default function SalesOrderDetail({ user }) {
     api.listApprovalLog(id).then(({ log }) => setApprovalLog(log));
   }
   function loadSalesOrder() {
-    api.getSalesOrder(id).then(({ salesOrder }) => {
+    api.getSalesOrder(id).then(({ salesOrder, requiredApprover, canApprove }) => {
+      setRequiredApprover(requiredApprover);
+      setCanApprove(canApprove);
       const loaded = {
         exhibitor_id: salesOrder.exhibitor_id,
         event_id: salesOrder.event_id,
@@ -126,8 +127,11 @@ export default function SalesOrderDetail({ user }) {
         dimension: salesOrder.dimension || '',
         remarks: salesOrder.remarks || '',
       };
-      setForm(loaded);
       setOriginal(loaded);
+      // A picked booth is a pending edit, not yet saved — applied on top of
+      // the loaded record so the ChangesBanner correctly shows it as
+      // something the user still needs to click Save to persist.
+      setForm(pickedBooth ? { ...loaded, hall: pickedBooth.hall, booth_no: pickedBooth.booth_no, dimension: pickedBooth.dimension } : loaded);
       setSalesOrder(salesOrder);
       setExhibitorName(salesOrder.company_name);
       setLoading(false);
@@ -137,6 +141,7 @@ export default function SalesOrderDetail({ user }) {
   useEffect(() => {
     api.listSalespeople().then(({ salespeople }) => setSalespeople(salespeople));
     api.listTaxCodes().then(({ taxCodes }) => setTaxCodes(taxCodes));
+    api.listStages().then(({ stages }) => setStages(stages));
   }, []);
 
   useEffect(() => {
@@ -148,6 +153,16 @@ export default function SalesOrderDetail({ user }) {
     loadApprovalLog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew]);
+
+  // Once the Price List has loaded, apply a picked booth's BAS/COR/LOD rows
+  // (see the Floor Plan picker below) — needs real price list rates to
+  // compute correctly, so this waits rather than firing on mount.
+  useEffect(() => {
+    if (!pickedBooth || boothAppliedRef.current || priceList.length === 0 || !billingRef.current) return;
+    boothAppliedRef.current = true;
+    billingRef.current.applyBoothAllocation({ sqm: pickedBooth.sqm, isCorner: pickedBooth.is_corner, isLoading: pickedBooth.is_loading });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceList]);
 
   useEffect(() => {
     if (!form.event_id) return;
@@ -176,6 +191,15 @@ export default function SalesOrderDetail({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, lockedOpportunityId, form.exhibitor_id]);
 
+  // EventContext loads asynchronously — a fresh page load can mount this
+  // form before selectedEventId resolves, leaving form.event_id (seeded from
+  // it) permanently blank since nothing else re-syncs it. Backfill once it
+  // arrives, but only if no event_id was explicitly passed via query params.
+  useEffect(() => {
+    if (isNew && !searchParams.get('event_id') && !form.event_id && selectedEventId) set('event_id', selectedEventId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, selectedEventId]);
+
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
   }
@@ -199,93 +223,24 @@ export default function SalesOrderDetail({ user }) {
     }
 
     if (!confirmSave(changes, 'contract', isNew)) return;
+
+    // A picked booth (see handlePickFromFloorPlan) only actually locks once
+    // this save genuinely succeeds — see the matching note in
+    // OpportunityDetail.jsx for why it doesn't lock at pick time.
+    const boothPayload = pickedBooth ? { floor_plan_booth_id: pickedBooth.id, exhibitor_name: exhibitorName } : {};
+
     setSaving(true);
     try {
       if (isNew) {
         const { salesOrder } = await api.createSalesOrder(form);
         navigate(`/sales-orders/${salesOrder.id}`);
       } else {
-        await api.updateSalesOrder(id, form);
+        await api.updateSalesOrder(id, { ...form, ...boothPayload });
         navigate('/sales-orders');
       }
     } catch (err) {
       setError(err.message);
       setSaving(false);
-    }
-  }
-
-  // --- Line items --------------------------------------------------------
-
-  function pickPriceListItem(plId) {
-    const pl = priceList.find((p) => p.id === plId);
-    if (!pl) {
-      setItemForm((f) => ({ ...f, price_list_id: '' }));
-      return;
-    }
-    const unitPrice = form.currency === 'USD' ? pl.unit_price_usd : pl.unit_price_myr;
-    setItemForm((f) => ({
-      ...f,
-      price_list_id: pl.id,
-      sales_item_code: pl.sales_item_code,
-      description: pl.description || '',
-      category: pl.category,
-      unit_price: unitPrice ?? '',
-      tax_code_id: pl.default_tax_code_id || '',
-    }));
-  }
-
-  function startAddItem() {
-    setItemForm(emptyItemForm);
-    setEditingItemId(null);
-    setShowItemForm(true);
-  }
-
-  function startEditItem(it) {
-    setItemForm({
-      price_list_id: it.price_list_id || '',
-      sales_item_code: it.sales_item_code,
-      description: it.description || '',
-      category: it.category,
-      qty: it.qty,
-      unit_price: it.unit_price,
-      discount_type: it.discount_type || '',
-      discount_value: it.discount_value ?? '',
-      tax_code_id: it.tax_code_id || '',
-    });
-    setEditingItemId(it.id);
-    setShowItemForm(true);
-  }
-
-  async function handleSaveItem(e) {
-    e.preventDefault();
-    setError('');
-    const payload = { ...itemForm, price_list_id: itemForm.price_list_id || null, tax_code_id: itemForm.tax_code_id || null };
-    try {
-      if (editingItemId) {
-        await api.updateSalesOrderItem(id, editingItemId, payload);
-      } else {
-        await api.addSalesOrderItem(id, payload);
-      }
-      setShowItemForm(false);
-      setItemForm(emptyItemForm);
-      setEditingItemId(null);
-      loadItems();
-      loadSalesOrder();
-      loadApprovalLog();
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function handleDeleteItem(it) {
-    if (!window.confirm(`Remove ${it.sales_item_code} from this contract?`)) return;
-    setError('');
-    try {
-      await api.deleteSalesOrderItem(id, it.id);
-      loadItems();
-      loadSalesOrder();
-    } catch (err) {
-      setError(err.message);
     }
   }
 
@@ -317,7 +272,52 @@ export default function SalesOrderDetail({ user }) {
     }
   }
 
-  // --- Draft invoices --------------------------------------------------------
+  // --- Opportunity stage prompts --------------------------------------------
+  // A contract's lifecycle drives the linked opportunity's stage rather than
+  // the user picking it by hand: printing the approved contract to send to
+  // the exhibitor means it's been sent, and issuing the invoice means the
+  // deal is won. Both are confirmed with the user, not silent.
+
+  async function promptMoveOpportunityStage(stageCode, message) {
+    if (!salesOrder?.opportunity_id) return;
+    const targetStage = stages.find((s) => s.code === stageCode);
+    if (!targetStage) return;
+    const { opportunity } = await api.getOpportunity(salesOrder.opportunity_id);
+    if (opportunity.stage_id === targetStage.id) return; // already there
+    const current = stages.find((s) => s.id === opportunity.stage_id);
+    if (current?.is_won || current?.is_lost) return; // resolved already, don't reopen
+    if (window.confirm(message)) {
+      await api.updateOpportunity(salesOrder.opportunity_id, { stage_id: targetStage.id });
+    }
+  }
+
+  // Hands off to the Floor Plan screen's booth picker. Picking here marks
+  // the booth SOLD (unlike the Opportunity-side picker, which reserves it)
+  // — a contract represents a signed deal, not just a quote.
+  function handlePickFromFloorPlan() {
+    navigate('/floor-plan', {
+      state: {
+        pickFor: {
+          returnPath: `/sales-orders/${id}`,
+          exhibitorName,
+          boothStatus: 'SOLD',
+          salesOrderId: id,
+        },
+      },
+    });
+  }
+
+  async function handleViewPrintContract() {
+    if (salesOrder?.status === 'APPROVED') {
+      await promptMoveOpportunityStage(
+        'STG80',
+        "Mark the linked opportunity as 'Contract Sent'? You'll be reminded to upload the signed copy once the exhibitor returns it."
+      );
+    }
+    navigate(`/sales-orders/${id}/print`);
+  }
+
+  // --- Invoices --------------------------------------------------------
 
   async function handleGenerateDraft() {
     setError('');
@@ -329,12 +329,13 @@ export default function SalesOrderDetail({ user }) {
         return;
       }
     }
-    if (!window.confirm(splits ? `Generate ${splits.length} milestone draft invoices?` : 'Generate a draft invoice for the full remaining balance?')) return;
+    if (!window.confirm(splits ? `Issue ${splits.length} milestone invoices?` : 'Issue an invoice for the full remaining balance?')) return;
     setGenerating(true);
     try {
       await api.generateDraftInvoices({ sales_order_id: id, splits });
       setShowSplitForm(false);
       loadInvoices();
+      await promptMoveOpportunityStage('WON', "Mark the linked opportunity as WON?");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -343,6 +344,18 @@ export default function SalesOrderDetail({ user }) {
   }
 
   // --- Approvals ---------------------------------------------------------
+
+  async function handleSubmitForApproval() {
+    if (!window.confirm('Send this contract for approval? You can keep editing it while it waits, but Issue Invoice stays locked until Admin/Management approves it.')) return;
+    setError('');
+    try {
+      await api.submitForApproval(id);
+      loadSalesOrder();
+      loadApprovalLog();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   async function handleApprove() {
     if (!window.confirm('Approve this contract?')) return;
@@ -369,7 +382,7 @@ export default function SalesOrderDetail({ user }) {
     }
   }
 
-  if (loading) return <p style={{ maxWidth: 700, margin: '40px auto' }}>Loading...</p>;
+  if (loading) return <p style={{ maxWidth: 1100, margin: '40px auto' }}>Loading...</p>;
 
   const ccy = form.currency;
   const totalInvoiced = invoices.reduce((sum, inv) => sum + Number(inv.amount_foreign), 0);
@@ -377,34 +390,54 @@ export default function SalesOrderDetail({ user }) {
   const remaining = contractTotal - totalInvoiced;
 
   return (
-    <div className="page" style={{ maxWidth: 700, margin: '40px auto' }}>
+    <div className="page" style={{ maxWidth: 1100, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {isNew ? 'New Contract' : editing ? 'Edit Contract' : 'Contract'}
           {!isNew && salesOrder && <StatusBadge status={salesOrder.status} />}
         </h2>
         <div style={{ display: 'flex', gap: 8 }}>
-          {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          {!isNew && !editing && !isViewOnly(user) && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
           <button type="button" onClick={() => navigate('/sales-orders')}>Back to list</button>
         </div>
       </div>
 
-      {!isNew && salesOrder?.status === 'PENDING_APPROVAL' && isElevated && (
+      {!isNew && salesOrder?.status === 'DRAFT' && (
+        <div style={{ background: '#F5F6FA', border: '1px solid #ddd', borderRadius: 8, padding: 12, margin: '12px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>This contract is a draft — send it for approval when it's ready. Invoicing stays locked until Admin/Management approves it.</span>
+          <button type="button" onClick={handleSubmitForApproval}>Send for Approval</button>
+        </div>
+      )}
+
+      {!isNew && salesOrder?.status === 'PENDING_APPROVAL' && canApprove && (
         <div style={{ background: '#FFF3BF', border: '1px solid #F0C36D', borderRadius: 8, padding: 12, margin: '12px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>This contract is pending approval.</span>
+          <span>
+            This contract is pending approval
+            {requiredApprover?.user_name || requiredApprover?.role_code
+              ? ` — requires ${requiredApprover.user_name || `the ${requiredApprover.role_code} role`} (value-based approval tier)`
+              : ''}.
+          </span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="button" onClick={handleApprove}>Approve</button>
             <button type="button" onClick={handleReject}>Reject</button>
           </div>
         </div>
       )}
-      {!isNew && salesOrder?.status === 'PENDING_APPROVAL' && !isElevated && (
+      {!isNew && salesOrder?.status === 'PENDING_APPROVAL' && !canApprove && (
         <div style={{ background: '#FFF3BF', border: '1px solid #F0C36D', borderRadius: 8, padding: 12, margin: '12px 0' }}>
-          Waiting on Admin/Management approval.
+          Waiting on approval from {requiredApprover?.user_name || requiredApprover?.role_code
+            ? (requiredApprover.user_name || `the ${requiredApprover.role_code} role`)
+            : 'Admin/Management'} (this contract's value falls under their approval tier).
         </div>
       )}
 
-      <form onSubmit={handleSubmit}>
+      {isNew && lockedOpportunityId && (
+        <div style={{ background: '#E3F2FD', border: '1px solid #90CAF9', borderRadius: 8, padding: 12, margin: '12px 0' }}>
+          This contract is pre-filled from the opportunity — review the details below, then click <strong>Save</strong> to actually create it. Nothing is saved until you do.
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} style={{ maxWidth: 700 }}>
         <fieldset disabled={!editing} style={fieldsetStyle}>
         <label style={label}>Exhibitor *</label>
         {lockedExhibitorId || !isNew ? (
@@ -462,7 +495,10 @@ export default function SalesOrderDetail({ user }) {
         </select>
 
         <label style={label}>Currency</label>
-        <select style={inputStyle} value={form.currency} onChange={(e) => set('currency', e.target.value)} disabled={!isNew && items.length > 0}>
+        <select
+          style={inputStyle} value={form.currency} disabled={!isNew && items.length > 0}
+          onChange={(e) => { set('currency', e.target.value); billingRef.current?.repriceAll(e.target.value, undefined); }}
+        >
           <option value="MYR">MYR</option>
           <option value="USD">USD</option>
         </select>
@@ -484,7 +520,10 @@ export default function SalesOrderDetail({ user }) {
         <input type="date" style={inputStyle} value={form.contract_date} onChange={(e) => set('contract_date', e.target.value)} />
 
         <label style={label}>Booking Type (rate tier)</label>
-        <select style={inputStyle} value={form.booking_type} onChange={(e) => set('booking_type', e.target.value)}>
+        <select
+          style={inputStyle} value={form.booking_type}
+          onChange={(e) => { set('booking_type', e.target.value); billingRef.current?.repriceAll(undefined, e.target.value); }}
+        >
           <option value="">— Select —</option>
           <option value="PUBLISHED RATE">Published Rate</option>
           <option value="EARLY BIRD">Early Bird</option>
@@ -503,7 +542,14 @@ export default function SalesOrderDetail({ user }) {
           </div>
           <div style={{ flex: 1 }}>
             <label style={label}>Dimension</label>
-            <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
+              {!isNew && (
+                <button type="button" onClick={handlePickFromFloorPlan} title="Pick a booth from the Floor Plan" style={{ whiteSpace: 'nowrap' }}>
+                  📍 Pick
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -522,7 +568,7 @@ export default function SalesOrderDetail({ user }) {
           )}
           {!isNew && (
             <>
-              <button type="button" onClick={() => navigate(`/sales-orders/${id}/print`)} style={{ padding: '8px 16px' }}>
+              <button type="button" onClick={handleViewPrintContract} style={{ padding: '8px 16px' }}>
                 View / Print Contract
               </button>
               <button type="button" onClick={() => navigate(`/sales-orders/${id}/proforma`)} style={{ padding: '8px 16px' }}>
@@ -541,7 +587,9 @@ export default function SalesOrderDetail({ user }) {
             services apply. Leave Bare Space unchecked for a non-booth order (badges/sponsorship only).
           </p>
           <BillingTemplate
-            salesOrderId={id}
+            ref={billingRef}
+            parentType="contract"
+            parentId={id}
             currency={ccy}
             bookingType={form.booking_type}
             items={items}
@@ -549,124 +597,11 @@ export default function SalesOrderDetail({ user }) {
             taxCodes={taxCodes}
             onSaved={() => { loadItems(); loadSalesOrder(); loadApprovalLog(); }}
           />
-        </div>
-      )}
-
-      {!isNew && (
-        <div style={{ marginTop: 32 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3>Additional Items</h3>
-            <button type="button" onClick={startAddItem}>+ Add Other Item</button>
-          </div>
-
-          {showItemForm && (
-            <form onSubmit={handleSaveItem} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, margin: '12px 0' }}>
-              <label style={label}>From Price List (optional — autofills the fields below)</label>
-              <select style={inputStyle} value={itemForm.price_list_id} onChange={(e) => pickPriceListItem(e.target.value)}>
-                <option value="">— Manual entry —</option>
-                {priceList
-                  .filter((p) => !form.booking_type || p.booth_type === form.booking_type)
-                  .map((p) => (
-                    <option key={p.id} value={p.id}>{p.booth_type} · {p.sales_item_code} — {fmt(ccy === 'USD' ? p.unit_price_usd : p.unit_price_myr, ccy)}</option>
-                  ))}
-              </select>
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Item Code</label>
-                  <input style={inputStyle} value={itemForm.sales_item_code} onChange={(e) => setItemForm({ ...itemForm, sales_item_code: e.target.value })} required />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Category</label>
-                  <select style={inputStyle} value={itemForm.category} onChange={(e) => setItemForm({ ...itemForm, category: e.target.value })}>
-                    <option value="BOOTH">Booth</option>
-                    <option value="OTHER">Other</option>
-                  </select>
-                </div>
-              </div>
-
-              <label style={label}>Description (free text — e.g. custom CUB items)</label>
-              <input style={inputStyle} value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} />
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Qty</label>
-                  <input type="number" step="0.01" style={inputStyle} value={itemForm.qty} onChange={(e) => setItemForm({ ...itemForm, qty: e.target.value })} required />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Unit Price ({ccy})</label>
-                  <input type="number" step="0.01" style={inputStyle} value={itemForm.unit_price} onChange={(e) => setItemForm({ ...itemForm, unit_price: e.target.value })} required />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Discount</label>
-                  <select style={inputStyle} value={itemForm.discount_type} onChange={(e) => setItemForm({ ...itemForm, discount_type: e.target.value })}>
-                    <option value="">— None —</option>
-                    <option value="FLAT">Flat amount ({ccy})</option>
-                    <option value="PERCENT">Percentage (%)</option>
-                  </select>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Discount Value</label>
-                  <input type="number" step="0.01" style={inputStyle} value={itemForm.discount_value} onChange={(e) => setItemForm({ ...itemForm, discount_value: e.target.value })} disabled={!itemForm.discount_type} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Tax Code</label>
-                  <select style={inputStyle} value={itemForm.tax_code_id} onChange={(e) => setItemForm({ ...itemForm, tax_code_id: e.target.value })}>
-                    <option value="">— None —</option>
-                    {taxCodes.map((tc) => (
-                      <option key={tc.id} value={tc.id}>{tc.code} ({tc.rate_pct}%)</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-                <button type="submit">{editingItemId ? 'Save Item' : 'Add Item'}</button>
-                <button type="button" onClick={() => { setShowItemForm(false); setEditingItemId(null); }}>Cancel</button>
-              </div>
-            </form>
+          {ccy === 'USD' && (
+            <p style={{ textAlign: 'right', fontSize: 13, color: '#5c6070', marginTop: 4 }}>
+              ≈ {fmt(salesOrder?.total_myr, 'MYR')} at the estimate rate (saved figure — updates after Save Billing)
+            </p>
           )}
-
-          <table width="100%" cellPadding="6" className="responsive">
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                <th>Code</th><th>Description</th><th>Qty</th><th style={{ textAlign: 'right' }}>Unit Price</th>
-                <th style={{ textAlign: 'right' }}>Discount</th><th>Tax</th><th style={{ textAlign: 'right' }}>Line Total</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.filter((it) => !TEMPLATE_CODES.includes(it.sales_item_code)).map((it) => (
-                <tr key={it.id} style={{ borderBottom: '1px solid #eee' }}>
-                  <td data-label="Code">{it.sales_item_code}</td>
-                  <td data-label="Description">{it.description || '—'}</td>
-                  <td data-label="Qty">{it.qty}</td>
-                  <td data-label="Unit Price" style={{ textAlign: 'right' }}>{fmt(it.unit_price, ccy)}</td>
-                  <td data-label="Discount" style={{ textAlign: 'right' }}>{Number(it.discount_amount) > 0 ? fmt(it.discount_amount, ccy) : '—'}</td>
-                  <td data-label="Tax">{it.tax_code || '—'}</td>
-                  <td data-label="Line Total" style={{ textAlign: 'right' }}>{fmt(it.line_total, ccy)}</td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button type="button" onClick={() => startEditItem(it)}>Edit</button>{' '}
-                    <button type="button" onClick={() => handleDeleteItem(it)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-              {items.filter((it) => !TEMPLATE_CODES.includes(it.sales_item_code)).length === 0 && (
-                <tr><td colSpan={8}>No additional items.</td></tr>
-              )}
-            </tbody>
-          </table>
-
-          <div style={{ textAlign: 'right', marginTop: 12, fontWeight: 600 }}>
-            Contract Total ({ccy}): {fmt(salesOrder?.total_foreign, ccy)}
-            {ccy === 'USD' && (
-              <div style={{ fontWeight: 400, fontSize: 13, color: '#5c6070' }}>
-                ≈ {fmt(salesOrder?.total_myr, 'MYR')} (estimate rate)
-              </div>
-            )}
-          </div>
         </div>
       )}
 
@@ -700,12 +635,18 @@ export default function SalesOrderDetail({ user }) {
           <div style={{ marginTop: 32 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3>Invoices — {fmtCcy(totalInvoiced)} of {fmtCcy(contractTotal)} invoiced</h3>
-              {remaining > 0.01 && contractTotal > 0 && (
+              {remaining > 0.01 && contractTotal > 0 && salesOrder?.status === 'APPROVED' && attachments.length > 0 && (
                 <button type="button" onClick={() => setShowSplitForm(!showSplitForm)}>
-                  {showSplitForm ? 'Cancel' : 'Generate Draft Invoice(s)'}
+                  {showSplitForm ? 'Cancel' : 'Issue Invoice'}
                 </button>
               )}
             </div>
+            {remaining > 0.01 && contractTotal > 0 && salesOrder?.status !== 'APPROVED' && (
+              <p style={{ fontSize: 13, color: '#5c6070' }}>Invoicing opens once this contract is approved.</p>
+            )}
+            {remaining > 0.01 && contractTotal > 0 && salesOrder?.status === 'APPROVED' && attachments.length === 0 && (
+              <p style={{ fontSize: 13, color: '#5c6070' }}>Upload the signed contract below before you can issue an invoice.</p>
+            )}
 
             {showSplitForm && (
               <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, margin: '12px 0' }}>
@@ -737,7 +678,7 @@ export default function SalesOrderDetail({ user }) {
                 )}
                 <div style={{ marginTop: 16 }}>
                   <button type="button" disabled={generating} onClick={handleGenerateDraft}>
-                    {generating ? 'Generating...' : 'Generate'}
+                    {generating ? 'Issuing...' : 'Issue'}
                   </button>
                 </div>
               </div>

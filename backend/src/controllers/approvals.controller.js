@@ -1,5 +1,5 @@
 const { pool } = require('../config/db');
-const { isElevated } = require('../utils/visibility');
+const { getRequiredApprover, canActOnTier } = require('../utils/approverMatrix');
 
 async function listRules(req, res) {
   const result = await pool.query(
@@ -71,12 +71,40 @@ async function listApprovalLog(req, res) {
   res.json({ log: result.rows });
 }
 
-// Only Admin/Management can approve or reject — this mirrors the same
-// elevated-role check used for row visibility (visibility.js).
-async function approveSalesOrder(req, res) {
-  if (!isElevated(req)) {
-    return res.status(403).json({ error: 'Only Admin/Management can approve contracts.' });
+// Any user who can edit the contract can send it for approval — this is the
+// step that moves a contract off Draft, where it's freely editable and
+// invisible to invoicing, into the Admin/Management approval queue.
+async function submitForApproval(req, res) {
+  const result = await pool.query(
+    `UPDATE sales_orders SET status = 'PENDING_APPROVAL' WHERE id = $1 AND company_id = $2 AND status = 'DRAFT' RETURNING id`,
+    [req.params.id, req.companyId]
+  );
+  if (!result.rows[0]) {
+    return res.status(400).json({ error: 'Contract is not in Draft status.' });
   }
+  await pool.query(
+    `INSERT INTO approval_log (sales_order_id, action, actor_user_id, notes) VALUES ($1, 'SUBMITTED', $2, $3)`,
+    [req.params.id, req.userId, req.body.notes || null]
+  );
+  res.json({ success: true });
+}
+
+// Gated by the tiered revenue matrix above when one applies to this
+// contract's value, falling back to the original Admin/Management-only
+// gate otherwise (see getRequiredApprover/canActOnTier).
+async function approveSalesOrder(req, res) {
+  const so = await pool.query(
+    `SELECT total_myr FROM sales_orders WHERE id = $1 AND company_id = $2`,
+    [req.params.id, req.companyId]
+  );
+  if (!so.rows[0]) return res.status(404).json({ error: 'Contract not found.' });
+
+  const tier = await getRequiredApprover(req.companyId, Number(so.rows[0].total_myr) || 0);
+  if (!canActOnTier(req, tier)) {
+    const who = tier ? (tier.approver_user_name || `the ${tier.approver_role_code} role`) : 'Admin/Management';
+    return res.status(403).json({ error: `Only ${who} can approve this contract (RM${Number(so.rows[0].total_myr).toLocaleString('en-MY')}).` });
+  }
+
   const result = await pool.query(
     `UPDATE sales_orders SET status = 'APPROVED' WHERE id = $1 AND company_id = $2 AND status = 'PENDING_APPROVAL' RETURNING id`,
     [req.params.id, req.companyId]
@@ -92,9 +120,18 @@ async function approveSalesOrder(req, res) {
 }
 
 async function rejectSalesOrder(req, res) {
-  if (!isElevated(req)) {
-    return res.status(403).json({ error: 'Only Admin/Management can reject contracts.' });
+  const so = await pool.query(
+    `SELECT total_myr FROM sales_orders WHERE id = $1 AND company_id = $2`,
+    [req.params.id, req.companyId]
+  );
+  if (!so.rows[0]) return res.status(404).json({ error: 'Contract not found.' });
+
+  const tier = await getRequiredApprover(req.companyId, Number(so.rows[0].total_myr) || 0);
+  if (!canActOnTier(req, tier)) {
+    const who = tier ? (tier.approver_user_name || `the ${tier.approver_role_code} role`) : 'Admin/Management';
+    return res.status(403).json({ error: `Only ${who} can reject this contract (RM${Number(so.rows[0].total_myr).toLocaleString('en-MY')}).` });
   }
+
   const result = await pool.query(
     `UPDATE sales_orders SET status = 'DRAFT' WHERE id = $1 AND company_id = $2 AND status = 'PENDING_APPROVAL' RETURNING id`,
     [req.params.id, req.companyId]
@@ -109,4 +146,4 @@ async function rejectSalesOrder(req, res) {
   res.json({ success: true });
 }
 
-module.exports = { listRules, createRule, updateRule, deleteRule, listApprovalLog, approveSalesOrder, rejectSalesOrder };
+module.exports = { listRules, createRule, updateRule, deleteRule, listApprovalLog, submitForApproval, approveSalesOrder, rejectSalesOrder };

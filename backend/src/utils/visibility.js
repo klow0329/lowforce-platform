@@ -17,4 +17,17 @@ function visibilityClause(req, columnExpr, paramIndex) {
   return { sql: `(${columnExpr} = $${paramIndex} OR ${columnExpr} IS NULL)`, param: req.userId };
 }
 
-module.exports = { isElevated, visibilityClause };
+// Finance needs to see every invoice/payment/AR record company-wide to do
+// their actual job (confirm any invoice, chase any customer's balance) —
+// but that's narrower than full isElevated (Finance still shouldn't get
+// Admin/Management's blanket visibility into Opportunities/Contracts, or
+// contract-approval rights). A separate clause, used only on
+// invoice/payment/aging queries, rather than adding FIN to ELEVATED_ROLES.
+const FINANCE_VISIBLE_ROLES = ['ADM', 'MGT', 'FIN'];
+
+function financeVisibilityClause(req, columnExpr, paramIndex) {
+  if (FINANCE_VISIBLE_ROLES.includes(req.roleCode)) return { sql: 'TRUE', param: undefined };
+  return { sql: `(${columnExpr} = $${paramIndex} OR ${columnExpr} IS NULL)`, param: req.userId };
+}
+
+module.exports = { isElevated, visibilityClause, financeVisibilityClause };

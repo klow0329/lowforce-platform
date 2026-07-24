@@ -56,16 +56,6 @@ async function checkDiscount(client, companyId, salesOrderId, discountType, disc
   return false;
 }
 
-// Fires only when the contract was already APPROVED — i.e. this is a change
-// happening after the fact, not part of the original submission.
-async function checkTaxChange(client, companyId, salesOrderId, wasApproved, actorUserId) {
-  if (!wasApproved) return false;
-  const rules = await getActiveRules(client, companyId, 'TAX_CHANGE');
-  if (rules.length === 0) return false;
-  await flagForApproval(client, companyId, salesOrderId, 'TAX_CHANGE', actorUserId, 'Tax code changed on an approved contract.');
-  return true;
-}
-
 async function checkPostApprovalEdit(client, companyId, salesOrderId, wasApproved, actorUserId) {
   if (!wasApproved) return false;
   const rules = await getActiveRules(client, companyId, 'POST_APPROVAL_EDIT');
@@ -74,4 +64,40 @@ async function checkPostApprovalEdit(client, companyId, salesOrderId, wasApprove
   return true;
 }
 
-module.exports = { checkNewContract, checkDiscount, checkTaxChange, checkPostApprovalEdit };
+// totalMyr: the contract's current total_myr, already recomputed by the
+// caller (recomputeTotals) before this runs — always MYR regardless of the
+// contract's own currency, so one threshold works across USD/MYR contracts
+// alike.
+async function checkRevenueThreshold(client, companyId, salesOrderId, totalMyr, actorUserId) {
+  const rules = await getActiveRules(client, companyId, 'REVENUE_ABOVE_THRESHOLD');
+  for (const rule of rules) {
+    if (ruleTriggered(rule, totalMyr)) {
+      await flagForApproval(
+        client, companyId, salesOrderId, 'REVENUE_ABOVE_THRESHOLD', actorUserId,
+        `Contract total RM${Number(totalMyr).toLocaleString('en-MY', { minimumFractionDigits: 2 })} exceeds the revenue approval threshold.`
+      );
+      return true;
+    }
+  }
+  return false;
+}
+
+// Credit notes aren't a document type LowForce issues yet — this trigger is
+// registered so a company can configure the rule now (threshold + approver),
+// ready for whenever the Credit Note feature ships. No caller invokes this
+// today.
+async function checkCreditNote(client, companyId, salesOrderId, amount, actorUserId) {
+  const rules = await getActiveRules(client, companyId, 'CREDIT_NOTE_ISSUED');
+  for (const rule of rules) {
+    if (ruleTriggered(rule, amount)) {
+      await flagForApproval(
+        client, companyId, salesOrderId, 'CREDIT_NOTE_ISSUED', actorUserId,
+        `Credit note of RM${Number(amount).toLocaleString('en-MY', { minimumFractionDigits: 2 })} requires approval.`
+      );
+      return true;
+    }
+  }
+  return false;
+}
+
+module.exports = { checkNewContract, checkDiscount, checkPostApprovalEdit, checkRevenueThreshold, checkCreditNote };

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
+import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -53,9 +54,10 @@ export default function ProformaPrint() {
       </div>
 
       <div id="pdf-doc">
+      <LetterheadBand company={company} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
         <div>
-          <img src="/logo.png" alt="" style={{ height: 44, display: 'block', marginBottom: 6 }} />
+          <BrandLogo company={company} height={44} />
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{salesOrder.event_name}</div>
         </div>
@@ -103,6 +105,7 @@ export default function ProformaPrint() {
         Full payment is due prior to the official Invoice and Official Receipt being issued.
         Please quote {proformaNo} as your payment reference.
       </p>
+      <FooterBand company={company} />
       </div>
     </div>
   );

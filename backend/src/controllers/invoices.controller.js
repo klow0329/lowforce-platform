@@ -1,20 +1,24 @@
 const { pool } = require('../config/db');
-const { visibilityClause } = require('../utils/visibility');
+const { financeVisibilityClause } = require('../utils/visibility');
 
 async function listInvoices(req, res) {
-  const { event_id, sales_order_id, search } = req.query;
-  if (!event_id && !sales_order_id) {
-    return res.status(400).json({ error: 'event_id or sales_order_id is required.' });
+  const { event_id, sales_order_id, exhibitor_id, search } = req.query;
+  if (!event_id && !sales_order_id && !exhibitor_id) {
+    return res.status(400).json({ error: 'event_id, sales_order_id or exhibitor_id is required.' });
   }
 
   // invoices has no salesperson_id of its own — visibility rides on the
-  // contract's salesperson via sales_orders.
-  const vis = visibilityClause(req, 'so.salesperson_id', 5);
+  // contract's salesperson via sales_orders. Finance sees every invoice
+  // company-wide (that's the job — confirming and chasing any customer's
+  // balance regardless of which salesperson owns the deal), not just their
+  // own, hence financeVisibilityClause rather than the general one.
+  const vis = financeVisibilityClause(req, 'so.salesperson_id', 6);
 
   const result = await pool.query(
-    `SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr, inv.sales_order_id,
+    `SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr, inv.sales_order_id, inv.exhibitor_id,
             inv.currency, inv.amount_foreign, inv.exchange_rate, inv.status, inv.billing_pct,
-            ex.company_name AS exhibitor_name
+            ex.company_name AS exhibitor_name,
+            inv.amount_myr - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS balance_due
      FROM invoices inv
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
      JOIN sales_orders so ON so.id = inv.sales_order_id
@@ -22,16 +26,17 @@ async function listInvoices(req, res) {
        AND ($2::uuid IS NULL OR inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2))
        AND ($3::uuid IS NULL OR inv.sales_order_id = $3)
        AND ($4 = '' OR ex.company_name ILIKE '%' || $4 || '%')
+       AND ($5::uuid IS NULL OR inv.exhibitor_id = $5)
        AND ${vis.sql}
      ORDER BY inv.invoice_date DESC NULLS LAST, inv.invoice_no DESC`,
-    [req.companyId, event_id || null, sales_order_id || null, search || '', ...(vis.param !== undefined ? [vis.param] : [])]
+    [req.companyId, event_id || null, sales_order_id || null, search || '', exhibitor_id || null, ...(vis.param !== undefined ? [vis.param] : [])]
   );
 
   res.json({ invoices: result.rows });
 }
 
 async function getInvoice(req, res) {
-  const vis = visibilityClause(req, 'so.salesperson_id', 3);
+  const vis = financeVisibilityClause(req, 'so.salesperson_id', 3);
   const result = await pool.query(
     `SELECT inv.*,
             ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email, ex.contact1_phone,
@@ -39,10 +44,10 @@ async function getInvoice(req, res) {
             ex.billing_name, ex.billing_address, ex.billing_postcode, ex.billing_city,
             ex.billing_country_code, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
             ex.billing_contact_no, ex.billing_email, ex.billing_same_as_company,
-            ev.name AS event_name,
-            so.contract_type, so.contract_date,
+            ev.name AS event_name, ev.start_date AS event_start_date, ev.end_date AS event_end_date,
+            so.contract_type, so.contract_date, so.hall, so.booth_no, so.total_foreign AS contract_total_foreign,
             o.booth_sqm, o.booth_type,
-            COALESCE((SELECT SUM(amount_myr) FROM payments WHERE invoice_id = inv.id), 0) AS total_paid
+            COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS total_paid
      FROM invoices inv
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
      JOIN events ev ON ev.id = inv.event_id
@@ -169,12 +174,27 @@ async function generateDraftInvoices(req, res) {
   }
 }
 
+// Confirming is Finance's call, and ONLY Finance's — explicitly not even
+// Admin/Management, per the user's own instruction. Enforced here too, not
+// just by hiding the button, since this is the same generic PUT used for
+// editing a draft's date/amount/rate.
+const CAN_CONFIRM_ROLES = ['FIN'];
+
 async function updateInvoice(req, res) {
   const { amount_foreign, exchange_rate } = req.body;
 
+  if (req.body.status === 'CONFIRMED' && !CAN_CONFIRM_ROLES.includes(req.roleCode)) {
+    return res.status(403).json({ error: 'Only Finance can confirm an invoice.' });
+  }
+
   const fields = {};
-  for (const field of ['invoice_no', 'invoice_date', 'status', 'discount_type', 'discount_value']) {
+  for (const field of ['invoice_no', 'invoice_date', 'status', 'discount_type', 'discount_value', 'expected_payment_date', 'aging_notes']) {
     if (field in req.body) fields[field] = req.body[field] === '' ? null : req.body[field];
+  }
+  // Stamped automatically, not sent by the client — the "last touched" time
+  // for the Aging follow-up fields specifically, not a generic updated_at.
+  if ('expected_payment_date' in fields || 'aging_notes' in fields) {
+    fields.aging_updated_at = new Date();
   }
 
   // amount_foreign/exchange_rate are linked — recompute amount_myr together

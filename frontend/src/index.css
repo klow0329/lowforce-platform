@@ -61,8 +61,27 @@ a { color: #1B3A6B; }
 
 .nav-inner { flex-wrap: wrap; row-gap: 6px; padding-left: 16px; padding-right: 16px; }
 
+/* Sub-menu ribbon (Reports, Admin, ...): a horizontal bar directly under
+   the frozen top nav, M365-style — sticks beneath the nav while scrolling
+   (top offset = the nav's measured height, published by NavBar). */
+.report-layout { display: block; }
+.report-menu {
+  display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px;
+  position: sticky; top: var(--nav-height, 54px); z-index: 40;
+  background: #F5F6FA; padding: 10px 0; margin-bottom: 12px;
+  border-bottom: 1px solid #e2e5ec;
+}
+.report-menu button {
+  background: #fff; color: #1B3A6B; border: 1px solid #e2e5ec;
+  text-align: center; padding: 8px 14px; border-radius: 6px; cursor: pointer;
+}
+.report-menu button.active { background: #1B3A6B; color: #fff; font-weight: 600; }
+.report-content { min-width: 0; }
+
 @media (max-width: 700px) {
   .page { margin: 16px auto !important; }
+
+  .report-menu button { padding: 8px 10px; font-size: 13px; }
 
   button { padding: 10px 16px; min-height: 40px; }
   input, select, textarea { font-size: 16px; } /* prevents iOS zoom-on-focus */

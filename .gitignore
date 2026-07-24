@@ -5,3 +5,4 @@ build/
 *.log
 .claude/settings.local.json
 backend/uploads/
+database/backups/

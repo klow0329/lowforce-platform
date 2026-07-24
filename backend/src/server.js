@@ -6,6 +6,7 @@ const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 
 const { pool } = require('./config/db');
+const { auditMiddleware } = require('./middleware/audit');
 const authRoutes = require('./routes/auth.routes');
 const exhibitorsRoutes = require('./routes/exhibitors.routes');
 const referenceRoutes = require('./routes/reference.routes');
@@ -19,6 +20,9 @@ const priceListRoutes = require('./routes/priceList.routes');
 const tableViewsRoutes = require('./routes/tableViews.routes');
 const settingsRoutes = require('./routes/settings.routes');
 const approvalRulesRoutes = require('./routes/approvalRules.routes');
+const floorPlanRoutes = require('./routes/floorPlan.routes');
+const budgetRoutes = require('./routes/budget.routes');
+const auditRoutes = require('./routes/audit.routes');
 
 const app = express();
 
@@ -45,6 +49,11 @@ app.use(session({
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
+// Audit trail — mounted before every route so it sees the full request/
+// response cycle for anything state-changing, current or future, without
+// each controller needing to remember to log itself.
+app.use(auditMiddleware);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/exhibitors', exhibitorsRoutes);
 app.use('/api/reference', referenceRoutes);
@@ -58,6 +67,9 @@ app.use('/api/price-list', priceListRoutes);
 app.use('/api/table-views', tableViewsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/approval-rules', approvalRulesRoutes);
+app.use('/api/floor-plan', floorPlanRoutes);
+app.use('/api/budgets', budgetRoutes);
+app.use('/api/audit', auditRoutes);
 
 // If the frontend has been built (npm run build in frontend/), serve it from
 // this same server — one port, one URL to share. During development the Vite

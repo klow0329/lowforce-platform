@@ -1,0 +1,11 @@
+-- PROPOSED/SOLD are no longer stored on floor_plan_booths.status — they're
+-- computed at read time from opportunity_id/sales_order_id (+ the linked
+-- contract's approval status), so the Floor Plan display can never drift
+-- out of sync with the Opportunity/Contract that actually owns the booth.
+-- status now only tracks the ONE thing that's genuinely independent of any
+-- deal: whether Operations has manually reserved a booth (held it back from
+-- the available pool without it being tied to a specific exhibitor yet).
+-- Any booth previously marked PROPOSED/SOLD by the old manual mechanism
+-- resets to AVAILABLE here — its opportunity_id/sales_order_id link (if
+-- any) is untouched, so the correct computed status re-derives immediately.
+UPDATE floor_plan_booths SET status = 'AVAILABLE' WHERE status IN ('PROPOSED', 'SOLD');

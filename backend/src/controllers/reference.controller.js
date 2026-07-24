@@ -80,10 +80,22 @@ async function listStages(req, res) {
   res.json({ stages: result.rows });
 }
 
-// The tenant's own company name — needed on generated documents (contracts,
-// invoices, receipts) as the "For and on behalf of" party.
+// The tenant's own company profile — needed on generated documents
+// (contracts, invoices, receipts) as the "For and on behalf of" party and,
+// for invoices specifically, the full letterhead/payment-details block.
 async function getCompany(req, res) {
-  const result = await pool.query(`SELECT id, name FROM companies WHERE id = $1`, [req.companyId]);
+  const result = await pool.query(
+    `SELECT c.id, c.name,
+            cs.reg_no, cs.tin_no, cs.sst_no, cs.address, cs.phone, cs.email,
+            cs.bank_name, cs.bank_account_no, cs.bank_swift, cs.payment_instructions,
+            (cs.logo_filename IS NOT NULL) AS has_logo,
+            (cs.letterhead_filename IS NOT NULL) AS has_letterhead,
+            (cs.footer_filename IS NOT NULL) AS has_footer
+     FROM companies c
+     LEFT JOIN company_settings cs ON cs.company_id = c.id
+     WHERE c.id = $1`,
+    [req.companyId]
+  );
   res.json({ company: result.rows[0] });
 }
 

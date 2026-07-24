@@ -7,9 +7,16 @@ const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
 const fmt = (n, ccy = 'MYR') => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function InvoiceDetail() {
+// Confirming an invoice is Finance's call, and ONLY Finance's — not even
+// Admin/Management, per explicit instruction — they're the ones reconciling
+// invoice_no/date/exchange rate against the accounting system before it
+// counts as final.
+const CAN_CONFIRM_ROLES = ['FIN'];
+
+export default function InvoiceDetail({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const canConfirm = CAN_CONFIRM_ROLES.includes(user?.role_code);
 
   // Invoices are now system-generated as drafts from a contract (see
   // SalesOrderDetail's "Generate Draft Invoice(s)") — this screen is where
@@ -168,10 +175,13 @@ export default function InvoiceDetail() {
               {saving ? 'Saving...' : 'Save'}
             </button>
           )}
-          {invoice.status === 'DRAFT' && (
+          {invoice.status === 'DRAFT' && canConfirm && (
             <button type="button" disabled={saving} onClick={handleConfirm} style={{ padding: '8px 16px' }}>
               Confirm Invoice
             </button>
+          )}
+          {invoice.status === 'DRAFT' && !canConfirm && (
+            <span style={{ fontSize: 13, color: '#5c6070', alignSelf: 'center' }}>Waiting on Finance to confirm this invoice.</span>
           )}
           <button type="button" onClick={() => navigate(`/invoices/${id}/print`)} style={{ padding: '8px 16px' }}>
             View / Print Invoice
@@ -186,7 +196,11 @@ export default function InvoiceDetail() {
             <button
               type="button"
               onClick={() => {
-                const params = new URLSearchParams({ invoice_id: id, invoice_no: invoice.invoice_no, balance_due: balanceDue });
+                const params = new URLSearchParams({
+                  exhibitor_id: invoice.exhibitor_id, exhibitor_name: invoice.company_name,
+                  invoice_id: id, invoice_no: invoice.invoice_no, balance_due: balanceDue,
+                  event_id: invoice.event_id,
+                });
                 navigate(`/payments/new?${params}`);
               }}
             >
@@ -213,7 +227,12 @@ export default function InvoiceDetail() {
                 <td>{p.receipt_no}</td>
                 <td>{p.payment_date || '—'}</td>
                 <td>{p.payment_method || '—'}</td>
-                <td>{fmt(p.amount_myr)}</td>
+                <td>
+                  {fmt(p.allocated_amount_myr)}
+                  {Number(p.payment_total_myr) !== Number(p.allocated_amount_myr) && (
+                    <span style={{ fontSize: 11, color: '#5c6070' }}> (of {fmt(p.payment_total_myr)} received)</span>
+                  )}
+                </td>
               </tr>
             ))}
             {payments.length === 0 && (

@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { visibilityClause } = require('../utils/visibility');
+const { syncFloorPlanBooth, releaseFloorPlanBooth } = require('../utils/floorPlanSync');
 
 // Pipeline list — filterable by event, stage, salesperson ("My
 // Opportunities"), exhibitor (for the "linked opportunities" list on the
@@ -21,7 +22,7 @@ async function listOpportunities(req, res) {
             o.salesperson_id, u.full_name AS salesperson_name,
             o.stage_id, st.code AS stage_code, st.name AS stage_name,
             st.probability_pct, st.is_won, st.is_lost,
-            o.booth_sqm, o.booth_type, o.booking_type, o.currency, o.estimated_value_myr, o.next_follow_up_date
+            o.booth_sqm, o.booth_type, o.booking_type, o.currency, o.estimated_value_myr, o.next_follow_up_date, o.remarks
      FROM opportunities o
      JOIN exhibitors ex ON ex.id = o.exhibitor_id
      JOIN events ev ON ev.id = o.event_id
@@ -126,41 +127,115 @@ async function createOpportunity(req, res) {
   if (!fields.exhibitor_id || !fields.event_id || !fields.stage_id) {
     return res.status(400).json({ error: 'exhibitor_id, event_id and stage_id are required.' });
   }
+  if (!fields.booking_type || !fields.currency) {
+    return res.status(400).json({ error: 'Tier and Currency are required.' });
+  }
 
   const columns = Object.keys(fields);
   const placeholders = columns.map((_, i) => `$${i + 2}`);
 
-  const result = await pool.query(
-    `INSERT INTO opportunities (company_id, ${columns.join(', ')})
-     VALUES ($1, ${placeholders.join(', ')})
-     RETURNING id`,
-    [req.companyId, ...columns.map((c) => fields[c])]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  res.status(201).json({ opportunity: { id: result.rows[0].id } });
+    const result = await client.query(
+      `INSERT INTO opportunities (company_id, ${columns.join(', ')})
+       VALUES ($1, ${placeholders.join(', ')})
+       RETURNING id`,
+      [req.companyId, ...columns.map((c) => fields[c])]
+    );
+    const opportunityId = result.rows[0].id;
+
+    // A booth picked from the Floor Plan only actually locks once the
+    // opportunity it's for has genuinely been saved — picking it on the
+    // Floor Plan screen itself doesn't touch the booth at all (see
+    // FloorPlan.jsx). Real-world testing found the opposite (lock on pick)
+    // orphans the booth if the user picks one and then abandons the form.
+    if (req.body.floor_plan_booth_id) {
+      const sync = await syncFloorPlanBooth(client, req.companyId, {
+        linkColumn: 'opportunity_id', linkId: opportunityId,
+        floorPlanBoothId: req.body.floor_plan_booth_id, exhibitorName: req.body.exhibitor_name,
+      });
+      if (!sync.ok) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: sync.error });
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({ opportunity: { id: opportunityId } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function updateOpportunity(req, res) {
   const fields = pickOpportunityFields(req.body);
   const columns = Object.keys(fields);
 
-  if (columns.length === 0) {
+  if (columns.length === 0 && !('floor_plan_booth_id' in req.body)) {
     return res.json({ opportunity: { id: req.params.id } });
   }
 
-  const setClause = columns.map((c, i) => `${c} = $${i + 3}`).join(', ');
-  const result = await pool.query(
-    `UPDATE opportunities SET ${setClause}
-     WHERE id = $1 AND company_id = $2
-     RETURNING id`,
-    [req.params.id, req.companyId, ...columns.map((c) => fields[c])]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (!result.rows[0]) {
-    return res.status(404).json({ error: 'Opportunity not found.' });
+    if (columns.length > 0) {
+      const setClause = columns.map((c, i) => `${c} = $${i + 3}`).join(', ');
+      const result = await client.query(
+        `UPDATE opportunities SET ${setClause}
+         WHERE id = $1 AND company_id = $2
+         RETURNING id`,
+        [req.params.id, req.companyId, ...columns.map((c) => fields[c])]
+      );
+      if (!result.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Opportunity not found.' });
+      }
+
+      // A deal marked Lost releases whatever booth it was holding — it
+      // shouldn't keep a real booth off the market for a deal that fell
+      // through.
+      if (fields.stage_id) {
+        const stage = await client.query(`SELECT is_lost FROM sales_stages WHERE id = $1`, [fields.stage_id]);
+        if (stage.rows[0]?.is_lost) {
+          await releaseFloorPlanBooth(client, req.companyId, 'opportunity_id', req.params.id);
+        }
+      }
+
+      // Booth No is also a plain editable text field (not just set via the
+      // Floor Plan picker) — if the user clears it by hand and isn't
+      // simultaneously picking a replacement booth, treat that the same as
+      // an explicit release so the Floor Plan side doesn't keep showing a
+      // booth this record no longer claims.
+      if ('booth_no' in fields && fields.booth_no === null && !('floor_plan_booth_id' in req.body)) {
+        await releaseFloorPlanBooth(client, req.companyId, 'opportunity_id', req.params.id);
+      }
+    }
+
+    if ('floor_plan_booth_id' in req.body) {
+      const sync = await syncFloorPlanBooth(client, req.companyId, {
+        linkColumn: 'opportunity_id', linkId: req.params.id,
+        floorPlanBoothId: req.body.floor_plan_booth_id, exhibitorName: req.body.exhibitor_name,
+      });
+      if (!sync.ok) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: sync.error });
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ opportunity: { id: req.params.id } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-
-  res.json({ opportunity: { id: req.params.id } });
 }
 
 module.exports = {
