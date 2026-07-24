@@ -93,6 +93,11 @@ export default function SalesOrderDetail({ user }) {
   const [approvalLog, setApprovalLog] = useState([]);
   const [showLog, setShowLog] = useState(false);
 
+  const [creditNotes, setCreditNotes] = useState([]);
+  const [showCnForm, setShowCnForm] = useState(false);
+  const [cnForm, setCnForm] = useState({ invoice_id: '', amount_myr: '', reason: '' });
+  const [cnBusy, setCnBusy] = useState(false);
+
   function loadItems() {
     if (!id) return;
     api.listSalesOrderItems(id).then(({ items }) => setItems(items));
@@ -108,6 +113,10 @@ export default function SalesOrderDetail({ user }) {
   function loadApprovalLog() {
     if (!id) return;
     api.listApprovalLog(id).then(({ log }) => setApprovalLog(log));
+  }
+  function loadCreditNotes() {
+    if (!id) return;
+    api.listCreditNotes({ sales_order_id: id }).then(({ creditNotes }) => setCreditNotes(creditNotes));
   }
   function loadSalesOrder() {
     api.getSalesOrder(id).then(({ salesOrder, requiredApprover, canApprove }) => {
@@ -151,6 +160,7 @@ export default function SalesOrderDetail({ user }) {
     loadAttachments();
     loadInvoices();
     loadApprovalLog();
+    loadCreditNotes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew]);
 
@@ -377,6 +387,69 @@ export default function SalesOrderDetail({ user }) {
       await api.rejectSalesOrder(id, { notes });
       loadSalesOrder();
       loadApprovalLog();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  // --- Credit Notes ------------------------------------------------------
+  // Deliberately does NOT touch this contract's own total_myr or any
+  // invoice's amount_myr — a Credit Note is a separate, its-own-line AR
+  // adjustment (see creditNotes.controller.js) so Reports/revenue figures
+  // stay exactly as originally approved. It only ever reduces the specific
+  // invoice's outstanding balance, and only once Finance confirms it.
+  async function handleRequestCn(e) {
+    e.preventDefault();
+    if (!window.confirm(`Request a credit note for ${fmt(cnForm.amount_myr, 'MYR')} against this invoice?`)) return;
+    setCnBusy(true);
+    setError('');
+    try {
+      await api.requestCreditNote({
+        sales_order_id: id,
+        invoice_id: cnForm.invoice_id,
+        amount_myr: cnForm.amount_myr,
+        reason: cnForm.reason,
+      });
+      setCnForm({ invoice_id: '', amount_myr: '', reason: '' });
+      setShowCnForm(false);
+      loadCreditNotes();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCnBusy(false);
+    }
+  }
+
+  async function handleApproveCn(cn) {
+    if (!window.confirm(`Approve credit note request for ${fmt(cn.amount_myr, 'MYR')} against invoice ${cn.invoice_no}?`)) return;
+    setError('');
+    try {
+      await api.approveCreditNote(cn.id);
+      loadCreditNotes();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleRejectCn(cn) {
+    const notes = window.prompt('Reason for rejecting this credit note request:');
+    if (notes === null) return;
+    setError('');
+    try {
+      await api.rejectCreditNote(cn.id, { notes });
+      loadCreditNotes();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleConfirmCn(cn) {
+    if (!window.confirm(`Confirm credit note ${cn.cn_no}? This is what actually reduces invoice ${cn.invoice_no}'s outstanding balance.`)) return;
+    setError('');
+    try {
+      await api.confirmCreditNote(cn.id);
+      loadCreditNotes();
+      loadInvoices();
     } catch (err) {
       setError(err.message);
     }
@@ -712,6 +785,103 @@ export default function SalesOrderDetail({ user }) {
                 )}
               </tbody>
             </table>
+          </div>
+        );
+      })()}
+
+      {!isNew && salesOrder?.status === 'APPROVED' && (() => {
+        const confirmedInvoices = invoices.filter((inv) => inv.status === 'CONFIRMED');
+        const canActOnCn = ['ADM', 'MGT', 'FIN'].includes(user?.role_code); // best-effort hint; the backend is the real gate for a tiered-matrix approver who isn't one of these roles
+        const CN_STATUS_STYLE = {
+          PENDING_APPROVAL: { color: '#8a6d1a', label: 'Pending Approval' },
+          DRAFT: { color: '#1B3A6B', label: 'Draft (awaiting Finance)' },
+          CONFIRMED: { color: '#1A9C5B', label: 'Confirmed' },
+          REJECTED: { color: '#c83c3c', label: 'Rejected' },
+        };
+        return (
+          <div style={{ marginTop: 32 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3>Value Adjustment (Credit Note)</h3>
+              {confirmedInvoices.length > 0 && (
+                <button type="button" onClick={() => setShowCnForm(!showCnForm)}>
+                  {showCnForm ? 'Cancel' : '+ Request Credit Note'}
+                </button>
+              )}
+            </div>
+            <p style={{ fontSize: 12, color: '#5c6070' }}>
+              Reduces one confirmed invoice's outstanding balance — this contract's own value and every revenue
+              report stay exactly as originally approved. Needs approval (by the tiered matrix in Admin &gt;
+              Approval Rules, or Admin/Management by default), then Finance confirms it before it actually takes
+              effect.
+            </p>
+            {confirmedInvoices.length === 0 && (
+              <p style={{ fontSize: 13, color: '#5c6070' }}>No confirmed invoice on this contract yet to adjust.</p>
+            )}
+
+            {showCnForm && (
+              <form onSubmit={handleRequestCn} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+                <label style={label}>Invoice</label>
+                <select
+                  style={inputStyle} value={cnForm.invoice_id} required
+                  onChange={(e) => setCnForm({ ...cnForm, invoice_id: e.target.value })}
+                >
+                  <option value="">— Select —</option>
+                  {confirmedInvoices.map((inv) => (
+                    <option key={inv.id} value={inv.id}>{inv.invoice_no} — {fmt(inv.amount_myr, 'MYR')}</option>
+                  ))}
+                </select>
+                <label style={label}>Reduction Amount (RM)</label>
+                <input
+                  type="number" step="0.01" min="0.01" style={inputStyle} required
+                  value={cnForm.amount_myr} onChange={(e) => setCnForm({ ...cnForm, amount_myr: e.target.value })}
+                />
+                <label style={label}>Reason</label>
+                <textarea
+                  style={{ ...inputStyle, minHeight: 56 }} required
+                  value={cnForm.reason} onChange={(e) => setCnForm({ ...cnForm, reason: e.target.value })}
+                />
+                <button type="submit" disabled={cnBusy} style={{ marginTop: 12 }}>{cnBusy ? 'Submitting...' : 'Submit Request'}</button>
+              </form>
+            )}
+
+            {creditNotes.length > 0 && (
+              <table width="100%" cellPadding="6">
+                <thead>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                    <th>CN No</th><th>Invoice</th><th>Reason</th><th style={{ textAlign: 'right' }}>Amount</th><th>Status</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {creditNotes.map((cn) => (
+                    <tr key={cn.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td>{cn.cn_no || '—'}</td>
+                      <td>
+                        <a href={`/invoices/${cn.invoice_id}`} onClick={(e) => { e.preventDefault(); navigate(`/invoices/${cn.invoice_id}`); }}>
+                          {cn.invoice_no}
+                        </a>
+                      </td>
+                      <td style={{ fontSize: 12, color: '#5c6070' }}>{cn.reason}</td>
+                      <td style={{ textAlign: 'right' }}>{fmt(cn.amount_myr, 'MYR')}</td>
+                      <td style={{ color: CN_STATUS_STYLE[cn.status]?.color, fontWeight: 600 }}>{CN_STATUS_STYLE[cn.status]?.label || cn.status}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        {cn.status === 'PENDING_APPROVAL' && canActOnCn && (
+                          <>
+                            <button type="button" onClick={() => handleApproveCn(cn)}>Approve</button>{' '}
+                            <button type="button" onClick={() => handleRejectCn(cn)}>Reject</button>
+                          </>
+                        )}
+                        {cn.status === 'DRAFT' && user?.role_code === 'FIN' && (
+                          <button type="button" onClick={() => handleConfirmCn(cn)}>Confirm</button>
+                        )}
+                        {cn.status === 'CONFIRMED' && (
+                          <button type="button" onClick={() => navigate(`/credit-notes/${cn.id}/print`)}>View</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         );
       })()}

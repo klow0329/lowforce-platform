@@ -23,6 +23,7 @@ const approvalRulesRoutes = require('./routes/approvalRules.routes');
 const floorPlanRoutes = require('./routes/floorPlan.routes');
 const budgetRoutes = require('./routes/budget.routes');
 const auditRoutes = require('./routes/audit.routes');
+const creditNotesRoutes = require('./routes/creditNotes.routes');
 
 const app = express();
 
@@ -70,6 +71,7 @@ app.use('/api/approval-rules', approvalRulesRoutes);
 app.use('/api/floor-plan', floorPlanRoutes);
 app.use('/api/budgets', budgetRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/credit-notes', creditNotesRoutes);
 
 // If the frontend has been built (npm run build in frontend/), serve it from
 // this same server — one port, one URL to share. During development the Vite

@@ -18,7 +18,10 @@ async function listInvoices(req, res) {
     `SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr, inv.sales_order_id, inv.exhibitor_id,
             inv.currency, inv.amount_foreign, inv.exchange_rate, inv.status, inv.billing_pct,
             ex.company_name AS exhibitor_name,
-            inv.amount_myr - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS balance_due
+            inv.amount_myr
+              - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0)
+              - COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED'), 0)
+              AS balance_due
      FROM invoices inv
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
      JOIN sales_orders so ON so.id = inv.sales_order_id
@@ -47,7 +50,8 @@ async function getInvoice(req, res) {
             ev.name AS event_name, ev.start_date AS event_start_date, ev.end_date AS event_end_date,
             so.contract_type, so.contract_date, so.hall, so.booth_no, so.total_foreign AS contract_total_foreign,
             o.booth_sqm, o.booth_type,
-            COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS total_paid
+            COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS total_paid,
+            COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED'), 0) AS total_credited
      FROM invoices inv
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
      JOIN events ev ON ev.id = inv.event_id
@@ -62,7 +66,7 @@ async function getInvoice(req, res) {
     return res.status(404).json({ error: 'Invoice not found.' });
   }
 
-  invoice.balance_due = Number(invoice.amount_myr) - Number(invoice.total_paid);
+  invoice.balance_due = Number(invoice.amount_myr) - Number(invoice.total_paid) - Number(invoice.total_credited);
   res.json({ invoice });
 }
 

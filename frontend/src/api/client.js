@@ -110,6 +110,13 @@ export const api = {
   rejectSalesOrder: (soId, payload) =>
     apiFetch(`/sales-orders/${soId}/reject`, { method: 'POST', body: JSON.stringify(payload || {}) }),
 
+  listCreditNotes: (params) => apiFetch(`/credit-notes?${new URLSearchParams(params)}`),
+  getCreditNote: (id) => apiFetch(`/credit-notes/${id}`),
+  requestCreditNote: (payload) => apiFetch('/credit-notes', { method: 'POST', body: JSON.stringify(payload) }),
+  approveCreditNote: (id) => apiFetch(`/credit-notes/${id}/approve`, { method: 'PUT' }),
+  rejectCreditNote: (id, payload) => apiFetch(`/credit-notes/${id}/reject`, { method: 'PUT', body: JSON.stringify(payload || {}) }),
+  confirmCreditNote: (id) => apiFetch(`/credit-notes/${id}/confirm`, { method: 'PUT' }),
+
   getSettings: () => apiFetch('/settings'),
   updateSettings: (payload) => apiFetch('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   listTaxCodes: () => apiFetch('/settings/tax-codes'),

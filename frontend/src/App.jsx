@@ -14,6 +14,7 @@ import InvoiceDetail from './pages/InvoiceDetail';
 import InvoicePrint from './pages/InvoicePrint';
 import PaymentDetail from './pages/PaymentDetail';
 import ReceiptPrint from './pages/ReceiptPrint';
+import CreditNotePrint from './pages/CreditNotePrint';
 import Reports from './pages/Reports';
 import Dashboard from './pages/Dashboard';
 import ChangePassword from './pages/ChangePassword';
@@ -134,6 +135,7 @@ export default function App() {
           <Route path="/payments/new" element={<PaymentDetailRoute />} />
           <Route path="/payments/:id" element={<PaymentDetailRoute />} />
           <Route path="/payments/:id/print" element={<ReceiptPrint />} />
+          <Route path="/credit-notes/:id/print" element={<CreditNotePrint />} />
           <Route path="/reports" element={<Reports user={user} />} />
           <Route path="/reports/:section" element={<Reports user={user} />} />
           {/* Old bookmark/tile links keep working — Aging now lives under Reports */}

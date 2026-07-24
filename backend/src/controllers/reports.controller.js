@@ -24,7 +24,10 @@ async function getCustomerAging(req, res) {
               inv.expected_payment_date, inv.aging_notes, inv.aging_updated_at,
               ex.company_name AS exhibitor_name,
               COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS total_paid,
-              inv.amount_myr - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS balance_due,
+              inv.amount_myr
+                - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0)
+                - COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED'), 0)
+                AS balance_due,
               GREATEST(0, CURRENT_DATE - inv.invoice_date) AS days_overdue
        FROM invoices inv
        JOIN exhibitors ex ON ex.id = inv.exhibitor_id
@@ -79,7 +82,7 @@ async function getDashboard(req, res) {
     return res.status(400).json({ error: 'event_id is required.' });
   }
 
-  const [oppResult, contractedNotInvoicedResult, contractValueResult, invoicedResult, collectedResult, followUpsResult, boothsResult] =
+  const [oppResult, contractedNotInvoicedResult, contractValueResult, invoicedResult, collectedResult, creditedResult, followUpsResult, boothsResult] =
     await Promise.all([
       pool.query(
         `SELECT
@@ -118,6 +121,16 @@ async function getDashboard(req, res) {
          WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)`,
         [req.companyId, event_id]
       ),
+      // Confirmed credit notes for this event's invoices — reduces
+      // outstanding only, never "Invoiced"/contracted revenue figures
+      // above, per the Credit Note design (see creditNotes.controller.js).
+      pool.query(
+        `SELECT COALESCE(SUM(cn.amount_myr), 0) AS total
+         FROM credit_notes cn
+         WHERE cn.company_id = $1 AND cn.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+           AND cn.status = 'CONFIRMED'`,
+        [req.companyId, event_id]
+      ),
       pool.query(
         `SELECT COUNT(*) AS count
          FROM opportunities o JOIN sales_stages st ON st.id = o.stage_id
@@ -142,6 +155,7 @@ async function getDashboard(req, res) {
   const opp = oppResult.rows[0];
   const totalInvoiced = Number(invoicedResult.rows[0].total);
   const totalCollected = Number(collectedResult.rows[0].total);
+  const totalCredited = Number(creditedResult.rows[0].total);
 
   res.json({
     opportunities: {
@@ -160,7 +174,7 @@ async function getDashboard(req, res) {
     totalContractValue: Number(contractValueResult.rows[0].total),
     totalInvoiced,
     totalCollected,
-    totalOutstanding: totalInvoiced - totalCollected,
+    totalOutstanding: totalInvoiced - totalCollected - totalCredited,
     followUpsDue: Number(followUpsResult.rows[0].count),
     totalBooths: {
       count: Number(boothsResult.rows[0].count),
@@ -229,7 +243,10 @@ async function getTasks(req, res) {
     pool.query(
       `SELECT inv.id, inv.invoice_no, inv.expected_payment_date,
               ex.company_name AS exhibitor_name,
-              inv.amount_myr - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS balance_due
+              inv.amount_myr
+                - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0)
+                - COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED'), 0)
+                AS balance_due
        FROM invoices inv
        JOIN exhibitors ex ON ex.id = inv.exhibitor_id
        JOIN sales_orders so ON so.id = inv.sales_order_id
@@ -320,7 +337,7 @@ async function getStatementOfAccount(req, res) {
     return res.status(404).json({ error: 'Exhibitor not found.' });
   }
 
-  const [invoicesResult, paymentsResult, creditResult] = await Promise.all([
+  const [invoicesResult, paymentsResult, creditNotesResult, creditResult] = await Promise.all([
     pool.query(
       `SELECT id, invoice_no, invoice_date, amount_myr FROM invoices
        WHERE company_id = $1 AND exhibitor_id = $2 AND status = 'CONFIRMED'
@@ -331,6 +348,12 @@ async function getStatementOfAccount(req, res) {
       `SELECT id, payment_date, amount_myr, receipt_no FROM payments
        WHERE company_id = $1 AND exhibitor_id = $2
        ORDER BY payment_date`,
+      [req.companyId, exhibitor_id]
+    ),
+    pool.query(
+      `SELECT id, cn_no, cn_date, amount_myr FROM credit_notes
+       WHERE company_id = $1 AND exhibitor_id = $2 AND status = 'CONFIRMED'
+       ORDER BY cn_date`,
       [req.companyId, exhibitor_id]
     ),
     pool.query(
@@ -350,6 +373,10 @@ async function getStatementOfAccount(req, res) {
     })),
     ...paymentsResult.rows.map((r) => ({
       id: r.id, date: r.payment_date, type: 'PAYMENT', label: r.receipt_no ? `Payment ${r.receipt_no}` : 'Payment',
+      debit: 0, credit: Number(r.amount_myr),
+    })),
+    ...creditNotesResult.rows.map((r) => ({
+      id: r.id, date: r.cn_date, type: 'CREDIT_NOTE', label: `Credit Note ${r.cn_no}`,
       debit: 0, credit: Number(r.amount_myr),
     })),
   ].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
