@@ -240,7 +240,7 @@ export default function Budget({ user }) {
                 <label style={label}>Expense Code</label>
                 <select style={inputStyle} value={lineForm.expense_code_id} onChange={(e) => setLineForm({ ...lineForm, expense_code_id: e.target.value })} required>
                   <option value="">— Select —</option>
-                  {expenseCodes.map((c) => <option key={c.id} value={c.id}>{c.code} — {c.description}</option>)}
+                  {expenseCodes.filter((c) => (c.type || 'EXPENSE') === 'EXPENSE').map((c) => <option key={c.id} value={c.id}>{c.code} — {c.description}</option>)}
                 </select>
                 {expenseCodes.length === 0 && (
                   <p style={{ fontSize: 12, color: '#5c6070' }}>No expense codes set up yet — add some in Admin &gt; Expense Codes first.</p>
@@ -290,7 +290,7 @@ export default function Budget({ user }) {
             <label style={label}>Expense Code</label>
             <select style={inputStyle} value={expenseEntryForm.expense_code_id} onChange={(e) => setExpenseEntryForm({ ...expenseEntryForm, expense_code_id: e.target.value })} required>
               <option value="">— Select —</option>
-              {expenseCodes.map((c) => <option key={c.id} value={c.id}>{c.code} — {c.description}</option>)}
+              {expenseCodes.filter((c) => (c.type || 'EXPENSE') === 'EXPENSE').map((c) => <option key={c.id} value={c.id}>{c.code} — {c.description}</option>)}
             </select>
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>

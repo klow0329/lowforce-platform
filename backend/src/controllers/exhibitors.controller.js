@@ -7,16 +7,24 @@ const { visibilityClause } = require('../utils/visibility');
 // orders, invoices...) should follow.
 async function listExhibitors(req, res) {
   const search = req.query.search || '';
-  const vis = visibilityClause(req, 'salesperson_id', 3);
+  // Browsing with no search term still respects the normal own+unclaimed
+  // visibility (keeps each rep's list focused/private day to day) — but the
+  // moment there's a search term, every matching exhibitor company-wide is
+  // returned (with its owner's name) so Sales can catch a duplicate before
+  // creating one, instead of a same-name account under another rep being
+  // invisible and silently re-created.
+  const vis = search ? { sql: 'TRUE', param: undefined } : visibilityClause(req, 'e.salesperson_id', 3);
 
   const result = await pool.query(
-    `SELECT id, company_name, country_code, contact1_name, contact1_email, is_active, salesperson_id
-     FROM exhibitors
-     WHERE company_id = $1
-       AND is_active = TRUE
-       AND company_name ILIKE $2
+    `SELECT e.id, e.company_name, e.country_code, e.contact1_name, e.contact1_email, e.is_active, e.salesperson_id,
+            u.full_name AS salesperson_name
+     FROM exhibitors e
+     LEFT JOIN users u ON u.id = e.salesperson_id
+     WHERE e.company_id = $1
+       AND e.is_active = TRUE
+       AND e.company_name ILIKE $2
        AND ${vis.sql}
-     ORDER BY company_name
+     ORDER BY e.company_name
      LIMIT 200`,
     [req.companyId, `%${search}%`, ...(vis.param !== undefined ? [vis.param] : [])]
   );
@@ -33,7 +41,7 @@ const EXHIBITOR_FIELDS = [
   'billing_same_as_company', 'billing_name', 'billing_address',
   'billing_postcode', 'billing_city', 'billing_country_code',
   'billing_reg_no', 'billing_tin_no', 'billing_sst_no', 'billing_contact_no',
-  'billing_email',
+  'billing_email', 'is_repeat_exhibitor',
 ];
 
 function pickExhibitorFields(body) {
@@ -45,9 +53,12 @@ function pickExhibitorFields(body) {
 }
 
 async function getExhibitor(req, res) {
-  const vis = visibilityClause(req, 'salesperson_id', 3);
+  const vis = visibilityClause(req, 'ex.salesperson_id', 3);
   const exhibitorResult = await pool.query(
-    `SELECT * FROM exhibitors WHERE id = $1 AND company_id = $2 AND ${vis.sql}`,
+    `SELECT ex.*, ag.name AS agent_name
+     FROM exhibitors ex
+     LEFT JOIN agents ag ON ag.id = ex.agent_id
+     WHERE ex.id = $1 AND ex.company_id = $2 AND ${vis.sql}`,
     [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
   );
   const exhibitor = exhibitorResult.rows[0];
@@ -184,4 +195,34 @@ async function replaceEventParticipation(exhibitorId, eventIds, userId, companyI
   }
 }
 
-module.exports = { listExhibitors, getExhibitor, createExhibitor, updateExhibitor };
+// Bulk-flags exhibitors as repeat-from-last-year — rows already parsed
+// client-side from the uploaded Excel/CSV (see Admin.jsx, same pattern as
+// importSegments), each just { company_name }. Matched case/whitespace-
+// insensitively against this company's current exhibitors; anyone not
+// matched stays is_repeat_exhibitor = FALSE (the default), and a match can
+// always be corrected by hand afterward on the Exhibitor's own record.
+// Feeds the Agent Commission report's repeat-vs-new rate split.
+async function importRepeatExhibitors(req, res) {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No rows to import.' });
+
+  const names = [...new Set(
+    rows.map((r) => (r.company_name || '').toString().trim().toUpperCase()).filter(Boolean)
+  )];
+  if (names.length === 0) return res.status(400).json({ error: 'No company names found in that file.' });
+
+  const result = await pool.query(
+    `UPDATE exhibitors SET is_repeat_exhibitor = TRUE
+     WHERE company_id = $1 AND UPPER(TRIM(company_name)) = ANY($2::text[])
+     RETURNING company_name`,
+    [req.companyId, names]
+  );
+  const matchedNames = new Set(result.rows.map((r) => r.company_name.trim().toUpperCase()));
+  const unmatched = names.filter((n) => !matchedNames.has(n));
+
+  res.json({
+    success: true, namesInFile: names.length, matched: result.rows.length, unmatched,
+  });
+}
+
+module.exports = { listExhibitors, getExhibitor, createExhibitor, updateExhibitor, importRepeatExhibitors };

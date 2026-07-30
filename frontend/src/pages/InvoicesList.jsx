@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import DataTable from '../components/DataTable';
 
-const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function InvoicesList() {
   const { selectedEventId, loading: eventLoading } = useEventContext();
@@ -17,7 +17,17 @@ export default function InvoicesList() {
     { key: 'exhibitor_name', label: 'Company', default: true },
     { key: 'invoice_date', label: 'Invoice Date', default: true },
     { key: 'status', label: 'Status', default: true, value: (r) => (r.status === 'DRAFT' ? 'Draft' : 'Confirmed') },
-    { key: 'amount_myr', label: 'Amount', default: true, value: (r) => fmtMYR(r.amount_myr) },
+    {
+      key: 'exchange_rate', label: 'Currency Rate', default: true,
+      value: (r) => (r.currency === 'USD' ? Number(r.exchange_rate) : 1),
+      render: (r) => (r.currency === 'USD' ? Number(r.exchange_rate).toFixed(4) : '—'),
+    },
+    {
+      key: 'amount_foreign', label: 'Doc Currency', default: true,
+      value: (r) => Number(r.amount_foreign),
+      render: (r) => `${r.currency} ${Number(r.amount_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    },
+    { key: 'amount_myr', label: 'Local Currency', default: true, value: (r) => fmtMYR(r.amount_myr) },
     {
       key: 'payment_status', label: 'Payment', default: true,
       // Shows the actual amount still owed, not just the word "Outstanding"

@@ -1,3 +1,5 @@
+const { releaseAllClaims } = require('./floorPlanClaims');
+
 // Keeps a floor_plan_booths row in sync with whichever Opportunity/Contract
 // it's picked for — called from inside the SAME transaction as that
 // record's own create/update, so a booth only ever actually locks once the
@@ -51,7 +53,8 @@ async function syncFloorPlanBooth(client, companyId, { linkColumn, linkId, floor
 }
 
 // Releases whichever booth a record holds, with no replacement — used when
-// an Opportunity is marked Lost (see OpportunityDetail.jsx's movingToLost).
+// an Opportunity is marked Lost (see OpportunityDetail.jsx's movingToLost),
+// a Contract is Voided, or a Credit Note releases booths.
 async function releaseFloorPlanBooth(client, companyId, linkColumn, linkId) {
   await client.query(
     `UPDATE floor_plan_booths b
@@ -60,6 +63,12 @@ async function releaseFloorPlanBooth(client, companyId, linkColumn, linkId) {
      WHERE b.hall_id = h.id AND h.company_id = $1 AND b.${linkColumn} = $2`,
     [companyId, linkId]
   );
+  // A booth released here might still be claimed by ANOTHER Opportunity/
+  // draft Contract (competing-claims rule, Round 6 item 4) — re-derive the
+  // primary display claimant from whoever's left instead of leaving it
+  // wrongly blank when someone else is still proposing it.
+  const recordType = linkColumn === 'sales_order_id' ? 'sales_order' : 'opportunity';
+  await releaseAllClaims(client, companyId, recordType, linkId, 'RECORD_RELEASED');
 }
 
 module.exports = { syncFloorPlanBooth, releaseFloorPlanBooth };

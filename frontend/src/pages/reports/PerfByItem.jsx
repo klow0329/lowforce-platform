@@ -33,10 +33,15 @@ export default function PerfByItem() {
     <div>
       <h2 style={{ marginTop: 0 }}>By Item &amp; Type</h2>
 
-      <div style={{ marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
+      <div style={{ marginBottom: 4, display: 'flex', gap: 12, alignItems: 'center' }}>
         <label><input type="radio" checked={isMyr} onChange={() => setMetric('myr')} /> Value (MYR)</label>
         <label><input type="radio" checked={!isMyr} onChange={() => setMetric('sqm')} /> Floor space (sqm)</label>
       </div>
+      <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0, marginBottom: 12 }}>
+        An upgraded booth (Shell Scheme, Enhanced Shell, Walk-On Package, Custom Build) is no longer Bare Space — its
+        sqm is reclassified out of Bare Space and into its own upgrade row, so every row's sqm adds up to the same
+        Total Sqm shown under Overview.
+      </p>
 
       {chartRows.length === 0 ? (
         <p>No contracted line items yet for this event.</p>

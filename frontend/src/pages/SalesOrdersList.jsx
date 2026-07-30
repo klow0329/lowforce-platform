@@ -1,23 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import DataTable from '../components/DataTable';
 import TaskToDoBox from '../components/TaskToDoBox';
+import { toTitleCase } from '../utils/format';
 
-const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const STATUS_LABELS = { DRAFT: 'Draft', PENDING_APPROVAL: 'Pending Approval', APPROVED: 'Approved' };
-const STATUS_TILE_BG = { DRAFT: '#fff', PENDING_APPROVAL: '#FFF3BF', APPROVED: '#eafaf1' };
+const STATUS_LABELS = { DRAFT: 'Draft', PENDING_APPROVAL: 'Pending Approval', APPROVED: 'Approved', VOID: 'Void' };
+const STATUS_TILE_BG = { DRAFT: '#fff', PENDING_APPROVAL: '#FFF3BF', APPROVED: '#eafaf1', VOID: '#FBE3E3' };
 
-const columns = [
-  { key: 'exhibitor_name', label: 'Company', default: true },
-  { key: 'booth_no', label: 'Booth No', default: true, value: (r) => (r.booth_no ? `${r.hall ? `${r.hall} / ` : ''}${r.booth_no}` : '—') },
-  { key: 'contract_date', label: 'Contract Date', default: true },
-  { key: 'status', label: 'Status', default: true, value: (r) => STATUS_LABELS[r.status] || r.status },
-  { key: 'total_myr', label: 'Total', default: true, value: (r) => fmtMYR(r.total_myr) },
-  { key: 'salesperson_name', label: 'Salesperson', default: true },
-];
+// Booth Allocation (picked-vs-total sqm) dropped per the sales team — booths
+// are now fully allocated before an Opportunity can even become a Contract
+// (see task #133/#156), so the tracker never had anything left to warn
+// about by the time a contract exists. Total Sqm/Country/Sales Agent are
+// more useful at this stage.
+function buildColumns(countryNames) {
+  return [
+    { key: 'exhibitor_name', label: 'Company', default: true },
+    { key: 'booth_no', label: 'Booth No', default: true, value: (r) => (r.booth_no ? `${r.hall ? `${r.hall} / ` : ''}${r.booth_no}` : '—') },
+    { key: 'total_sqm', label: 'Total Sqm', default: true, value: (r) => (r.total_sqm ?? '—') },
+    { key: 'contract_date', label: 'Contract Date', default: true },
+    { key: 'status', label: 'Status', default: true, value: (r) => STATUS_LABELS[r.status] || r.status },
+    { key: 'total_myr', label: 'Total', default: true, value: (r) => fmtMYR(r.total_myr) },
+    { key: 'salesperson_name', label: 'Salesperson', default: true },
+    { key: 'agent_name', label: 'Sales Agent', default: false, value: (r) => (r.agent_name || '—') },
+    { key: 'exhibitor_country', label: 'Country', default: false, value: (r) => (countryNames[r.exhibitor_country] || r.exhibitor_country || '—') },
+    {
+      key: 'booth_type_display', label: 'Booth Type', default: true,
+      value: (r) => (toTitleCase(r.booth_type_display) || '—'),
+    },
+  ];
+}
 
 export default function SalesOrdersList() {
   const { selectedEventId, loading: eventLoading } = useEventContext();
@@ -26,12 +41,19 @@ export default function SalesOrdersList() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [tasks, setTasks] = useState(null);
+  const [countryNames, setCountryNames] = useState({});
+
+  useEffect(() => {
+    api.listCountries().then(({ countries }) => setCountryNames(Object.fromEntries(countries.map((c) => [c.code, c.name]))));
+  }, []);
 
   useEffect(() => {
     if (!selectedEventId) return;
     api.listSalesOrders({ event_id: selectedEventId, search }).then(({ salesOrders }) => setSalesOrders(salesOrders));
     api.getTasks(selectedEventId).then(setTasks);
   }, [selectedEventId, search]);
+
+  const cols = useMemo(() => buildColumns(countryNames), [countryNames]);
 
   if (eventLoading) return <p style={{ maxWidth: 800, margin: '40px auto' }}>Loading...</p>;
   if (!selectedEventId) {
@@ -52,13 +74,6 @@ export default function SalesOrdersList() {
 
   return (
     <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <h2>Contracts</h2>
-      </div>
-      <p style={{ fontSize: 13, color: '#5c6070' }}>
-        Contracts are created by transferring a won opportunity — open the opportunity and use "Generate Contract".
-      </p>
-
       {tasks && (
         <TaskToDoBox
           title="Pending Approval"
@@ -70,6 +85,13 @@ export default function SalesOrdersList() {
           emptyText="Nothing waiting on approval."
         />
       )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <h2>Contracts</h2>
+      </div>
+      <p style={{ fontSize: 13, color: '#5c6070' }}>
+        Contracts are created by transferring a won opportunity — open the opportunity and use "Generate Contract".
+      </p>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '16px 0 24px' }}>
         {kpis.map((k) => (
@@ -104,7 +126,7 @@ export default function SalesOrdersList() {
 
       <DataTable
         screenKey="contracts"
-        columns={columns}
+        columns={cols}
         rows={visibleOrders}
         getRowKey={(r) => r.id}
         onRowClick={(r) => navigate(`/sales-orders/${r.id}`)}

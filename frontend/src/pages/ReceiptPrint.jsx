@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
 import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
-const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmt = (n, ccy = 'MYR') => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const line = { display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #eee' };
 
@@ -56,16 +56,16 @@ export default function ReceiptPrint() {
       <div style={{ marginBottom: 8 }}>
         <div style={{ fontSize: 12, color: '#5c6070', paddingBottom: 2 }}>Being payment for:</div>
         {payment.allocations.map((a) => (
-          <div key={a.id} style={line}><span>Invoice No. {a.invoice_no}</span><span>{fmtMYR(a.amount_myr)}</span></div>
+          <div key={a.id} style={line}><span>Invoice No. {a.invoice_no}</span><span>{fmt(a.amount_foreign, payment.currency)}</span></div>
         ))}
-        {payment.unallocated_myr > 0.01 && (
-          <div style={line}><span>Unallocated (on account)</span><span>{fmtMYR(payment.unallocated_myr)}</span></div>
+        {payment.unallocated_foreign > 0.01 && (
+          <div style={line}><span>Unallocated (on account)</span><span>{fmt(payment.unallocated_foreign, payment.currency)}</span></div>
         )}
       </div>
       <div style={line}><span>Payment Method</span><span>{payment.payment_method || '—'}</span></div>
       <div style={line}><span>Bank Reference</span><span>{payment.bank_ref || '—'}</span></div>
       <div style={{ ...line, fontWeight: 700, fontSize: 16, borderBottom: '2px solid #1B3A6B' }}>
-        <span>Amount Received</span><span>{fmtMYR(payment.amount_myr)}</span>
+        <span>Amount Received</span><span>{fmt(payment.amount_foreign, payment.currency)}</span>
       </div>
 
       <p style={{ marginTop: 48, fontSize: 11, color: '#5c6070', fontStyle: 'italic' }}>

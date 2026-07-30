@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const { pool } = require('../config/db');
 const { pdfToPng, extractBoothCandidates } = require('../utils/pdfFloorPlan');
+const { promotePrimaryClaimants, releaseClaim, recomputeCachedBoothFields } = require('../utils/floorPlanClaims');
 
 // The real scanned floor plan (from the hall contractor, usually exported
 // out of Illustrator as a high-res PDF/image) — stored so booths can be
@@ -196,23 +197,47 @@ async function listBooths(req, res) {
   // so a Draft/Pending contract with a picked booth still reads as PROPOSED
   // until it clears approval. The exhibitor name shown is the real company
   // name off whichever record owns the booth, not the old free-text field.
+  // PENDING_RELEASE takes priority over SOLD: a booth a Credit Note has
+  // staged to give up (see credit_notes.released_booth_ids) stays flagged
+  // this way while the CN is still only PENDING_APPROVAL — visibly
+  // different from a normal Sold booth so other reps know it MAY open up
+  // soon, without anyone being able to claim it before Management actually
+  // approves the CN (nothing about the booth's real link changes until then).
   const result = await pool.query(
     `SELECT b.*,
             ex_so.company_name AS sales_order_exhibitor_name,
             ex_opp.company_name AS opportunity_exhibitor_name,
             so.status AS sales_order_status,
             CASE
+              WHEN pending_cn.id IS NOT NULL THEN 'PENDING_RELEASE'
               WHEN b.sales_order_id IS NOT NULL AND so.status = 'APPROVED' THEN 'SOLD'
               WHEN b.sales_order_id IS NOT NULL OR b.opportunity_id IS NOT NULL THEN 'PROPOSED'
               ELSE b.status
             END AS computed_status,
             COALESCE(ex_so.company_name, ex_opp.company_name) AS exhibitor_display_name,
-            COALESCE(so.salesperson_id, opp.salesperson_id) AS assigned_salesperson_id
+            COALESCE(so.salesperson_id, opp.salesperson_id) AS assigned_salesperson_id,
+            COALESCE(ex_so.country_code, ex_opp.country_code) AS booth_country,
+            COALESCE(ag_so.name, ag_opp.name) AS agent_name,
+            -- Which type this specific booth was tagged as on the Floor
+            -- Plan picker (see FloorPlan.jsx's per-booth type dropdown) —
+            -- read off whichever claim is this booth's actual primary link.
+            COALESCE(
+              (SELECT c.allocated_item_code FROM floor_plan_booth_claims c
+               WHERE c.booth_id = b.id AND c.record_type = 'sales_order' AND c.record_id = b.sales_order_id AND c.released_at IS NULL),
+              (SELECT c.allocated_item_code FROM floor_plan_booth_claims c
+               WHERE c.booth_id = b.id AND c.record_type = 'opportunity' AND c.record_id = b.opportunity_id AND c.released_at IS NULL)
+            ) AS allocated_item_code
      FROM floor_plan_booths b
      LEFT JOIN sales_orders so ON so.id = b.sales_order_id
      LEFT JOIN exhibitors ex_so ON ex_so.id = so.exhibitor_id
+     LEFT JOIN agents ag_so ON ag_so.id = ex_so.agent_id
      LEFT JOIN opportunities opp ON opp.id = b.opportunity_id
      LEFT JOIN exhibitors ex_opp ON ex_opp.id = opp.exhibitor_id
+     LEFT JOIN agents ag_opp ON ag_opp.id = ex_opp.agent_id
+     LEFT JOIN credit_notes pending_cn
+       ON pending_cn.sales_order_id = b.sales_order_id
+      AND pending_cn.status = 'PENDING_APPROVAL'
+      AND b.id = ANY(pending_cn.released_booth_ids)
      WHERE b.hall_id = $1
      ORDER BY b.sort_order, b.booth_no`,
     [req.params.id]
@@ -233,21 +258,29 @@ const BOOTH_FIELDS = [
 // contract/opportunity shouldn't silently keep showing a booth number that
 // Operations has since freed up.
 async function cascadeReleaseIfNeeded(client, companyId, boothId, beforeRow, fields) {
-  const releasing = ('opportunity_id' in fields && fields.opportunity_id !== beforeRow.opportunity_id)
-    || ('sales_order_id' in fields && fields.sales_order_id !== beforeRow.sales_order_id);
-  if (!releasing) return;
+  const releasingOpp = 'opportunity_id' in fields && fields.opportunity_id !== beforeRow.opportunity_id;
+  const releasingSo = 'sales_order_id' in fields && fields.sales_order_id !== beforeRow.sales_order_id;
+  if (!releasingOpp && !releasingSo) return;
 
-  if (beforeRow.opportunity_id) {
+  // Release just the claim being cleared here — releaseClaim re-derives the
+  // booth's primary column from whoever's left (competing-claims rule,
+  // Round 6 item 4), so a booth someone ELSE is still proposing correctly
+  // stays PROPOSED under them instead of going blank.
+  if (releasingOpp && beforeRow.opportunity_id) {
     await client.query(`UPDATE opportunities SET hall = NULL, booth_no = NULL, dimension = NULL WHERE id = $1 AND company_id = $2`, [beforeRow.opportunity_id, companyId]);
+    await releaseClaim(client, boothId, 'opportunity', beforeRow.opportunity_id, 'RECORD_RELEASED');
   }
-  if (beforeRow.sales_order_id) {
+  if (releasingSo && beforeRow.sales_order_id) {
     await client.query(`UPDATE sales_orders SET hall = NULL, booth_no = NULL, dimension = NULL WHERE id = $1 AND company_id = $2`, [beforeRow.sales_order_id, companyId]);
+    await releaseClaim(client, boothId, 'sales_order', beforeRow.sales_order_id, 'RECORD_RELEASED');
   }
-  if (!('opportunity_id' in fields)) await client.query(`UPDATE floor_plan_booths SET opportunity_id = NULL WHERE id = $1`, [boothId]);
-  if (!('sales_order_id' in fields)) await client.query(`UPDATE floor_plan_booths SET sales_order_id = NULL WHERE id = $1`, [boothId]);
-  // The fascia name belongs to the assignment, not the booth — a released
-  // booth must not keep showing the previous exhibitor's fascia text.
-  await client.query(`UPDATE floor_plan_booths SET fascia_name = NULL, assigned_exhibitor_name = NULL WHERE id = $1`, [boothId]);
+  // The fascia name belongs to the assignment, not the booth — clear it
+  // only if nobody's left claiming the booth at all (if releaseClaim just
+  // promoted a different remaining claimant, their fascia stays valid).
+  const after = await client.query(`SELECT opportunity_id, sales_order_id FROM floor_plan_booths WHERE id = $1`, [boothId]);
+  if (!after.rows[0]?.opportunity_id && !after.rows[0]?.sales_order_id) {
+    await client.query(`UPDATE floor_plan_booths SET fascia_name = NULL, assigned_exhibitor_name = NULL WHERE id = $1`, [boothId]);
+  }
 }
 
 async function createBooth(req, res) {
@@ -402,6 +435,44 @@ async function updateBooth(req, res) {
   }
 }
 
+// Batch-edit Sqm/Corner/Loading/Fascia/Notes across many booths at once —
+// Operations otherwise has to open the single-booth floating editor per row,
+// which doesn't scale when a whole block needs the same sqm or a shared
+// note. Deliberately a narrow field set (never opportunity_id/sales_order_id
+// or geometry) so this can't be used to mass-reassign/move booths, and never
+// needs the cascade-release logic updateBooth carries for link changes.
+const BULK_EDIT_FIELDS = ['sqm', 'is_corner', 'is_loading', 'fascia_name', 'notes'];
+
+async function bulkUpdateBooths(req, res) {
+  if (!['ADM', 'OPS'].includes(req.roleCode)) {
+    return res.status(403).json({ error: 'Only Operations/Admin can bulk-edit booths.' });
+  }
+
+  const { booth_ids } = req.body;
+  if (!Array.isArray(booth_ids) || booth_ids.length === 0) {
+    return res.status(400).json({ error: 'booth_ids (non-empty array) is required.' });
+  }
+
+  const fields = {};
+  for (const f of BULK_EDIT_FIELDS) {
+    if (f in req.body && req.body[f] !== '') fields[f] = req.body[f];
+  }
+  const columns = Object.keys(fields);
+  if (columns.length === 0) {
+    return res.status(400).json({ error: 'Provide at least one of sqm, is_corner, is_loading, fascia_name, notes to apply.' });
+  }
+
+  const setClause = columns.map((c, i) => `${c} = $${i + 2}`).join(', ');
+  const result = await pool.query(
+    `UPDATE floor_plan_booths b SET ${setClause}
+     FROM floor_plan_halls h
+     WHERE b.hall_id = h.id AND h.company_id = $1 AND b.id = ANY($${columns.length + 2}::uuid[])
+     RETURNING b.id`,
+    [req.companyId, ...columns.map((c) => fields[c]), booth_ids]
+  );
+  res.json({ updated: result.rows.length });
+}
+
 async function deleteBooth(req, res) {
   const client = await pool.connect();
   try {
@@ -437,8 +508,196 @@ async function deleteBooth(req, res) {
   }
 }
 
+// --- Multi-booth support --------------------------------------------------
+// A contract/opportunity can hold more than one physical booth (e.g. a
+// 1000 sqm deal spanning 100+ individual booths), AND — since Round 6 item
+// 4 — a still-unsold ("Proposed") booth can be claimed by more than one
+// Opportunity/draft Contract at once. floor_plan_booth_claims (see
+// floorPlanClaims.js) is the real source of truth for "what does record X
+// currently have picked"; floor_plan_booths.opportunity_id/sales_order_id
+// stay as the single "primary/displayed claimant" column each, re-derived
+// by promotePrimaryClaimants any time a claim changes.
+//
+// recordType is fixed at route-registration time below ('opportunity' or
+// 'sales_order', never user input) — safe to use directly in these queries.
+function listRecordBooths(recordType) {
+  return async function (req, res) {
+    const result = await pool.query(
+      `SELECT b.*, h.name AS hall_name, c.allocated_item_code
+       FROM floor_plan_booth_claims c
+       JOIN floor_plan_booths b ON b.id = c.booth_id
+       JOIN floor_plan_halls h ON h.id = b.hall_id
+       WHERE c.record_type = $1 AND c.record_id = $2 AND c.released_at IS NULL AND h.company_id = $3
+       ORDER BY h.name, b.booth_no`,
+      [recordType, req.params.id, req.companyId]
+    );
+    res.json({ booths: result.rows });
+  };
+}
+
+// Booth mass pickup — replaces the record's ENTIRE claimed booth set in one
+// shot with whatever was staged on the Floor Plan's sqm-capped picker
+// (FloorPlan.jsx's 'cap' pickFor mode). parentTable supplies the total_sqm
+// cap to re-check server-side (the picker already enforces it client-side,
+// but that's just UX — this is the real gate). A booth already claimed by
+// ANOTHER record is only blocked if it's genuinely SOLD (an APPROVED
+// contract owns it) or manually Reserved by Operations — otherwise several
+// Opportunities/draft Contracts may propose it at once; whichever gets its
+// Contract approved first wins it for real (see approveSalesOrder), and
+// every other active claim on it is auto-released with the losing Sales
+// user notified to re-pick.
+function bulkSetRecordBooths(recordType, parentTable, linkColumn) {
+  return async function (req, res) {
+    const ids = Array.isArray(req.body.floor_plan_booth_ids) ? req.body.floor_plan_booth_ids : null;
+    if (!ids) return res.status(400).json({ error: 'floor_plan_booth_ids must be an array.' });
+    // Which booth is Bare Space vs which upgrade tier (see FloorPlan.jsx's
+    // per-booth type tagging in the cap-mode picker) — keyed by booth id,
+    // values are sales_item_codes ('BAS', 'SSS', etc.) or omitted/null for
+    // untagged (treated as Bare Space).
+    const itemCodes = req.body.booth_item_codes && typeof req.body.booth_item_codes === 'object'
+      ? req.body.booth_item_codes : {};
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const parent = await client.query(
+        `SELECT total_sqm FROM ${parentTable} WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+        [req.params.id, req.companyId]
+      );
+      if (!parent.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Record not found.' });
+      }
+      const cap = parent.rows[0].total_sqm === null ? null : Number(parent.rows[0].total_sqm);
+
+      if (ids.length > 0) {
+        const target = await client.query(
+          `SELECT b.id, b.sqm, b.status, so.status AS sales_order_status
+           FROM floor_plan_booths b
+           JOIN floor_plan_halls h ON h.id = b.hall_id
+           LEFT JOIN sales_orders so ON so.id = b.sales_order_id
+           WHERE b.id = ANY($1::uuid[]) AND h.company_id = $2
+           FOR UPDATE OF b`,
+          [ids, req.companyId]
+        );
+        if (target.rows.length !== ids.length) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'One or more selected booths no longer exist.' });
+        }
+        const sold = target.rows.find((b) => b.sales_order_status === 'APPROVED');
+        if (sold) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: 'One or more selected booths have already been sold — please review your selection.' });
+        }
+        const reserved = target.rows.find((b) => b.status === 'RESERVED');
+        if (reserved) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: 'One or more selected booths are Reserved — please review your selection.' });
+        }
+        const totalSqm = target.rows.reduce((sum, b) => sum + (Number(b.sqm) || 0), 0);
+        if (cap !== null && totalSqm > cap) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: `Selected booths total ${totalSqm} sqm, which exceeds the Total Sqm cap of ${cap}.` });
+        }
+      }
+
+      // Release whatever this record claimed that's NOT in the new set, and
+      // re-derive each released booth's primary claimant from whoever's
+      // left (may still be someone else's active claim).
+      const released = await client.query(
+        `UPDATE floor_plan_booth_claims c SET released_at = now(), release_reason = 'USER_DESELECTED'
+         FROM floor_plan_booths b JOIN floor_plan_halls h ON h.id = b.hall_id
+         WHERE c.booth_id = b.id AND h.company_id = $1
+           AND c.record_type = $2 AND c.record_id = $3 AND c.released_at IS NULL
+           AND NOT (c.booth_id = ANY($4::uuid[]))
+         RETURNING c.booth_id`,
+        [req.companyId, recordType, req.params.id, ids]
+      );
+      await promotePrimaryClaimants(client, released.rows.map((r) => r.booth_id));
+
+      if (ids.length > 0) {
+        // ON CONFLICT DO UPDATE (not DO NOTHING) so re-tagging a booth this
+        // record already claimed — without deselecting/reselecting it —
+        // still updates its allocated type.
+        await client.query(
+          `INSERT INTO floor_plan_booth_claims (company_id, booth_id, record_type, record_id, allocated_item_code)
+           SELECT $1, x.id, $2, $3, $5::jsonb ->> x.id::text FROM unnest($4::uuid[]) AS x(id)
+           ON CONFLICT (booth_id, record_type, record_id) WHERE released_at IS NULL
+           DO UPDATE SET allocated_item_code = EXCLUDED.allocated_item_code`,
+          [req.companyId, recordType, req.params.id, ids, JSON.stringify(itemCodes)]
+        );
+        // A booth with no primary claimant yet becomes this record's (the
+        // common case: nobody else was proposing it). If someone else is
+        // already primary, they stay primary — this is now just an
+        // additional competing claim, not a takeover.
+        await client.query(
+          `UPDATE floor_plan_booths SET ${linkColumn} = $1, assigned_exhibitor_name = COALESCE(assigned_exhibitor_name, $2)
+           WHERE id = ANY($3::uuid[]) AND opportunity_id IS NULL AND sales_order_id IS NULL`,
+          [req.params.id, req.body.exhibitor_name || null, ids]
+        );
+        // The user has actively gone back into the picker and committed a
+        // selection — clear the persistent "please allocate ASAP" banner
+        // (see getOpportunity/getSalesOrder's needs_booth_reallocation) even
+        // if the new total doesn't exactly match the old one; picking
+        // nothing new (ids.length === 0) does NOT clear it, since that's
+        // not a real replacement.
+        await client.query(
+          `UPDATE floor_plan_booth_claims SET reallocated_at = now()
+           WHERE record_type = $1 AND record_id = $2 AND release_reason = 'LOST_TO_APPROVAL' AND reallocated_at IS NULL`,
+          [recordType, req.params.id]
+        );
+      }
+
+      // Mirror this record's own claimed set onto its Hall/Booth No/Total
+      // Sqm columns too — not just left for the user's next Save — so
+      // anything that reads them directly (list screens, print docs) is
+      // correct immediately, even if the user navigates away from the Floor
+      // Plan without saving the Opportunity/Contract afterward.
+      const final = await client.query(
+        `SELECT b.*, h.name AS hall_name, c.allocated_item_code
+         FROM floor_plan_booth_claims c
+         JOIN floor_plan_booths b ON b.id = c.booth_id
+         JOIN floor_plan_halls h ON h.id = b.hall_id
+         WHERE c.record_type = $1 AND c.record_id = $2 AND c.released_at IS NULL AND h.company_id = $3
+         ORDER BY h.name, b.booth_no`,
+        [recordType, req.params.id, req.companyId]
+      );
+      await recomputeCachedBoothFields(client, recordType, req.params.id);
+
+      await client.query('COMMIT');
+      res.json({ booths: final.rows });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  };
+}
+
+// Clears the "you lost a booth to another approved contract" Task To-Do
+// item(s) for one record — bulk-acknowledges every one of its unacknowledged
+// LOST_TO_APPROVAL claims at once (there can be several if it lost more than
+// one booth in the same approval), mirroring the acknowledge pattern used
+// for invoice/CN/contract-approval notifications elsewhere.
+function acknowledgeBoothLoss(recordType) {
+  return async function (req, res) {
+    await pool.query(
+      `UPDATE floor_plan_booth_claims c SET acknowledged_by = $1, acknowledged_at = now()
+       FROM floor_plan_booths b JOIN floor_plan_halls h ON h.id = b.hall_id
+       WHERE c.booth_id = b.id AND h.company_id = $2
+         AND c.record_type = $3 AND c.record_id = $4
+         AND c.release_reason = 'LOST_TO_APPROVAL' AND c.acknowledged_at IS NULL`,
+      [req.userId, req.companyId, recordType, req.params.id]
+    );
+    res.json({ success: true });
+  };
+}
+
 module.exports = {
   upload,
   listHalls, createHall, deleteHall, uploadHallImage, getHallImage,
-  listBooths, createBooth, bulkGenerateBooths, autoDetectBooths, updateBooth, deleteBooth,
+  listBooths, createBooth, bulkGenerateBooths, autoDetectBooths, updateBooth, bulkUpdateBooths, deleteBooth,
+  listRecordBooths, bulkSetRecordBooths, acknowledgeBoothLoss,
 };

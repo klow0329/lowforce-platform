@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import Login from './pages/Login';
 import ExhibitorsList from './pages/ExhibitorsList';
+import AgentsList from './pages/AgentsList';
 import ExhibitorDetail from './pages/ExhibitorDetail';
 import OpportunitiesList from './pages/OpportunitiesList';
 import OpportunityDetail from './pages/OpportunityDetail';
@@ -9,12 +10,14 @@ import SalesOrdersList from './pages/SalesOrdersList';
 import SalesOrderDetail from './pages/SalesOrderDetail';
 import ContractPrint from './pages/ContractPrint';
 import ProformaPrint from './pages/ProformaPrint';
+import ProposalPrint from './pages/ProposalPrint';
 import InvoicesList from './pages/InvoicesList';
 import InvoiceDetail from './pages/InvoiceDetail';
 import InvoicePrint from './pages/InvoicePrint';
 import PaymentDetail from './pages/PaymentDetail';
 import ReceiptPrint from './pages/ReceiptPrint';
 import CreditNotePrint from './pages/CreditNotePrint';
+import CreditNoteDetail from './pages/CreditNoteDetail';
 import Reports from './pages/Reports';
 import Dashboard from './pages/Dashboard';
 import ChangePassword from './pages/ChangePassword';
@@ -24,6 +27,7 @@ import FloorPlan from './pages/FloorPlan';
 import Management from './pages/Management';
 import Budget from './pages/Budget';
 import StatementPrint from './pages/StatementPrint';
+import TaxDetailForm from './pages/TaxDetailForm';
 import NavBar from './components/NavBar';
 import ErrorBoundary from './components/ErrorBoundary';
 import { EventProvider } from './context/EventContext';
@@ -34,9 +38,9 @@ import { isViewOnly } from './utils/permissions';
 // different record ids (e.g. new -> the just-created record) — without
 // this, React Router reuses the same component instance and stale state
 // (like the "saving" flag) carries over.
-function ExhibitorDetailRoute() {
+function ExhibitorDetailRoute({ user }) {
   const { id } = useParams();
-  return <ExhibitorDetail key={id || 'new'} />;
+  return <ExhibitorDetail key={id || 'new'} user={user} />;
 }
 
 function OpportunityDetailRoute({ user }) {
@@ -54,9 +58,9 @@ function InvoiceDetailRoute({ user }) {
   return <InvoiceDetail key={id} user={user} />;
 }
 
-function PaymentDetailRoute() {
+function PaymentDetailRoute({ user }) {
   const { id } = useParams();
-  return <PaymentDetail key={id || 'new'} />;
+  return <PaymentDetail key={id || 'new'} user={user} />;
 }
 
 export default function App() {
@@ -73,6 +77,13 @@ export default function App() {
       setAvailableRoles(availableRoles || []);
     }).finally(() => setCheckingSession(false));
   }, []);
+
+  // Reached only via a one-time link sent to an exhibitor who has no
+  // LowForce account — must bypass the login gate entirely, checked before
+  // it (and before the session lookup even matters).
+  if (window.location.pathname.startsWith('/tax-details/')) {
+    return <TaxDetailForm />;
+  }
 
   if (checkingSession) return null;
 
@@ -111,9 +122,10 @@ export default function App() {
           {/* Management's landing page IS the Management Overview — no
               separate screen duplicating the same underlying data. */}
           <Route path="/dashboard" element={['ADM', 'MGT'].includes(user.role_code) ? <Management user={user} /> : <Dashboard />} />
-          <Route path="/exhibitors" element={<ExhibitorsList />} />
-          <Route path="/exhibitors/new" element={<ExhibitorDetailRoute />} />
-          <Route path="/exhibitors/:id" element={<ExhibitorDetailRoute />} />
+          <Route path="/exhibitors" element={<ExhibitorsList user={user} />} />
+          <Route path="/agents" element={<AgentsList user={user} />} />
+          <Route path="/exhibitors/new" element={<ExhibitorDetailRoute user={user} />} />
+          <Route path="/exhibitors/:id" element={<ExhibitorDetailRoute user={user} />} />
           <Route path="/exhibitors/:id/statement" element={<StatementPrint />} />
           <Route path="/opportunities" element={<OpportunitiesList user={user} />} />
           <Route
@@ -121,6 +133,7 @@ export default function App() {
             element={isViewOnly(user) ? <Navigate to="/opportunities" replace /> : <OpportunityDetailRoute user={user} />}
           />
           <Route path="/opportunities/:id" element={<OpportunityDetailRoute user={user} />} />
+          <Route path="/opportunities/:id/proposal" element={<ProposalPrint />} />
           <Route path="/sales-orders" element={<SalesOrdersList />} />
           <Route
             path="/sales-orders/new"
@@ -132,9 +145,10 @@ export default function App() {
           <Route path="/invoices" element={<InvoicesList />} />
           <Route path="/invoices/:id" element={<InvoiceDetailRoute user={user} />} />
           <Route path="/invoices/:id/print" element={<InvoicePrint />} />
-          <Route path="/payments/new" element={<PaymentDetailRoute />} />
-          <Route path="/payments/:id" element={<PaymentDetailRoute />} />
+          <Route path="/payments/new" element={<PaymentDetailRoute user={user} />} />
+          <Route path="/payments/:id" element={<PaymentDetailRoute user={user} />} />
           <Route path="/payments/:id/print" element={<ReceiptPrint />} />
+          <Route path="/credit-notes/:id" element={<CreditNoteDetail user={user} />} />
           <Route path="/credit-notes/:id/print" element={<CreditNotePrint />} />
           <Route path="/reports" element={<Reports user={user} />} />
           <Route path="/reports/:section" element={<Reports user={user} />} />

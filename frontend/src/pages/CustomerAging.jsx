@@ -3,8 +3,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import DataTable from '../components/DataTable';
+import EmailDraftPanel from '../components/EmailDraftPanel';
 
-const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // stopPropagation on both cells — the row itself navigates to the invoice
 // on click, which would otherwise fire every time someone tries to edit
@@ -21,34 +22,48 @@ function EditableDate({ value, onSave }) {
   );
 }
 
-function EditableNote({ value, onSave }) {
-  const [val, setVal] = useState(value || '');
-  return (
-    <input
-      value={val}
-      placeholder="Add note..."
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => setVal(e.target.value)}
-      onBlur={() => { if (val !== (value || '')) onSave(val); }}
-      style={{ fontSize: 12, padding: 3, width: 160 }}
-    />
-  );
-}
-
 // embedded: rendered inside the Reports shell, which already provides the
 // page container — skip the standalone wrapper to avoid double margins.
-export default function CustomerAging({ embedded = false }) {
+export default function CustomerAging({ embedded = false, user }) {
   const { selectedEventId, loading: eventLoading } = useEventContext();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [report, setReport] = useState(null);
   const [bucketFilter, setBucketFilter] = useState('');
+  const [company, setCompany] = useState(null);
+  const [emailPanel, setEmailPanel] = useState(null); // { templateKey, vars } | null
   const exhibitorFilter = searchParams.get('exhibitor') || '';
 
   useEffect(() => {
     if (!selectedEventId) return;
     api.getCustomerAging(selectedEventId).then(setReport);
   }, [selectedEventId]);
+
+  useEffect(() => {
+    api.getCompany().then(({ company }) => setCompany(company));
+  }, []);
+
+  function draftReminder(invoice) {
+    setEmailPanel({
+      templateKey: 'OUTSTANDING_REMINDER',
+      vars: {
+        exhibitor_name: invoice.exhibitor_name, invoice_no: invoice.invoice_no,
+        due_date: invoice.due_date || '', balance_amount: fmtMYR(invoice.balance_due),
+        sender_name: user?.full_name || '', company_name: company?.name || '',
+      },
+    });
+  }
+
+  function draftStatement() {
+    const total = visibleInvoices.reduce((sum, inv) => sum + Number(inv.balance_due || 0), 0);
+    setEmailPanel({
+      templateKey: 'STATEMENT_OF_ACCOUNT',
+      vars: {
+        exhibitor_name: exhibitorFilter, as_of_date: new Date().toLocaleDateString('en-MY', { dateStyle: 'medium' }),
+        balance_amount: fmtMYR(total), sender_name: user?.full_name || '', company_name: company?.name || '',
+      },
+    });
+  }
 
   async function handleUpdateAging(invoiceId, payload) {
     await api.updateInvoice(invoiceId, payload);
@@ -67,8 +82,15 @@ export default function CustomerAging({ embedded = false }) {
 
   const columns = [
     { key: 'exhibitor_name', label: 'Company', default: true },
+    {
+      key: 'billing_name', label: 'Billing Name', default: false,
+      value: (r) => (r.billing_name && r.billing_name !== r.exhibitor_name ? r.billing_name : '—'),
+    },
+    { key: 'salesperson_name', label: 'Salesperson', default: true, value: (r) => r.salesperson_name || '—' },
+    { key: 'agent_name', label: 'Agent', default: false, value: (r) => r.agent_name || '—' },
     { key: 'invoice_no', label: 'Invoice No', default: true },
     { key: 'invoice_date', label: 'Invoice Date', default: true },
+    { key: 'due_date', label: 'Due Date', default: true },
     { key: 'days_overdue', label: 'Days Overdue', default: true },
     { key: 'bucket_label', label: 'Bucket', default: true },
     { key: 'balance_due', label: 'Balance', default: true, value: (r) => fmtMYR(r.balance_due) },
@@ -77,12 +99,29 @@ export default function CustomerAging({ embedded = false }) {
       value: (r) => <EditableDate value={r.expected_payment_date} onSave={(v) => handleUpdateAging(r.id, { expected_payment_date: v })} />,
     },
     {
-      key: 'aging_notes', label: 'Correspondence', default: true,
-      value: (r) => <EditableNote value={r.aging_notes} onSave={(v) => handleUpdateAging(r.id, { aging_notes: v })} />,
+      // Latest correspondence log entry (see CorrespondenceLog.jsx on the
+      // Invoice detail page, where the full history lives and new entries
+      // get added) — clicking this cell falls through to the row click,
+      // same as every other column here, and lands you on that page.
+      key: 'latest_correspondence', label: 'Correspondence', default: true,
+      value: (r) => (r.latest_correspondence || '—'),
+      render: (r) => (r.latest_correspondence ? (
+        <span title={new Date(r.latest_correspondence_at).toLocaleString('en-MY', { dateStyle: 'medium', timeStyle: 'short' })}>
+          {r.latest_correspondence}
+        </span>
+      ) : <span style={{ color: '#5c6070' }}>—</span>),
     },
     {
       key: 'aging_updated_at', label: 'Last Updated', default: true,
       value: (r) => (r.aging_updated_at ? new Date(r.aging_updated_at).toLocaleString('en-MY', { dateStyle: 'medium', timeStyle: 'short' }) : '—'),
+    },
+    {
+      key: '_actions', label: '', default: true,
+      render: (r) => (
+        <button type="button" onClick={(e) => { e.stopPropagation(); draftReminder(r); }} style={{ fontSize: 12 }}>
+          Draft Reminder
+        </button>
+      ),
     },
   ];
 
@@ -99,8 +138,12 @@ export default function CustomerAging({ embedded = false }) {
       {exhibitorFilter && (
         <p style={{ fontSize: 13 }}>
           Filtered to <strong>{exhibitorFilter}</strong>{' '}
-          <button type="button" onClick={() => setSearchParams({})} style={{ fontSize: 12 }}>Clear</button>
+          <button type="button" onClick={() => setSearchParams({})} style={{ fontSize: 12 }}>Clear</button>{' '}
+          <button type="button" onClick={draftStatement} style={{ fontSize: 12 }}>Draft Statement Email</button>
         </p>
+      )}
+      {emailPanel && (
+        <EmailDraftPanel templateKey={emailPanel.templateKey} vars={emailPanel.vars} onClose={() => setEmailPanel(null)} />
       )}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '16px 0 24px' }}>

@@ -56,11 +56,11 @@ async function checkDiscount(client, companyId, salesOrderId, discountType, disc
   return false;
 }
 
-async function checkPostApprovalEdit(client, companyId, salesOrderId, wasApproved, actorUserId) {
+async function checkPostApprovalEdit(client, companyId, salesOrderId, wasApproved, actorUserId, customNotes) {
   if (!wasApproved) return false;
   const rules = await getActiveRules(client, companyId, 'POST_APPROVAL_EDIT');
   if (rules.length === 0) return false;
-  await flagForApproval(client, companyId, salesOrderId, 'POST_APPROVAL_EDIT', actorUserId, 'Contract edited after approval.');
+  await flagForApproval(client, companyId, salesOrderId, 'POST_APPROVAL_EDIT', actorUserId, customNotes || 'Contract edited after approval.');
   return true;
 }
 

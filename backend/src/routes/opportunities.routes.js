@@ -17,6 +17,7 @@ const {
   updateItem,
   deleteItem,
 } = require('../controllers/opportunityItems.controller');
+const { listRecordBooths, bulkSetRecordBooths, acknowledgeBoothLoss } = require('../controllers/floorPlan.controller');
 
 router.use(attachTenant); // every route below this line requires login + gets req.companyId
 router.use(requireEventAccess); // and can't touch an event the user hasn't been granted
@@ -31,5 +32,13 @@ router.get('/:id/items', asyncHandler(listItems));
 router.post('/:id/items', blockManagementWrites, asyncHandler(addItem));
 router.put('/:id/items/:itemId', blockManagementWrites, asyncHandler(updateItem));
 router.delete('/:id/items/:itemId', blockManagementWrites, asyncHandler(deleteItem));
+
+// Multi-booth support — see floorPlan.controller.js's listRecordBooths/
+// bulkSetRecordBooths. GET lists the current set (feeds the live Hall/Booth
+// No display and pre-selects the Floor Plan's sqm-capped picker); PUT
+// replaces the entire set in one shot, straight from that picker's "OK".
+router.get('/:id/booths', asyncHandler(listRecordBooths('opportunity')));
+router.put('/:id/booths', blockManagementWrites, asyncHandler(bulkSetRecordBooths('opportunity', 'opportunities', 'opportunity_id')));
+router.post('/:id/acknowledge-booth-loss', asyncHandler(acknowledgeBoothLoss('opportunity')));
 
 module.exports = router;

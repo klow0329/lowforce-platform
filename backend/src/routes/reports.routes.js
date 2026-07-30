@@ -24,5 +24,6 @@ router.get('/performance/by-country', asyncHandler(performance.getByCountry));
 router.get('/performance/by-month', asyncHandler(performance.getByMonth));
 router.get('/performance/targets', asyncHandler(performance.getTargets));
 router.put('/performance/targets', asyncHandler(performance.saveTargets));
+router.get('/performance/agent-commission', asyncHandler(performance.getAgentCommission));
 
 module.exports = router;

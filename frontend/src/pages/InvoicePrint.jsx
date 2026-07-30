@@ -30,9 +30,12 @@ export default function InvoicePrint() {
 
   if (!invoice || !company) return <p style={{ maxWidth: 800, margin: '40px auto' }}>Loading...</p>;
 
-  const same = invoice.billing_same_as_company;
+  const billToType = invoice.bill_to_type || 'BILLING';
+  const same = billToType === 'EXHIBITOR' || invoice.billing_same_as_company;
   const billTo = {
-    name: same ? invoice.company_name : (invoice.billing_name || invoice.company_name),
+    name: billToType === 'AGENT' ? (invoice.agent_name || invoice.company_name)
+      : billToType === 'EXHIBITOR' ? invoice.company_name
+      : (invoice.billing_name || invoice.company_name),
     regNo: same ? invoice.reg_no : invoice.billing_reg_no,
     address: invoice.billing_address || '—',
     postcodeCity: [same ? invoice.postcode : invoice.billing_postcode, same ? invoice.city : invoice.billing_city]
@@ -75,7 +78,7 @@ export default function InvoicePrint() {
     : [{
         taxCode: '—', taxRate: 0,
         description: invoice.booth_type
-          ? `Exhibition Booth Space — ${invoice.booth_type}${invoice.booth_sqm ? ` (${invoice.booth_sqm} sqm)` : ''}`
+          ? `Exhibition Booth Space — ${invoice.booth_type}${invoice.total_sqm ? ` (${invoice.total_sqm} sqm)` : ''}`
           : `Exhibition Booth Space — ${invoice.event_name}`,
         qty: 1, unit: 'EA', unitPrice: invoice.amount_foreign, disc: 0,
         preTax: Number(invoice.amount_foreign), tax: 0,
@@ -108,7 +111,18 @@ export default function InvoicePrint() {
         </div>
       </div>
 
-      <div id="pdf-doc" style={{ fontSize: 13 }}>
+      <div id="pdf-doc" style={{ fontSize: 13, position: 'relative' }}>
+        {invoice.status === 'DRAFT' && (
+          <div
+            style={{
+              position: 'absolute', top: '40%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)',
+              fontSize: 96, fontWeight: 800, color: 'rgba(200,60,60,0.18)', letterSpacing: 8,
+              pointerEvents: 'none', zIndex: 1, whiteSpace: 'nowrap',
+            }}
+          >
+            DRAFT
+          </div>
+        )}
         <LetterheadBand company={company} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
           <div>
@@ -152,7 +166,6 @@ export default function InvoicePrint() {
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '2px solid #1B3A6B', fontSize: 12 }}>
               <th style={{ width: 28 }}>#</th>
-              <th>Tax Code</th>
               <th>Description</th>
               <th style={{ textAlign: 'right' }}>Qty</th>
               <th>Unit</th>
@@ -165,7 +178,6 @@ export default function InvoicePrint() {
             {lines.map((l, i) => (
               <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
                 <td>{i + 1}.</td>
-                <td>{l.taxCode}</td>
                 <td>{l.description}</td>
                 <td style={{ textAlign: 'right' }}>{Number(l.qty)}</td>
                 <td>{l.unit}</td>

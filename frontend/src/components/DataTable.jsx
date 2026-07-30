@@ -142,7 +142,7 @@ function FilterPopover({ values, selected, setSelected, onClose }) {
   );
 }
 
-export default function DataTable({ screenKey, columns, rows, getRowKey, onRowClick, exportFilename, exportSheetName }) {
+export default function DataTable({ screenKey, columns, rows, getRowKey, onRowClick, getRowStyle, exportFilename, exportSheetName }) {
   const defaultKeys = useMemo(() => columns.filter((c) => c.default !== false).map((c) => c.key), [columns]);
   const [visibleKeys, setVisibleKeys] = useState(defaultKeys);
   const [views, setViews] = useState([]);
@@ -150,6 +150,8 @@ export default function DataTable({ screenKey, columns, rows, getRowKey, onRowCl
   const [sort, setSort] = useState(null); // { key, dir: 1 | -1 }
   const [filters, setFilters] = useState({}); // { [key]: Set(values) }
   const [openFilterKey, setOpenFilterKey] = useState(null);
+  const [draggedKey, setDraggedKey] = useState(null);
+  const [dragOverKey, setDragOverKey] = useState(null);
 
   function reloadViews() {
     api.listTableViews(screenKey).then(({ views }) => {
@@ -202,6 +204,21 @@ export default function DataTable({ screenKey, columns, rows, getRowKey, onRowCl
     return [...set].sort();
   }
 
+  // Drag a header left/right to reorder columns — reorders visibleKeys in
+  // place, the same array Save View/Save as Default already persist, so no
+  // separate storage is needed for the new ordering.
+  function handleColumnDrop(targetKey) {
+    setDragOverKey(null);
+    if (!draggedKey || draggedKey === targetKey) { setDraggedKey(null); return; }
+    setVisibleKeys((keys) => {
+      const next = keys.filter((k) => k !== draggedKey);
+      const targetIndex = next.indexOf(targetKey);
+      next.splice(targetIndex, 0, draggedKey);
+      return next;
+    });
+    setDraggedKey(null);
+  }
+
   function handleExport() {
     const data = filteredRows.map((row) => {
       const obj = {};
@@ -233,7 +250,21 @@ export default function DataTable({ screenKey, columns, rows, getRowKey, onRowCl
         <thead>
           <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
             {visibleColumns.map((col) => (
-              <th key={col.key} style={{ position: 'relative', whiteSpace: 'nowrap' }}>
+              <th
+                key={col.key}
+                draggable
+                onDragStart={() => setDraggedKey(col.key)}
+                onDragOver={(e) => { e.preventDefault(); if (dragOverKey !== col.key) setDragOverKey(col.key); }}
+                onDragLeave={() => setDragOverKey((k) => (k === col.key ? null : k))}
+                onDrop={(e) => { e.preventDefault(); handleColumnDrop(col.key); }}
+                onDragEnd={() => { setDraggedKey(null); setDragOverKey(null); }}
+                title="Drag to reorder columns"
+                style={{
+                  position: 'relative', whiteSpace: 'nowrap', cursor: 'grab',
+                  opacity: draggedKey === col.key ? 0.4 : 1,
+                  borderLeft: dragOverKey === col.key && draggedKey && draggedKey !== col.key ? '2px solid #F47920' : '2px solid transparent',
+                }}
+              >
                 <span style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(col.key)}>
                   {col.label}
                   {sort?.key === col.key ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
@@ -268,7 +299,7 @@ export default function DataTable({ screenKey, columns, rows, getRowKey, onRowCl
             <tr
               key={getRowKey(row)}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
-              style={{ borderBottom: '1px solid #eee', cursor: onRowClick ? 'pointer' : 'default' }}
+              style={{ borderBottom: '1px solid #eee', cursor: onRowClick ? 'pointer' : 'default', ...(getRowStyle ? getRowStyle(row) : null) }}
             >
               {visibleColumns.map((col) => (
                 <td key={col.key} data-label={col.label}>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useEventContext } from '../context/EventContext';
+import { confirmDiscardIfDirty } from '../utils/unsavedChanges';
 
 // Navy top bar with the ExpoCO logo — palette per checkpoint doc Section 6.
 const linkStyle = ({ isActive }) => ({
@@ -13,6 +14,12 @@ const linkStyle = ({ isActive }) => ({
 export default function NavBar({ user, onLogout, availableRoles = [], onSwitchRole }) {
   const { events, selectedEventId, setSelectedEventId, loading } = useEventContext();
   const navRef = useRef(null);
+
+  // Every top-nav link is a "go to another screen" action — the exact case
+  // the user asked to be warned about when leaving an Opportunity/Contract
+  // with unsaved edits. Blocks the click (not just warns after the fact)
+  // when the page currently mounted has reported unsaved changes.
+  const guardNav = (e) => { if (!confirmDiscardIfDirty()) e.preventDefault(); };
 
   // The bar is frozen at the top ("freeze pane"); its measured height is
   // published as --nav-height so page sub-menus can stick directly beneath
@@ -46,16 +53,17 @@ export default function NavBar({ user, onLogout, availableRoles = [], onSwitchRo
             alt="ExpoCO"
             style={{ height: 34, marginRight: 20, background: '#fff', borderRadius: 6, padding: '2px 6px' }}
           />
-          <NavLink to="/dashboard" style={linkStyle}>Dashboard</NavLink>
-          <NavLink to="/exhibitors" style={linkStyle}>Exhibitors</NavLink>
-          <NavLink to="/opportunities" style={linkStyle}>Opportunities</NavLink>
-          <NavLink to="/sales-orders" style={linkStyle}>Contracts</NavLink>
-          <NavLink to="/invoices" style={linkStyle}>Invoices</NavLink>
-          <NavLink to="/reports" style={linkStyle}>Reports</NavLink>
-          <NavLink to="/price-list" style={linkStyle}>Price List</NavLink>
-          <NavLink to="/floor-plan" style={linkStyle}>Floor Plan</NavLink>
-          {['ADM', 'MGT', 'FIN'].includes(user.role_code) && <NavLink to="/budget" style={linkStyle}>Budget</NavLink>}
-          {user.role_code === 'ADM' && <NavLink to="/admin" style={linkStyle}>Admin</NavLink>}
+          <NavLink to="/dashboard" style={linkStyle} onClick={guardNav}>Dashboard</NavLink>
+          <NavLink to="/exhibitors" style={linkStyle} onClick={guardNav}>Exhibitors</NavLink>
+          <NavLink to="/agents" style={linkStyle} onClick={guardNav}>Agents</NavLink>
+          <NavLink to="/opportunities" style={linkStyle} onClick={guardNav}>Opportunities</NavLink>
+          <NavLink to="/sales-orders" style={linkStyle} onClick={guardNav}>Contracts</NavLink>
+          <NavLink to="/invoices" style={linkStyle} onClick={guardNav}>Invoices</NavLink>
+          <NavLink to="/reports" style={linkStyle} onClick={guardNav}>Reports</NavLink>
+          <NavLink to="/price-list" style={linkStyle} onClick={guardNav}>Price List</NavLink>
+          <NavLink to="/floor-plan" style={linkStyle} onClick={guardNav}>Floor Plan</NavLink>
+          {['ADM', 'MGT', 'FIN'].includes(user.role_code) && <NavLink to="/budget" style={linkStyle} onClick={guardNav}>Budget</NavLink>}
+          {user.role_code === 'ADM' && <NavLink to="/admin" style={linkStyle} onClick={guardNav}>Admin</NavLink>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {!loading && events.length > 0 && (
@@ -76,10 +84,10 @@ export default function NavBar({ user, onLogout, availableRoles = [], onSwitchRo
               ))}
             </select>
           )}
-          <NavLink to="/change-password" title="Change password" style={{ fontSize: 13, color: '#fff' }}>
+          <NavLink to="/change-password" title="Change password" style={{ fontSize: 13, color: '#fff' }} onClick={guardNav}>
             {user.full_name}
           </NavLink>
-          <button onClick={onLogout}>Log out</button>
+          <button onClick={() => { if (confirmDiscardIfDirty()) onLogout(); }}>Log out</button>
         </div>
       </div>
     </div>

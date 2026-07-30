@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadPdf } from '../utils/pdf';
+import { fitBoothName, BOOTH_NUMBER_FS } from '../utils/boothLabelFit';
 
+// Fully opaque — see FloorPlan.jsx's STATUS_COLORS comment: any transparency
+// here lets the hall background image's own printed booth number (common on
+// a scanned/converted floor plan PDF) show faintly through ours, "ghosting"
+// worse the higher you zoom in.
 const STATUS_COLORS = {
-  AVAILABLE: 'rgba(214, 235, 219, 0.95)',
-  RESERVED: 'rgba(211, 214, 242, 0.95)',
-  PROPOSED: 'rgba(247, 228, 187, 0.95)',
-  SOLD: 'rgba(243, 209, 209, 0.95)',
+  AVAILABLE: 'rgb(214, 235, 219)',
+  RESERVED: 'rgb(211, 214, 242)',
+  PROPOSED: 'rgb(247, 228, 187)',
+  SOLD: 'rgb(243, 209, 209)',
 };
 const STATUS_BORDER = { AVAILABLE: '#1E7B34', RESERVED: '#4a4fb0', PROPOSED: '#8a6d1a', SOLD: '#c83c3c' };
 const COLORS = ['#e03131', '#1971c2', '#2f9e44', '#f08c00', '#000000'];
@@ -37,7 +42,7 @@ const safe = (n, fallback) => (Number.isFinite(n) ? n : fallback);
 // never touches floor_plan_booths — so exiting always leaves the real
 // floor plan exactly as it was; the only way anything survives past the
 // session is the operator explicitly clicking "Save as PDF".
-export default function FloorPlanPresentation({ hallName, imageUrl, booths, onClose }) {
+export default function FloorPlanPresentation({ hallName, imageUrl, booths, onClose, onPrevHall, onNextHall }) {
   const containerRef = useRef(null);
   const imgRef = useRef(null);
   const svgRef = useRef(null);
@@ -67,6 +72,15 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
+  }, [imageUrl]);
+
+  // Annotations are per-hall — without this, switching hall via Prev/Next
+  // would leave the old hall's strokes/text drawn over the new image.
+  useEffect(() => {
+    setStrokes([]);
+    setTexts([]);
+    setActiveTextId(null);
+    setCurrentStroke(null);
   }, [imageUrl]);
 
   async function toggleFullscreen() {
@@ -220,9 +234,41 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
   async function handleSavePdf() {
     setActiveTextId(null); // no editing caret/outline in the exported file
     setSaving(true);
+    const priorZoom = zoom;
     try {
-      await downloadPdf('floor-plan-presentation-capture', `${hallName}-presentation-${new Date().toISOString().slice(0, 10)}`, 'landscape');
+      // Capture at zoom=100% regardless of what the user was viewing at —
+      // the capture target itself carries the zoom transform (see below),
+      // so exporting mid-zoom would otherwise scale the raster oddly and
+      // vary the export size run to run. Wait a tick for the reflow to
+      // actually paint before html2canvas reads the DOM.
+      if (priorZoom !== 1) {
+        setZoom(1);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+      // Hi-res + a page sized to match the map's own aspect ratio (not a
+      // fixed A1 rectangle, which left the map stranded in a corner with
+      // empty margin whenever the hall's own proportions didn't match A1)
+      // so the exported floor plan fills the sheet and can be zoomed into
+      // for audit purposes without the booth labels turning to mush.
+      // longEdge (not a precomputed format) lets downloadPdf size the page
+      // from the actual captured raster's own aspect ratio — measuring
+      // offsetWidth/offsetHeight here ahead of time was timing-sensitive
+      // (could read 0 before layout/paint caught up) and silently fell back
+      // to a generic near-square page shape unrelated to the real content,
+      // which is what was leaving the map stranded in a corner.
+      // A0 at scale 4 only rasterized at ~89 DPI — a PDF viewer's "zoom in"
+      // just magnifies whatever pixels are actually embedded, so a huge
+      // physical page with a modest pixel count is what was making zoomed-in
+      // text/labels look soft, not the mm page size itself. A1's long edge
+      // with a much higher scale roughly triples the embedded pixel count
+      // (and lands at ~250 DPI, sharp for physical printing too) without an
+      // unreasonably large canvas — see FloorPlan.jsx's matching export.
+      await downloadPdf(
+        'floor-plan-presentation-capture', `${hallName}-presentation-${new Date().toISOString().slice(0, 10)}`, 'landscape',
+        { scale: 8, longEdge: 841, margin: 0 }
+      );
     } finally {
+      if (priorZoom !== 1) setZoom(priorZoom);
       setSaving(false);
     }
   }
@@ -247,7 +293,9 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
         display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px',
         background: '#1B3A6B', color: '#fff', flexWrap: 'wrap', rowGap: 6,
       }}>
+        {onPrevHall && <button type="button" onClick={onPrevHall} title="Previous hall">‹ Prev Hall</button>}
         <strong style={{ marginRight: 8 }}>{hallName} — Presentation Mode</strong>
+        {onNextHall && <button type="button" onClick={onNextHall} title="Next hall">Next Hall ›</button>}
 
         <span style={{ display: 'inline-flex', gap: 4 }}>
           {TOOLS.map((t) => (
@@ -303,7 +351,6 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
       </div>
 
       <div
-        id="floor-plan-presentation-capture"
         ref={scrollRef}
         onPointerDown={handlePanDown}
         onPointerMove={handlePanMove}
@@ -311,8 +358,39 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
         onPointerLeave={handlePanUp}
         style={{ flex: 1, position: 'relative', overflow: 'auto', background: '#f5f6fa', cursor: tool === 'hand' ? (panRef.current ? 'grabbing' : 'grab') : 'default' }}
       >
-        <div style={{ position: 'relative', minWidth: '100%', minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ position: 'relative', transform: `scale(${zoom})` }}>
+        <div style={{ position: 'relative', minWidth: '100%', minHeight: '100%', display: 'flex' }}>
+          {/* Sized to the POST-zoom pixel dimensions, not just wrapped in
+              transform: scale — a scroll container computes its own
+              scrollable range from real layout size, and a transformed
+              child with no explicit size of its own left the browser
+              guessing (see FloorPlan.jsx's matching comment). Without
+              transformOrigin: '0 0' on the capture div below, the default
+              center-origin scale also grew the content up/left as well as
+              down/right — but scrolling can never reach negative
+              coordinates, so anything that grew past the original box's
+              top/left edge was permanently unreachable. Both together are
+              what was leaving the top and left of a zoomed-in map
+              inaccessible while the bottom/right panned fine.
+              Centering via margin: auto (below), not the flex parent's
+              alignItems/justifyContent: center — flexbox centering an item
+              that outgrows its container (which happens as soon as zoom
+              pushes the spacer past the viewport) splits the overflow
+              evenly on both sides, and the leading/top-left half of that
+              split lands in the same unreachable negative-scroll territory
+              as above, while the trailing/right half renders past where
+              the visible map content actually ends — which is what was
+              making booths on the right (and bottom) appear to float
+              disconnected from the image once zoomed past 100%. margin:
+              auto on the child centers it only while it's smaller than the
+              container and falls back to normal, fully-reachable scrolling
+              the moment it's bigger — the same reason this is the standard
+              fix for "centered flex item with overflow". */}
+          <div style={{ margin: 'auto', width: imgSize.w ? imgSize.w * zoom : undefined, height: imgSize.h ? imgSize.h * zoom : undefined }}>
+          {/* This inner div — not the outer scrollable viewport — is what
+              gets captured for PDF export, so the raster is tightly cropped
+              to the actual map content instead of the whole (much larger,
+              mostly empty) scroll container. */}
+          <div id="floor-plan-presentation-capture" style={{ position: 'relative', transform: `scale(${zoom})`, transformOrigin: '0 0' }}>
             <img
               ref={imgRef}
               src={imageUrl}
@@ -325,9 +403,8 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
               const name = (b.opportunity_id || b.sales_order_id) ? (b.fascia_name || b.exhibitor_display_name || '') : '';
               const boxW = safe((Number(b.width_pct) / 100) * imgSize.w, 40);
               const boxH = safe((Number(b.height_pct) / 100) * imgSize.h, boxW);
-              const numLen = Math.max(2, String(b.booth_no || '').length);
-              const numFs = Math.max(4, Math.min(10, safe((boxW - 4) / (0.62 * numLen), 9), safe(boxH * (name ? 0.4 : 0.6), 9)));
-              const nameFs = Math.max(3.5, Math.min(numFs * 0.72, safe((boxW - 4) / (0.55 * Math.max(4, Math.min(name.length, 10))), 6)));
+              const numFs = BOOTH_NUMBER_FS;
+              const nameFs = safe(fitBoothName(name, boxW, Math.max(0, boxH - numFs * 1.15 - 2)), 6);
               return (
                 <div
                   key={b.id}
@@ -342,7 +419,7 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
                   }}
                 >
                   <div style={{ fontWeight: 700, fontSize: numFs }}>{b.booth_no}</div>
-                  {name && <div style={{ fontSize: nameFs }}>{name.slice(0, 10)}</div>}
+                  {name && <div style={{ fontSize: nameFs, whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'break-word', maxWidth: '100%' }}>{name}</div>}
                 </div>
               );
             })}
@@ -408,6 +485,7 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
                 </div>
               ))}
             </div>
+          </div>
           </div>
         </div>
       </div>

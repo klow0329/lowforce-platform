@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import * as XLSX from 'xlsx';
 import { api } from '../api/client';
 import DataTable from '../components/DataTable';
 
@@ -17,13 +18,13 @@ const emptyRuleForm = { id: null, trigger_type: 'DISCOUNT_ABOVE_THRESHOLD', thre
 // contract is just one flavour of POST_APPROVAL_EDIT, which already covers
 // it, so having both was redundant. Both are kept in TRIGGER_LABELS (not
 // this list) so any old rows still display correctly.
-const SELECTABLE_TRIGGERS = ['DISCOUNT_ABOVE_THRESHOLD', 'REVENUE_ABOVE_THRESHOLD', 'POST_APPROVAL_EDIT', 'CREDIT_NOTE_ISSUED', 'BUDGET_APPROVAL'];
+const SELECTABLE_TRIGGERS = ['DISCOUNT_ABOVE_THRESHOLD', 'REVENUE_ABOVE_THRESHOLD', 'POST_APPROVAL_EDIT', 'CREDIT_NOTE_ISSUED', 'CONTRACT_REDUCTION', 'BUDGET_APPROVAL'];
 const emptyProfileForm = {
   reg_no: '', tin_no: '', sst_no: '', address: '', phone: '', email: '',
   bank_name: '', bank_account_no: '', bank_swift: '', payment_instructions: '',
-  budget_preparer_user_id: '', budget_approver_user_id: '',
+  budget_preparer_user_id: '', budget_approver_user_id: '', lod_pct_of_bas: '', contract_terms: '',
 };
-const emptyExpenseCodeForm = { id: null, code: '', description: '' };
+const emptyExpenseCodeForm = { id: null, code: '', description: '', type: 'EXPENSE' };
 
 const TRIGGER_LABELS = {
   NEW_CONTRACT: 'New contract submitted',
@@ -32,6 +33,7 @@ const TRIGGER_LABELS = {
   REVENUE_ABOVE_THRESHOLD: 'Contract total value above threshold',
   POST_APPROVAL_EDIT: 'Contract edited after approval',
   CREDIT_NOTE_ISSUED: 'Credit note above threshold',
+  CONTRACT_REDUCTION: 'Contract value reduction above threshold',
   BUDGET_APPROVAL: 'Budget preparer & approver',
 };
 
@@ -41,9 +43,10 @@ const TRIGGER_LABELS = {
 // of active rules rather than just explanatory text.
 const TRIGGER_HELP = {
   DISCOUNT_ABOVE_THRESHOLD: "Fires when any contract line's discount exceeds the % or flat amount below, on a new or existing contract.",
-  REVENUE_ABOVE_THRESHOLD: "Fires when a contract's total (in MYR) crosses the amount below. Add several of these to build a tiered matrix — e.g. RM100,000 to a Finance Manager, RM1,000,000 to a CFO — LowForce uses whichever threshold is the highest one the contract still clears (not every tier at once). Below every threshold, or with none configured, any Admin/Management can approve; Admin always can, regardless of tier.",
+  REVENUE_ABOVE_THRESHOLD: "Fires when a contract's total (in MYR) crosses the amount below. Add several of these to build a tiered matrix — e.g. RM100,000 to a Finance Manager, RM1,000,000 to a CFO — LowForce uses whichever threshold is the highest one the contract still clears (not every tier at once). To set who approves by DEFAULT (any contract below your lowest real tier, or if you're not using tiers at all), add one rule with a threshold of 0 — it becomes the base approver for everything else. With no rule configured at all, any Admin/Management can approve; Admin always can, regardless of tier.",
   POST_APPROVAL_EDIT: 'Fires on any change (price, tax code, item, discount) to a contract that was already approved — including a tax code change, which is just one kind of this. No threshold; any edit qualifies.',
-  CREDIT_NOTE_ISSUED: "Fires when a credit note issued against an invoice/contract exceeds the amount below. Not yet an active document type in LowForce — configure now, takes effect automatically once that feature ships.",
+  CREDIT_NOTE_ISSUED: "Fires when a credit note issued against an invoice/contract exceeds the amount below.",
+  CONTRACT_REDUCTION: "Fires when a Reduce Contract request's reduction amount (in MYR) exceeds the amount below — covers the whole request, including any Credit Note(s) it auto-generates against already-invoiced amounts, as one combined approval.",
   BUDGET_APPROVAL: 'A separate approval chain for the Budget module — a fixed named person to prepare, a fixed named person to approve, rather than a role or threshold. Admin can also always prepare or approve as a fallback.',
 };
 
@@ -54,12 +57,33 @@ const TABS = [
   { key: 'company-profile', label: 'Company Profile' },
   { key: 'tax-codes', label: 'Tax Codes' },
   { key: 'expense-codes', label: 'Expense Codes' },
+  { key: 'segments', label: 'Segments' },
   { key: 'approval-rules', label: 'Approval Rules' },
   { key: 'audit-log', label: 'Audit Log' },
+  { key: 'archived-records', label: 'Archived Records' },
+  { key: 'email-templates', label: 'Email Templates' },
 ];
+
+const EMAIL_TEMPLATE_LABELS = {
+  TAX_DETAIL_LINK: 'Tax Detail Link',
+  STATEMENT_OF_ACCOUNT: 'Statement of Account',
+  OUTSTANDING_REMINDER: 'Outstanding Payment Reminder',
+};
+const EMAIL_TEMPLATE_KEYS = Object.keys(EMAIL_TEMPLATE_LABELS);
 
 const AUDIT_ACTIONS = ['LOGIN', 'FAILED_LOGIN', 'LOGOUT', 'POST', 'PUT', 'PATCH', 'DELETE'];
 const emptyAuditFilters = { from: '', to: '', user_id: '', entity_type: '', action: '' };
+
+// Matches archive.controller.js's ENTITIES keys — path is where Restore
+// links back to so an Admin can jump straight to the record afterward.
+const ARCHIVE_TYPES = [
+  { key: 'exhibitor', label: 'Exhibitors', path: '/exhibitors' },
+  { key: 'opportunity', label: 'Opportunities', path: '/opportunities' },
+  { key: 'contract', label: 'Contracts', path: '/sales-orders' },
+  { key: 'invoice', label: 'Invoices', path: '/invoices' },
+  { key: 'creditnote', label: 'Credit Notes', path: '/credit-notes' },
+  { key: 'payment', label: 'Payments', path: '/payments' },
+];
 
 export default function Admin({ user }) {
   const [activeTab, setActiveTab] = useState('users');
@@ -88,6 +112,15 @@ export default function Admin({ user }) {
   const [expenseCodes, setExpenseCodes] = useState([]);
   const [expenseCodeForm, setExpenseCodeForm] = useState(emptyExpenseCodeForm);
   const [showExpenseCodeForm, setShowExpenseCodeForm] = useState(false);
+  const [segments, setSegments] = useState(null);
+  const [segMainForm, setSegMainForm] = useState({ id: '', code: '', name: '' });
+  const [showSegMainForm, setShowSegMainForm] = useState(false);
+  const [segSubForm, setSegSubForm] = useState({ id: '', segment_main_id: '', code: '', name: '' });
+  const [showSegSubForm, setShowSegSubForm] = useState(false);
+  const [segImporting, setSegImporting] = useState(false);
+  const [segImportResult, setSegImportResult] = useState(null);
+  const [repeatImporting, setRepeatImporting] = useState(false);
+  const [repeatImportResult, setRepeatImportResult] = useState(null);
 
   const [auditFilters, setAuditFilters] = useState(emptyAuditFilters);
   const [auditEntries, setAuditEntries] = useState(null);
@@ -101,6 +134,187 @@ export default function Admin({ user }) {
       .then(({ entries, entityTypes }) => { setAuditEntries(entries); setAuditEntityTypes(entityTypes); })
       .catch((err) => setError(err.message))
       .finally(() => setAuditLoading(false));
+  }
+
+  const [archiveType, setArchiveType] = useState('exhibitor');
+  const [archivedRecords, setArchivedRecords] = useState(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+
+  function loadArchived(type) {
+    setArchiveLoading(true);
+    api.listArchivedRecords(type)
+      .then(({ records }) => setArchivedRecords(records))
+      .catch((err) => setError(err.message))
+      .finally(() => setArchiveLoading(false));
+  }
+
+  async function handleRestore(type, id) {
+    if (!window.confirm('Restore this record? It reappears everywhere immediately.')) return;
+    try {
+      await api.restoreRecord(type, id);
+      loadArchived(type);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function loadSegments() {
+    api.listSegments()
+      .then(({ segments }) => setSegments(segments))
+      .catch((err) => setError(err.message));
+  }
+
+  async function handleSaveSegMain(e) {
+    e.preventDefault();
+    try {
+      if (segMainForm.id) {
+        await api.updateSegmentMain(segMainForm.id, { code: segMainForm.code, name: segMainForm.name });
+      } else {
+        await api.createSegmentMain({ code: segMainForm.code, name: segMainForm.name });
+      }
+      setSegMainForm({ id: '', code: '', name: '' });
+      setShowSegMainForm(false);
+      loadSegments();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDeleteSegMain(m) {
+    if (!window.confirm(`Delete segment "${m.name}"? This also removes any Sub-Segments under it.`)) return;
+    try {
+      await api.deleteSegmentMain(m.id);
+      loadSegments();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleSaveSegSub(e) {
+    e.preventDefault();
+    try {
+      if (segSubForm.id) {
+        await api.updateSegmentSub(segSubForm.id, { code: segSubForm.code, name: segSubForm.name });
+      } else {
+        await api.createSegmentSub({
+          segment_main_id: segSubForm.segment_main_id, code: segSubForm.code, name: segSubForm.name,
+        });
+      }
+      setSegSubForm({ id: '', segment_main_id: '', code: '', name: '' });
+      setShowSegSubForm(false);
+      loadSegments();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDeleteSegSub(s) {
+    if (!window.confirm(`Delete sub-segment "${s.name}"?`)) return;
+    try {
+      await api.deleteSegmentSub(s.id);
+      loadSegments();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function handleDownloadSegmentTemplate() {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['Main Code', 'Main Name', 'Sub Code', 'Sub Name'],
+      ['ASSOC', 'ASSOCIATION', 'ASSOC-TRADE', 'TRADE ASSOCIATION'],
+      ['ASSOC', 'ASSOCIATION', 'ASSOC-PROF', 'PROFESSIONAL BODY'],
+      ['GOVT', 'GOVERNMENT', '', ''],
+    ]);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Segments');
+    XLSX.writeFile(book, 'segment_template.xlsx');
+  }
+
+  async function handleUploadSegmentFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSegImporting(true);
+    setSegImportResult(null);
+    try {
+      const data = await file.arrayBuffer();
+      const book = XLSX.read(data, { type: 'array' });
+      const sheet = book.Sheets[book.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const rows = json.map((r) => ({
+        main_code: r['Main Code'] ?? r['main_code'] ?? '',
+        main_name: r['Main Name'] ?? r['main_name'] ?? '',
+        sub_code: r['Sub Code'] ?? r['sub_code'] ?? '',
+        sub_name: r['Sub Name'] ?? r['sub_name'] ?? '',
+      }));
+      const result = await api.importSegments(rows);
+      setSegImportResult(result);
+      loadSegments();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSegImporting(false);
+      e.target.value = '';
+    }
+  }
+
+  function handleDownloadRepeatTemplate() {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['Company Name'],
+      ['ACME EXHIBITIONS SDN BHD'],
+    ]);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Repeat Exhibitors');
+    XLSX.writeFile(book, 'repeat_exhibitor_template.xlsx');
+  }
+
+  async function handleUploadRepeatFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRepeatImporting(true);
+    setRepeatImportResult(null);
+    try {
+      const data = await file.arrayBuffer();
+      const book = XLSX.read(data, { type: 'array' });
+      const sheet = book.Sheets[book.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const rows = json.map((r) => ({
+        company_name: r['Company Name'] ?? r['company_name'] ?? '',
+      }));
+      const result = await api.importRepeatExhibitors(rows);
+      setRepeatImportResult(result);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRepeatImporting(false);
+      e.target.value = '';
+    }
+  }
+
+  // Wording used when drafting the Tax Detail Link / Statement of Account /
+  // Outstanding Reminder emails (see EmailDraftPanel.jsx) — company-
+  // configurable per the standing "nothing hardcoded" rule, editable here
+  // by Admin/Management only.
+  const [emailTemplateDrafts, setEmailTemplateDrafts] = useState({});
+  const [savingTemplateKey, setSavingTemplateKey] = useState('');
+
+  function loadEmailTemplates() {
+    api.listEmailTemplates()
+      .then(({ templates }) => {
+        const byKey = Object.fromEntries(templates.map((t) => [t.template_key, { subject: t.subject, body: t.body }]));
+        setEmailTemplateDrafts(byKey);
+      })
+      .catch((err) => setError(err.message));
+  }
+
+  async function handleSaveEmailTemplate(key) {
+    setSavingTemplateKey(key);
+    try {
+      await api.updateEmailTemplate(key, emailTemplateDrafts[key]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingTemplateKey('');
+    }
   }
 
   function loadAll() {
@@ -120,6 +334,8 @@ export default function Admin({ user }) {
         bank_swift: settings.bank_swift || '', payment_instructions: settings.payment_instructions || '',
         budget_preparer_user_id: settings.budget_preparer_user_id || '',
         budget_approver_user_id: settings.budget_approver_user_id || '',
+        lod_pct_of_bas: settings.lod_pct_of_bas ?? 15,
+        contract_terms: settings.contract_terms || '',
       });
       setBranding({ logo: settings.has_logo, letterhead: settings.has_letterhead, footer: settings.has_footer });
     });
@@ -138,6 +354,21 @@ export default function Admin({ user }) {
     if (activeTab === 'audit-log' && auditEntries === null) loadAuditLog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'email-templates' && Object.keys(emailTemplateDrafts).length === 0) loadEmailTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'segments' && segments === null) loadSegments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'archived-records') loadArchived(archiveType);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, archiveType]);
 
   // --- Tax codes & exchange rate --------------------------------------------
 
@@ -180,7 +411,7 @@ export default function Admin({ user }) {
     try {
       const { id, ...payload } = expenseCodeForm;
       if (id) {
-        await api.updateExpenseCode(id, { description: payload.description });
+        await api.updateExpenseCode(id, { description: payload.description, type: payload.type });
       } else {
         await api.createExpenseCode(payload);
       }
@@ -766,6 +997,34 @@ export default function Admin({ user }) {
           <label style={label}>Payment Instructions (any extra notes printed under bank details)</label>
           <textarea style={{ ...inputStyle, minHeight: 56 }} value={profileForm.payment_instructions} onChange={(e) => setProfileForm({ ...profileForm, payment_instructions: e.target.value })} />
 
+          <h4 style={{ marginBottom: 4, marginTop: 24 }}>Contract Terms &amp; Conditions</h4>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Printed as its own page at the end of every Contract. Leave blank to omit it entirely — nothing is
+            hardcoded, each company sets its own wording here.
+          </p>
+          <textarea
+            style={{ ...inputStyle, minHeight: 200, fontFamily: 'monospace', fontSize: 12 }}
+            value={profileForm.contract_terms}
+            onChange={(e) => setProfileForm({ ...profileForm, contract_terms: e.target.value })}
+          />
+
+          <h4 style={{ marginBottom: 4, marginTop: 24 }}>Billing Rates</h4>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Company-specific rates used to auto-price certain billing items — each company can set its own.
+          </p>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Loading (LOD) is now normally set on the Price List's own "LOD" item — open it under{' '}
+            <strong>Price List</strong> and set Pricing to "% of Bare Space rate". Once that's configured there, it
+            takes over and the fallback % below is ignored. Leave the field below only if you haven't set up the
+            Price List's LOD item yet.
+          </p>
+          <label style={label}>Loading (LOD) fallback — % of Bare Space rate</label>
+          <input
+            type="number" step="0.01" min="0" style={{ ...inputStyle, maxWidth: 160 }}
+            value={profileForm.lod_pct_of_bas}
+            onChange={(e) => setProfileForm({ ...profileForm, lod_pct_of_bas: e.target.value })}
+          />
+
           <button type="submit" disabled={savingProfile} style={{ marginTop: 12 }}>{savingProfile ? 'Saving...' : 'Save Profile'}</button>
         </form>
       </div>
@@ -835,6 +1094,11 @@ export default function Admin({ user }) {
             <input style={inputStyle} value={expenseCodeForm.code} onChange={(e) => setExpenseCodeForm({ ...expenseCodeForm, code: e.target.value })} required disabled={!!expenseCodeForm.id} />
             <label style={label}>Description</label>
             <input style={inputStyle} value={expenseCodeForm.description} onChange={(e) => setExpenseCodeForm({ ...expenseCodeForm, description: e.target.value })} required />
+            <label style={label}>Type</label>
+            <select style={inputStyle} value={expenseCodeForm.type} onChange={(e) => setExpenseCodeForm({ ...expenseCodeForm, type: e.target.value })}>
+              <option value="EXPENSE">Expense</option>
+              <option value="REVENUE">Revenue</option>
+            </select>
             <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>{expenseCodeForm.id ? 'Save Changes' : 'Add Expense Code'}</button>
           </form>
         )}
@@ -842,7 +1106,7 @@ export default function Admin({ user }) {
         <table width="100%" cellPadding="6">
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              <th>Code</th><th>Description</th><th>Status</th><th></th>
+              <th>Code</th><th>Description</th><th>Type</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -850,16 +1114,170 @@ export default function Admin({ user }) {
               <tr key={ec.id} style={{ borderBottom: '1px solid #eee', opacity: ec.is_active ? 1 : 0.5 }}>
                 <td>{ec.code}</td>
                 <td>{ec.description}</td>
+                <td>{ec.type === 'REVENUE' ? 'Revenue' : 'Expense'}</td>
                 <td>{ec.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button onClick={() => { setExpenseCodeForm({ id: ec.id, code: ec.code, description: ec.description }); setShowExpenseCodeForm(true); }}>Edit</button>{' '}
+                  <button onClick={() => { setExpenseCodeForm({ id: ec.id, code: ec.code, description: ec.description, type: ec.type || 'EXPENSE' }); setShowExpenseCodeForm(true); }}>Edit</button>{' '}
                   <button onClick={() => handleToggleExpenseCodeActive(ec)}>{ec.is_active ? 'Deactivate' : 'Activate'}</button>
                 </td>
               </tr>
             ))}
-            {expenseCodes.length === 0 && <tr><td colSpan={4} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
+            {expenseCodes.length === 0 && <tr><td colSpan={5} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
           </tbody>
         </table>
+      </div>
+      )}
+
+      {activeTab === 'segments' && (
+      <div style={section}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3>Segments</h3>
+          <div>
+            <button type="button" onClick={handleDownloadSegmentTemplate} style={{ marginRight: 8 }}>Download Template</button>
+            <label style={{ padding: '8px 16px', border: '1px solid #ccc', borderRadius: 6, cursor: 'pointer', display: 'inline-block' }}>
+              {segImporting ? 'Uploading...' : 'Upload Template'}
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadSegmentFile} disabled={segImporting} style={{ display: 'none' }} />
+            </label>
+          </div>
+        </div>
+        <p style={{ fontSize: 13, color: '#5c6070' }}>
+          The Segment / Sub-Segment field on an Exhibitor's record — company-configurable, not a fixed list.
+          Download the template, fill in a row per Main/Sub pairing (leave Sub Code/Name blank for a Main-only
+          segment), then upload it here to bulk-add or update. Uploading is safe to re-run — matching codes are
+          updated in place, nothing is duplicated.
+        </p>
+        {segImportResult && (
+          <p style={{ fontSize: 13, color: '#2a7a2a' }}>
+            Import complete: {segImportResult.mainsCreated} main segment(s) and {segImportResult.subsCreated} sub-segment(s)
+            created, {segImportResult.rowsProcessed} row(s) processed.
+          </p>
+        )}
+
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 16 }}>
+          <div style={{ flex: '1 1 320px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h4 style={{ margin: 0 }}>Main Segments</h4>
+              <button type="button" onClick={() => { setSegMainForm({ id: '', code: '', name: '' }); setShowSegMainForm(!showSegMainForm); }}>
+                {showSegMainForm ? 'Cancel' : '+ Add'}
+              </button>
+            </div>
+            {showSegMainForm && (
+              <form onSubmit={handleSaveSegMain} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, margin: '12px 0' }}>
+                <label style={label}>Code</label>
+                <input style={inputStyle} value={segMainForm.code} onChange={(e) => setSegMainForm({ ...segMainForm, code: e.target.value })} required />
+                <label style={label}>Name</label>
+                <input style={inputStyle} value={segMainForm.name} onChange={(e) => setSegMainForm({ ...segMainForm, name: e.target.value })} required />
+                <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>{segMainForm.id ? 'Save Changes' : 'Add'}</button>
+              </form>
+            )}
+            {segments === null ? (
+              <p>Loading...</p>
+            ) : (
+              <table width="100%" cellPadding="6">
+                <thead>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                    <th>Code</th><th>Name</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {segments.map((m) => (
+                    <tr key={m.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td>{m.code}</td>
+                      <td>{m.name}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => { setSegMainForm({ id: m.id, code: m.code, name: m.name }); setShowSegMainForm(true); }}>Edit</button>{' '}
+                        <button onClick={() => handleDeleteSegMain(m)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {segments.length === 0 && <tr><td colSpan={3} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div style={{ flex: '1 1 320px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h4 style={{ margin: 0 }}>Sub-Segments</h4>
+              <button
+                type="button"
+                disabled={!segments || segments.length === 0}
+                onClick={() => { setSegSubForm({ id: '', segment_main_id: segments?.[0]?.id || '', code: '', name: '' }); setShowSegSubForm(!showSegSubForm); }}
+              >
+                {showSegSubForm ? 'Cancel' : '+ Add'}
+              </button>
+            </div>
+            {showSegSubForm && (
+              <form onSubmit={handleSaveSegSub} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, margin: '12px 0' }}>
+                <label style={label}>Main Segment</label>
+                <select
+                  style={inputStyle} value={segSubForm.segment_main_id}
+                  onChange={(e) => setSegSubForm({ ...segSubForm, segment_main_id: e.target.value })}
+                  disabled={!!segSubForm.id} required
+                >
+                  {(segments || []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                <label style={label}>Code</label>
+                <input style={inputStyle} value={segSubForm.code} onChange={(e) => setSegSubForm({ ...segSubForm, code: e.target.value })} required />
+                <label style={label}>Name</label>
+                <input style={inputStyle} value={segSubForm.name} onChange={(e) => setSegSubForm({ ...segSubForm, name: e.target.value })} required />
+                <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>{segSubForm.id ? 'Save Changes' : 'Add'}</button>
+              </form>
+            )}
+            {segments !== null && (
+              <table width="100%" cellPadding="6">
+                <thead>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                    <th>Main</th><th>Code</th><th>Name</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {segments.flatMap((m) => m.subSegments.map((s) => (
+                    <tr key={s.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td>{m.name}</td>
+                      <td>{s.code}</td>
+                      <td>{s.name}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => { setSegSubForm({ id: s.id, segment_main_id: m.id, code: s.code, name: s.name }); setShowSegSubForm(true); }}>Edit</button>{' '}
+                        <button onClick={() => handleDeleteSegSub(s)}>Delete</button>
+                      </td>
+                    </tr>
+                  )))}
+                  {segments.every((m) => m.subSegments.length === 0) && (
+                    <tr><td colSpan={4} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 32, borderTop: '1px solid #eee', paddingTop: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3>Repeat Exhibitor Import</h3>
+            <div>
+              <button type="button" onClick={handleDownloadRepeatTemplate} style={{ marginRight: 8 }}>Download Template</button>
+              <label style={{ padding: '8px 16px', border: '1px solid #ccc', borderRadius: 6, cursor: 'pointer', display: 'inline-block' }}>
+                {repeatImporting ? 'Uploading...' : 'Upload Template'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadRepeatFile} disabled={repeatImporting} style={{ display: 'none' }} />
+              </label>
+            </div>
+          </div>
+          <p style={{ fontSize: 13, color: '#5c6070' }}>
+            Feeds the Agent Commission report's repeat-vs-new rate split (Reports &gt; Agent Commission). Download the
+            template, list last year's exhibiting companies (one per row), then upload it here — any current
+            exhibitor whose company name matches gets flagged "Repeat Exhibitor" automatically. Safe to re-run.
+            A missed match (e.g. a renamed company) can be corrected by hand on that Exhibitor's own record.
+          </p>
+          {repeatImportResult && (
+            <p style={{ fontSize: 13, color: '#2a7a2a' }}>
+              Import complete: {repeatImportResult.matched} of {repeatImportResult.namesInFile} name(s) matched and flagged repeat.
+              {repeatImportResult.unmatched.length > 0 && (
+                <> Not matched: {repeatImportResult.unmatched.join(', ')}.</>
+              )}
+            </p>
+          )}
+        </div>
       </div>
       )}
 
@@ -932,7 +1350,7 @@ export default function Admin({ user }) {
                     </div>
                   </div>
                 )}
-                {(ruleForm.trigger_type === 'REVENUE_ABOVE_THRESHOLD' || ruleForm.trigger_type === 'CREDIT_NOTE_ISSUED') && (
+                {(ruleForm.trigger_type === 'REVENUE_ABOVE_THRESHOLD' || ruleForm.trigger_type === 'CREDIT_NOTE_ISSUED' || ruleForm.trigger_type === 'CONTRACT_REDUCTION') && (
                   <div>
                     <label style={label}>Threshold Value (RM)</label>
                     <input type="number" step="0.01" min="0" style={inputStyle} value={ruleForm.threshold_value} onChange={(e) => setRuleForm({ ...ruleForm, threshold_value: e.target.value })} required />
@@ -976,7 +1394,12 @@ export default function Admin({ user }) {
             {rules.map((r) => (
               <tr key={r.id} style={{ borderBottom: '1px solid #eee', opacity: r.is_active ? 1 : 0.5 }}>
                 <td>{TRIGGER_LABELS[r.trigger_type] || r.trigger_type}</td>
-                <td>{r.threshold_value !== null ? `${Number(r.threshold_value).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${r.threshold_type === 'PERCENT' ? '%' : ''}` : '—'}</td>
+                <td>
+                  {r.threshold_value !== null ? `${Number(r.threshold_value).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${r.threshold_type === 'PERCENT' ? '%' : ''}` : '—'}
+                  {r.trigger_type === 'REVENUE_ABOVE_THRESHOLD' && Number(r.threshold_value) === 0 && (
+                    <span style={{ fontSize: 11, color: '#5c6070' }}> (default approver)</span>
+                  )}
+                </td>
                 <td>{r.approver_user_name || r.approver_role_code || '—'}</td>
                 <td>{r.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -1088,6 +1511,104 @@ export default function Admin({ user }) {
           <p style={{ fontSize: 12, color: '#a15c00' }}>
             Showing the most recent 2,000 matching entries — narrow the date range for older activity.
           </p>
+        )}
+      </div>
+      )}
+
+      {activeTab === 'archived-records' && (
+      <div style={section}>
+        <h3>Archived Records</h3>
+        <p style={{ fontSize: 13, color: '#5c6070' }}>
+          Records deleted by an Admin (Exhibitors, Opportunities, Contracts, Invoices, Credit Notes, Payments) land
+          here instead of being destroyed — nothing is gone for good. Restore brings one back everywhere it was
+          hidden from.
+        </p>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+          {ARCHIVE_TYPES.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setArchiveType(t.key)}
+              style={{ fontWeight: archiveType === t.key ? 700 : 400, background: archiveType === t.key ? '#E3F2FD' : undefined }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {archiveLoading || archivedRecords === null ? (
+          <p>Loading...</p>
+        ) : archivedRecords.length === 0 ? (
+          <p style={{ fontSize: 13, color: '#5c6070' }}>Nothing deleted here.</p>
+        ) : (
+          <DataTable
+            screenKey={`admin-archived-${archiveType}`}
+            columns={[
+              { key: '_label', label: 'Record', render: (r) => (
+                <a
+                  href={`${ARCHIVE_TYPES.find((t) => t.key === archiveType).path}/${r.id}`}
+                  onClick={(e) => e.preventDefault()}
+                  style={{ color: 'inherit', textDecoration: 'none' }}
+                  title="Restore it first to reopen this record"
+                >
+                  {r._label}
+                </a>
+              ) },
+              { key: 'deleted_by_name', label: 'Deleted By', render: (r) => r.deleted_by_name || '—' },
+              { key: 'deleted_at', label: 'Deleted At', value: (r) => (r.deleted_at ? new Date(r.deleted_at).toLocaleString('en-MY') : '—') },
+              { key: 'delete_reason', label: 'Reason', render: (r) => r.delete_reason || '—' },
+              {
+                key: 'restore', label: '', render: (r) => (
+                  <button type="button" onClick={() => handleRestore(archiveType, r.id)}>Restore</button>
+                ),
+              },
+            ]}
+            rows={archivedRecords}
+            getRowKey={(r) => r.id}
+            exportFilename={`archived-${archiveType}`}
+            exportSheetName="Archived"
+          />
+        )}
+      </div>
+      )}
+
+      {activeTab === 'email-templates' && (
+      <div style={section}>
+        <h3>Email Templates</h3>
+        <p style={{ fontSize: 13, color: '#5c6070' }}>
+          Wording used when drafting the Tax Detail Link, Statement of Account and Outstanding Payment Reminder
+          emails (see the Draft Email panel on each of those screens). Placeholders like <code>{'{{exhibitor_name}}'}</code>{' '}
+          are filled in automatically when a draft is composed — leave any you don't need out of your wording, or
+          leave one in if a screen doesn't happen to supply it and it'll show as plain text.
+        </p>
+        {Object.keys(emailTemplateDrafts).length === 0 ? (
+          <p>Loading...</p>
+        ) : (
+          EMAIL_TEMPLATE_KEYS.map((key) => {
+            const draft = emailTemplateDrafts[key] || { subject: '', body: '' };
+            return (
+              <div key={key} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+                <h4 style={{ marginTop: 0 }}>{EMAIL_TEMPLATE_LABELS[key]}</h4>
+                <label style={label}>Subject</label>
+                <input
+                  style={inputStyle} value={draft.subject}
+                  onChange={(e) => setEmailTemplateDrafts((d) => ({ ...d, [key]: { ...d[key], subject: e.target.value } }))}
+                />
+                <label style={label}>Body</label>
+                <textarea
+                  style={{ ...inputStyle, minHeight: 140 }} value={draft.body}
+                  onChange={(e) => setEmailTemplateDrafts((d) => ({ ...d, [key]: { ...d[key], body: e.target.value } }))}
+                />
+                <button
+                  type="button" disabled={savingTemplateKey === key} onClick={() => handleSaveEmailTemplate(key)}
+                  style={{ marginTop: 8 }}
+                >
+                  {savingTemplateKey === key ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
       )}

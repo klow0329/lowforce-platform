@@ -26,9 +26,13 @@ const {
 const {
   listApprovalLog,
   submitForApproval,
+  withdrawApproval,
   approveSalesOrder,
   rejectSalesOrder,
+  voidSalesOrder,
+  acknowledgeApproval,
 } = require('../controllers/approvals.controller');
+const { listRecordBooths, bulkSetRecordBooths, acknowledgeBoothLoss } = require('../controllers/floorPlan.controller');
 
 router.use(attachTenant);
 router.use(requireEventAccess);
@@ -53,7 +57,18 @@ router.delete('/:id/attachments/:attachmentId', blockManagementWrites, asyncHand
 // rejectSalesOrder already require isElevated, which still includes MGT).
 router.get('/:id/approval-log', asyncHandler(listApprovalLog));
 router.post('/:id/submit-for-approval', asyncHandler(submitForApproval));
+router.post('/:id/withdraw-approval', asyncHandler(withdrawApproval));
 router.post('/:id/approve', asyncHandler(approveSalesOrder));
 router.post('/:id/reject', asyncHandler(rejectSalesOrder));
+router.post('/:id/void', blockManagementWrites, asyncHandler(voidSalesOrder));
+router.post('/:id/acknowledge', asyncHandler(acknowledgeApproval));
+
+// Multi-booth support — see floorPlan.controller.js's listRecordBooths/
+// bulkSetRecordBooths. GET lists the current set (feeds the live Hall/Booth
+// No display and pre-selects the Floor Plan's sqm-capped picker); PUT
+// replaces the entire set in one shot, straight from that picker's "OK".
+router.get('/:id/booths', asyncHandler(listRecordBooths('sales_order')));
+router.put('/:id/booths', blockManagementWrites, asyncHandler(bulkSetRecordBooths('sales_order', 'sales_orders', 'sales_order_id')));
+router.post('/:id/acknowledge-booth-loss', asyncHandler(acknowledgeBoothLoss('sales_order')));
 
 module.exports = router;

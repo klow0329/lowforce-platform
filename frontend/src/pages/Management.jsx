@@ -25,6 +25,20 @@ function daysSince(dateStr) {
   return diff <= 0 ? 'Today' : `${diff}d ago`;
 }
 
+// Real elapsed-time granularity (minutes/hours/days) — daysSince alone
+// always read as "Today" or a whole day count, which looked wrong for
+// something submitted moments ago.
+function timeAgo(dateStr) {
+  if (!dateStr) return '—';
+  const diffMs = new Date() - new Date(dateStr);
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
 // Management's own landing screen — high-level KPIs (same underlying data
 // as the Sales Dashboard, just decision-oriented rather than a personal
 // to-do list) with the contract Approvals Queue front and center, since
@@ -51,12 +65,22 @@ export default function Management({ user }) {
 
   useEffect(loadAll, [selectedEventId]);
 
-  async function handleApprove(id) {
-    if (!window.confirm('Approve this contract? It becomes Sold on the Floor Plan and can proceed to invoicing.')) return;
-    setBusyId(id);
+  // Approvals Queue combines every request type an Admin/Management user
+  // might need to act on — a plain contract approval, a Credit Note, or a
+  // Contract Reduction — each backed by its own table/status, but shown as
+  // one list so nothing gets missed by only checking the "sales order"
+  // shaped ones. type-specific API calls are picked by p.type below.
+  async function handleApprove(p) {
+    const msg = p.type === 'cn' ? 'Approve this credit note?'
+      : p.type === 'reduction' ? "Approve this contract reduction? This updates the contract's items/total and releases any staged booths immediately."
+      : 'Approve this contract? It becomes Sold on the Floor Plan and can proceed to invoicing.';
+    if (!window.confirm(msg)) return;
+    setBusyId(p.id);
     setError('');
     try {
-      await api.approveSalesOrder(id);
+      if (p.type === 'cn') await api.approveCreditNote(p.id);
+      else if (p.type === 'reduction') await api.approveContractReduction(p.id);
+      else await api.approveSalesOrder(p.id);
       loadAll();
     } catch (err) {
       setError(err.message);
@@ -65,12 +89,15 @@ export default function Management({ user }) {
     }
   }
 
-  async function handleReject(id) {
-    if (!window.confirm('Reject this contract? It goes back to Draft for the salesperson to revise.')) return;
-    setBusyId(id);
+  async function handleReject(p) {
+    const notes = window.prompt(p.type === 'contract' ? 'Reason for rejecting (sent back to Draft):' : 'Reason for rejecting:');
+    if (notes === null) return;
+    setBusyId(p.id);
     setError('');
     try {
-      await api.rejectSalesOrder(id);
+      if (p.type === 'cn') await api.rejectCreditNote(p.id, { notes });
+      else if (p.type === 'reduction') await api.rejectContractReduction(p.id, { notes });
+      else await api.rejectSalesOrder(p.id, { notes });
       loadAll();
     } catch (err) {
       setError(err.message);
@@ -84,10 +111,73 @@ export default function Management({ user }) {
     return <p style={{ maxWidth: 1000, margin: '40px auto' }}>No events set up yet — create one in Admin first.</p>;
   }
 
-  const pendingApprovals = tasks?.pendingApprovals || [];
+  // Everything actually waiting on an Admin/Management decision, from all
+  // three tables that can be PENDING_APPROVAL — a plain contract carries
+  // its own request as sales_orders.status, but a Credit Note or Contract
+  // Reduction stays on an APPROVED contract while its own separate request
+  // is pending (see contractReductions.controller.js), so those never
+  // showed up here relying on sales_orders.status alone.
+  const pendingApprovals = [
+    ...(tasks?.pendingApprovals || []).map((p) => ({ ...p, type: 'contract' })),
+    ...(tasks?.pendingCnApprovals || []).map((p) => ({ ...p, type: 'cn' })),
+    ...(tasks?.pendingReductionApprovals || []).map((p) => ({ ...p, type: 'reduction' })),
+  ];
+
+  function approvalWhat(p) {
+    if (p.type === 'cn') return `Credit note — RM${Number(p.amount_myr).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
+    if (p.type === 'reduction') {
+      const cn = Number(p.cn_amount_myr) || 0;
+      return `Contract reduction — ${p.currency} ${Number(p.old_total_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })} → ${Number(p.new_total_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`
+        + (cn > 0.01 ? ` (+ RM${cn.toLocaleString('en-MY', { minimumFractionDigits: 2 })} credit note)` : '');
+    }
+    return p.submit_reason || 'New contract submitted for approval';
+  }
+
+  function approvalValue(p) {
+    if (p.type === 'cn') return `RM ${Number(p.amount_myr || 0).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
+    if (p.type === 'reduction') return `${p.currency} ${Number(p.new_total_foreign || 0).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
+    return `${p.currency} ${Number(p.total_myr || 0).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`;
+  }
+
+  function approvalHref(p) {
+    if (p.type === 'cn') return `/credit-notes/${p.id}`;
+    if (p.type === 'reduction') return `/sales-orders/${p.sales_order_id}`;
+    return `/sales-orders/${p.id}`;
+  }
 
   return (
     <div className="page" style={{ maxWidth: 1000, margin: '40px auto' }}>
+      <div id="approvals-queue" style={section}>
+        <h3 style={{ marginTop: 0 }}>Approvals Queue</h3>
+        {pendingApprovals.length === 0 ? (
+          <p style={{ fontSize: 13, color: '#5c6070' }}>Nothing pending approval right now.</p>
+        ) : (
+          <table width="100%" cellPadding="6">
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                <th>Exhibitor</th><th>Salesperson</th><th>What</th><th>Value</th><th>Submitted</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendingApprovals.map((p) => (
+                <tr key={`${p.type}-${p.id}`} style={{ borderBottom: '1px solid #eee' }}>
+                  <td>{p.exhibitor_name}</td>
+                  <td>{p.salesperson_name || '—'}</td>
+                  <td style={{ fontSize: 12, color: '#5c6070' }}>{approvalWhat(p)}</td>
+                  <td>{approvalValue(p)}</td>
+                  <td>{timeAgo(p.submitted_at || p.contract_date || p.created_at)}</td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button onClick={() => navigate(approvalHref(p))}>View</button>{' '}
+                    <button onClick={() => handleApprove(p)} disabled={busyId === p.id}>Approve</button>{' '}
+                    <button onClick={() => handleReject(p)} disabled={busyId === p.id}>Reject</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
       <h2>Management Overview</h2>
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
@@ -125,36 +215,6 @@ export default function Management({ user }) {
           <div style={tileLabel}>Awaiting My Approval</div>
           <div style={{ ...tileValue, color: pendingApprovals.length > 0 ? '#F47920' : 'inherit' }}>{pendingApprovals.length}</div>
         </button>
-      </div>
-
-      <div id="approvals-queue" style={section}>
-        <h3 style={{ marginTop: 0 }}>Approvals Queue</h3>
-        {pendingApprovals.length === 0 ? (
-          <p style={{ fontSize: 13, color: '#5c6070' }}>Nothing pending approval right now.</p>
-        ) : (
-          <table width="100%" cellPadding="6">
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                <th>Exhibitor</th><th>Salesperson</th><th>Contract Value</th><th>Submitted</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {pendingApprovals.map((p) => (
-                <tr key={p.id} style={{ borderBottom: '1px solid #eee' }}>
-                  <td>{p.exhibitor_name}</td>
-                  <td>{p.salesperson_name || '—'}</td>
-                  <td>{p.currency} {Number(p.total_myr || 0).toLocaleString('en-MY', { minimumFractionDigits: 2 })}</td>
-                  <td>{daysSince(p.contract_date)}</td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button onClick={() => navigate(`/sales-orders/${p.id}`)}>View</button>{' '}
-                    <button onClick={() => handleApprove(p.id)} disabled={busyId === p.id}>Approve</button>{' '}
-                    <button onClick={() => handleReject(p.id)} disabled={busyId === p.id}>Reject</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </div>
 
       {oppSummary && (

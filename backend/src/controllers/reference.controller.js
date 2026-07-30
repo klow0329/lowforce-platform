@@ -88,6 +88,7 @@ async function getCompany(req, res) {
     `SELECT c.id, c.name,
             cs.reg_no, cs.tin_no, cs.sst_no, cs.address, cs.phone, cs.email,
             cs.bank_name, cs.bank_account_no, cs.bank_swift, cs.payment_instructions,
+            cs.contract_terms,
             (cs.logo_filename IS NOT NULL) AS has_logo,
             (cs.letterhead_filename IS NOT NULL) AS has_letterhead,
             (cs.footer_filename IS NOT NULL) AS has_footer
@@ -99,4 +100,13 @@ async function getCompany(req, res) {
   res.json({ company: result.rows[0] });
 }
 
-module.exports = { listCountries, listAgents, listSegments, listSalespeople, listEvents, listStages, getCompany };
+// Credit Note reason categories — company-configurable (standing rule #2).
+async function listCnReasonCodes(req, res) {
+  const result = await pool.query(
+    `SELECT id, code, label FROM cn_reason_codes WHERE company_id = $1 AND is_active = TRUE ORDER BY sort_order`,
+    [req.companyId]
+  );
+  res.json({ reasonCodes: result.rows });
+}
+
+module.exports = { listCountries, listAgents, listSegments, listSalespeople, listEvents, listStages, getCompany, listCnReasonCodes };

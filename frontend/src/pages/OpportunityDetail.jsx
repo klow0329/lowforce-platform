@@ -3,8 +3,11 @@ import { useNavigate, useParams, useSearchParams, useLocation } from 'react-rout
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
-import BillingTemplate from '../components/BillingTemplate';
+import BillingTemplate, { UPGRADE_CODES, FIXED_LABELS } from '../components/BillingTemplate';
 import { isViewOnly } from '../utils/permissions';
+import { setUnsavedChanges } from '../utils/unsavedChanges';
+import DeleteRecordButton from '../components/DeleteRecordButton';
+import CorrespondenceLog from '../components/CorrespondenceLog';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -12,7 +15,7 @@ const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'bo
 // contract's own approval/print/invoice flow — a user can't jump straight
 // there by editing this dropdown, only advance through Initial Contact /
 // Proposal Sent, or mark it Lost.
-const SYSTEM_DRIVEN_STAGE_CODES = ['STG80', 'WON'];
+const SYSTEM_DRIVEN_STAGE_CODES = ['STG40', 'STG80', 'WON'];
 
 export default function OpportunityDetail({ user }) {
   const { id } = useParams();
@@ -26,13 +29,16 @@ export default function OpportunityDetail({ user }) {
   const lockedExhibitorId = searchParams.get('exhibitor_id') || '';
   const lockedExhibitorName = searchParams.get('exhibitor_name') || '';
 
-  // Returning from the Floor Plan booth picker (see handlePickFromFloorPlan)
-  // — a picked booth's Hall/Booth No/Dimension, and for a brand-new record
-  // that hadn't been saved yet, the rest of the form the user had already
-  // filled in before they navigated away to pick a booth.
-  const pickedBooth = location.state?.pickedBooth;
-  const restoreSnapshot = location.state?.formSnapshot;
+  // Returning from the Floor Plan's booth mass-pickup picker (see
+  // handlePickBooths) — nothing is written to the database while picking;
+  // the picker just hands back the selected booth set via location.state,
+  // and it only actually saves once the user hits Save on THIS form (see
+  // handleSubmit). The Floor Plan trip fully unmounts this page (a route
+  // change), so any in-progress edits are stashed in sessionStorage first
+  // and restored here — same pattern as the CN "adjust booths" flow.
+  const pickedBooths = location.state?.pickedBooths;
   const boothAppliedRef = useRef(false);
+  const draftKey = `oppDraft:${id || 'new'}`;
 
   const [form, setForm] = useState(() => ({
     exhibitor_id: lockedExhibitorId,
@@ -44,19 +50,22 @@ export default function OpportunityDetail({ user }) {
     hall: '',
     booth_no: '',
     dimension: '',
+    total_sqm: '',
+    credit_terms_id: '',
     next_follow_up_date: '',
     remarks: '',
-    ...(restoreSnapshot?.form || {}),
-    ...(pickedBooth ? { hall: pickedBooth.hall, booth_no: pickedBooth.booth_no, dimension: pickedBooth.dimension } : {}),
+    bill_to_type: 'BILLING',
   }));
-  const [exhibitorName, setExhibitorName] = useState(restoreSnapshot?.exhibitorName || lockedExhibitorName);
+  const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [exhibitorSearch, setExhibitorSearch] = useState('');
   const [exhibitorResults, setExhibitorResults] = useState([]);
 
   const [stages, setStages] = useState([]);
   const [salespeople, setSalespeople] = useState([]);
   const [priceList, setPriceList] = useState([]);
+  const [creditTerms, setCreditTerms] = useState([]);
   const [taxCodes, setTaxCodes] = useState([]);
+  const [lodPct, setLodPct] = useState(15);
   const [items, setItems] = useState([]);
   const [original, setOriginal] = useState(null);
   const [editing, setEditing] = useState(isNew);
@@ -64,6 +73,24 @@ export default function OpportunityDetail({ user }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [transferring, setTransferring] = useState(false);
+  const [existingSalesOrderId, setExistingSalesOrderId] = useState(null);
+  const [existingOpportunities, setExistingOpportunities] = useState([]);
+  // Just for the Bill To dropdown hint (which name each option actually
+  // resolves to) — not saved anywhere itself, re-fetched whenever the
+  // exhibitor changes.
+  const [billToPreview, setBillToPreview] = useState({ billingName: '', agentName: '' });
+  const [stageChangedAt, setStageChangedAt] = useState(null);
+  const [needsReallocation, setNeedsReallocation] = useState(false);
+  // null = not loaded yet — kept distinct from [] (genuinely zero booths) so
+  // the sync-to-form effect below never overwrites hall/booth_no with a
+  // premature blank before the real set has actually arrived. This is now
+  // the STAGED set (may not match the database until Save) rather than a
+  // live server mirror — see handleSubmit for where it actually commits.
+  const [linkedBooths, setLinkedBooths] = useState(null);
+  // Overrides the normal server-loaded `items` when restoring a draft after
+  // a Floor Plan round trip (see draftKey above) — BillingTemplate reseeds
+  // its rows from whichever of these two is passed as its `items` prop.
+  const [draftBillingItems, setDraftBillingItems] = useState(null);
   const billingRef = useRef(null);
 
   function loadItems() {
@@ -78,10 +105,32 @@ export default function OpportunityDetail({ user }) {
       setTaxCodes(tc.taxCodes);
       setForm((f) => (f.stage_id ? f : { ...f, stage_id: st.stages[0]?.id || '' }));
     });
+    api.getSettings().then(({ settings }) => setLodPct(settings?.lod_pct_of_bas ?? 15));
   }, []);
 
+  // Loads the record fresh (or, for a brand-new one, just leaves the default
+  // blank form) — UNLESS a draft was stashed in sessionStorage right before
+  // a Floor Plan trip (see handlePickBooths), in which case that draft wins:
+  // it's strictly more recent than whatever's on the server, since it holds
+  // edits the user hadn't saved yet when they left for the picker.
   useEffect(() => {
-    if (isNew) return;
+    const draftRaw = sessionStorage.getItem(draftKey);
+    const draft = draftRaw ? JSON.parse(draftRaw) : null;
+
+    function applyDraft() {
+      setForm(draft.form);
+      setExhibitorName(draft.exhibitorName);
+      setLinkedBooths(pickedBooths || draft.linkedBooths || []);
+      setDraftBillingItems(draft.billingItems);
+      sessionStorage.removeItem(draftKey);
+    }
+
+    if (isNew) {
+      if (draft) applyDraft();
+      else setLinkedBooths([]);
+      return;
+    }
+
     api.getOpportunity(id).then(({ opportunity }) => {
       const loaded = {
         exhibitor_id: opportunity.exhibitor_id,
@@ -93,30 +142,72 @@ export default function OpportunityDetail({ user }) {
         hall: opportunity.hall || '',
         booth_no: opportunity.booth_no || '',
         dimension: opportunity.dimension || '',
+        total_sqm: opportunity.total_sqm ?? '',
+        credit_terms_id: opportunity.credit_terms_id || '',
         next_follow_up_date: opportunity.next_follow_up_date || '',
         remarks: opportunity.remarks || '',
+        bill_to_type: opportunity.bill_to_type || 'BILLING',
       };
       setOriginal(loaded);
-      // A picked booth is a pending edit, not yet saved — applied on top of
-      // the loaded record so the ChangesBanner correctly shows it as
-      // something the user still needs to click Save to persist.
-      setForm(pickedBooth ? { ...loaded, hall: pickedBooth.hall, booth_no: pickedBooth.booth_no, dimension: pickedBooth.dimension } : loaded);
-      setExhibitorName(opportunity.exhibitor_name);
+      setExistingSalesOrderId(opportunity.existing_sales_order_id || null);
       setLoading(false);
+      if (draft) {
+        applyDraft();
+      } else {
+        setForm(loaded);
+        setExhibitorName(opportunity.exhibitor_name);
+        setBillToPreview({ billingName: opportunity.billing_name || '', agentName: opportunity.agent_name || '' });
+        setStageChangedAt(opportunity.stage_changed_at);
+        setNeedsReallocation(opportunity.needs_booth_reallocation);
+        loadItems();
+        api.listOpportunityBooths(id).then(({ booths }) => setLinkedBooths(booths));
+      }
     });
-    loadItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew]);
 
-  // Once the Price List has loaded, apply a picked booth's BAS/COR/LOD rows
-  // (see the Floor Plan picker below) — needs real price list rates to
-  // compute correctly, so this waits rather than firing on mount.
+  // Hall/Booth No/Total Sqm are all derived, read-only displays of whatever's
+  // currently linked on the Floor Plan (see handlePickBooths) — Hall shows
+  // the single hall name, or "Multi" once booths span more than one; Booth No
+  // lists every individual booth number; Total Sqm is the sum of every
+  // linked booth's sqm. Per the sales team's rule, booth allocation now
+  // drives these fields — there is no more free-text entry for any of them,
+  // so if a selection looks wrong the fix is to re-open the Floor Plan
+  // picker, not to type a correction here. Kept in `form` (not just shown
+  // separately) so Save still persists the current text/number into those
+  // columns for the print pages and Contracts list that read them directly.
   useEffect(() => {
-    if (!pickedBooth || boothAppliedRef.current || priceList.length === 0 || !billingRef.current) return;
+    if (linkedBooths === null) return;
+    const hallNames = [...new Set(linkedBooths.map((b) => b.hall_name).filter(Boolean))];
+    const hall = hallNames.length === 0 ? '' : (hallNames.length === 1 ? hallNames[0] : 'Multi');
+    const boothNo = linkedBooths.map((b) => b.booth_no).join(', ');
+    const totalSqm = linkedBooths.reduce((sum, b) => sum + (Number(b.sqm) || 0), 0);
+    setForm((f) => (f.hall === hall && f.booth_no === boothNo && Number(f.total_sqm) === totalSqm
+      ? f : { ...f, hall, booth_no: boothNo, total_sqm: totalSqm }));
+  }, [linkedBooths]);
+
+  // Once linkedBooths and the Price List have both loaded AND we've just
+  // returned from a booth pick (pickedBooths), apply the aggregate BAS/COR/
+  // LOD rows from the full picked set — sum of every linked booth's sqm,
+  // corner/loading flagged if ANY linked booth is. Guarded to run once per
+  // return trip so it never overwrites a manual billing edit on a plain
+  // page reload.
+  useEffect(() => {
+    if (!pickedBooths || boothAppliedRef.current || linkedBooths === null || priceList.length === 0 || !billingRef.current) return;
     boothAppliedRef.current = true;
-    billingRef.current.applyBoothAllocation({ sqm: pickedBooth.sqm, isCorner: pickedBooth.is_corner, isLoading: pickedBooth.is_loading });
+    // Sum sqm per tagged type (untagged booths count as Bare Space — the
+    // same default as before this feature existed) — see FloorPlan.jsx's
+    // per-booth type tagging in the cap-mode picker.
+    const byType = {};
+    for (const b of linkedBooths) {
+      const code = b.allocated_item_code || 'BAS';
+      byType[code] = (byType[code] || 0) + (Number(b.sqm) || 0);
+    }
+    const isCorner = linkedBooths.some((b) => b.is_corner);
+    const isLoading = linkedBooths.some((b) => b.is_loading);
+    billingRef.current.applyBoothAllocation({ byType, isCorner, isLoading });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [priceList]);
+  }, [linkedBooths, priceList, pickedBooths]);
 
   // EventContext loads the event list asynchronously — on a fresh page load
   // (e.g. navigating straight to /opportunities/new), this component can
@@ -132,7 +223,21 @@ export default function OpportunityDetail({ user }) {
   useEffect(() => {
     if (!form.event_id) return;
     api.listPriceList(form.event_id).then(({ priceList }) => setPriceList(priceList));
+    api.listCreditTerms(form.event_id).then(({ creditTerms }) => setCreditTerms(creditTerms));
   }, [form.event_id]);
+
+  // A brand-new opportunity's exhibitor+event combination may already have
+  // one — flagged so Sales can open the existing one instead of accidentally
+  // splitting one deal into two records, which would double-count it in the
+  // win/loss conversion rate. Purely a heads-up, not a block: the user can
+  // still continue creating a new one below (see item 5's rule — an
+  // exhibitor can legitimately run more than one live opportunity at once).
+  useEffect(() => {
+    if (!isNew || !form.exhibitor_id || !form.event_id) { setExistingOpportunities([]); return; }
+    api.listOpportunities({ exhibitor_id: form.exhibitor_id, event_id: form.event_id }).then(({ opportunities }) => {
+      setExistingOpportunities(opportunities || []);
+    });
+  }, [isNew, form.exhibitor_id, form.event_id]);
 
   useEffect(() => {
     if (!exhibitorSearch) {
@@ -150,18 +255,34 @@ export default function OpportunityDetail({ user }) {
   // dropdown since they may need to reassign leads. New opportunities
   // default to the exhibitor account's assigned salesperson rather than
   // Unassigned (covers both picking one from the search dropdown and
-  // arriving here already locked to an exhibitor).
+  // arriving here already locked to an exhibitor) — and RE-derives it every
+  // time the exhibitor changes (not just once when blank), since switching
+  // from Company A to Company B while still drafting a new opportunity
+  // should carry over Company B's own rep, not leave Company A's behind.
+  // Deliberately keyed only on exhibitor_id changing (not a general re-run),
+  // so a manual salesperson pick made afterward for the SAME exhibitor is
+  // never overwritten.
   useEffect(() => {
-    if (!isNew || !form.exhibitor_id || form.salesperson_id) return;
+    if (!isNew || !form.exhibitor_id) return;
     if (!isElevated) {
       if (user?.id) set('salesperson_id', user.id);
       return;
     }
     api.getExhibitor(form.exhibitor_id).then(({ exhibitor }) => {
-      if (exhibitor.salesperson_id) set('salesperson_id', exhibitor.salesperson_id);
+      set('salesperson_id', exhibitor.salesperson_id || '');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, form.exhibitor_id, isElevated]);
+
+  // Bill To preview — which real name each option would resolve to. Runs for
+  // any exhibitor pick (new record), independent of the elevated-only
+  // salesperson-derivation effect above.
+  useEffect(() => {
+    if (!isNew || !form.exhibitor_id) return;
+    api.getExhibitor(form.exhibitor_id).then(({ exhibitor }) => {
+      setBillToPreview({ billingName: exhibitor.billing_name || '', agentName: exhibitor.agent_name || '' });
+    });
+  }, [isNew, form.exhibitor_id]);
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -176,6 +297,16 @@ export default function OpportunityDetail({ user }) {
 
   const changes = computeChanges(original, form);
 
+  // Warns before the user navigates away (nav bar links, tab close/refresh)
+  // with unsaved edits — cleared on unmount so it never leaks onto the next
+  // page after a confirmed discard or a successful Save.
+  useEffect(() => {
+    const isDirty = editing && (isNew ? Boolean(exhibitorName) : changes.length > 0);
+    setUnsavedChanges(isDirty, 'You have unsaved opportunity changes that will be lost if you leave. Continue?');
+    return () => setUnsavedChanges(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, isNew, changes.length, exhibitorName]);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
@@ -185,33 +316,35 @@ export default function OpportunityDetail({ user }) {
       return;
     }
 
-    // Marking a deal Lost releases the exhibitor account back to the pool
-    // for another rep to pick up — that's a bigger consequence than a
-    // normal field edit, so it gets its own confirmation instead of the
-    // generic changed-values one.
+    // Marking a deal Lost is a bigger consequence than a normal field edit,
+    // so it gets its own confirmation instead of the generic changed-values
+    // one. If this exhibitor has no OTHER open (or Won) opportunity left
+    // after this, the account is released back to the pool for another rep
+    // to pick up — handled server-side in updateOpportunity, since it needs
+    // to see every opportunity on the account, not just this rep's own.
     const lostStage = stages.find((s) => s.code === 'LOSE');
     const movingToLost = !isNew && lostStage && form.stage_id === lostStage.id && original?.stage_id !== lostStage.id;
 
     if (movingToLost) {
-      if (!window.confirm(`Mark this opportunity Lost? ${exhibitorName} will be unassigned from you and opened up for another salesperson to follow up.`)) return;
+      if (!window.confirm(`Mark this opportunity Lost? If ${exhibitorName} has no other open opportunity, the account will be unassigned from you and opened up for another salesperson to follow up.`)) return;
     } else if (!confirmSave(changes, 'opportunity', isNew)) {
       return;
     }
 
-    // A picked booth (see handlePickFromFloorPlan) only actually locks once
-    // this save genuinely succeeds — sent along with the record itself so
-    // the backend can commit it in the same transaction. Real-world testing
-    // found that locking it immediately on pick, before the opportunity was
-    // ever saved, orphaned the booth if the form was abandoned.
-    const boothPayload = pickedBooth ? { floor_plan_booth_id: pickedBooth.id, exhibitor_name: exhibitorName } : {};
-
     setSaving(true);
     try {
+      // Booths picked on the Floor Plan are staged locally only (see
+      // handlePickBooths) — nothing is written to the database until here,
+      // as part of this same Save, so leaving the form without saving never
+      // touches the booth's real record or creates a phantom opportunity.
+      const boothIds = (linkedBooths || []).map((b) => b.id);
+      const boothItemCodes = Object.fromEntries((linkedBooths || []).map((b) => [b.id, b.allocated_item_code || null]));
       if (isNew) {
-        const { opportunity } = await api.createOpportunity({ ...form, ...boothPayload });
+        const { opportunity } = await api.createOpportunity(form);
         // Billing lines were entered on this same form before the record
         // existed — sync them to the new id now, as part of this one Save.
         await billingRef.current?.save(opportunity.id);
+        await api.bulkSetOpportunityBooths(opportunity.id, { floor_plan_booth_ids: boothIds, booth_item_codes: boothItemCodes, exhibitor_name: exhibitorName });
         // First rep to touch an unclaimed account becomes its owner.
         const { exhibitor } = await api.getExhibitor(form.exhibitor_id);
         if (!exhibitor.salesperson_id && form.salesperson_id) {
@@ -219,11 +352,9 @@ export default function OpportunityDetail({ user }) {
         }
         navigate(`/opportunities/${opportunity.id}`);
       } else {
-        await api.updateOpportunity(id, { ...form, ...boothPayload });
+        await api.updateOpportunity(id, form);
         await billingRef.current?.save(id);
-        if (movingToLost) {
-          await api.updateExhibitor(form.exhibitor_id, { salesperson_id: null });
-        }
+        await api.bulkSetOpportunityBooths(id, { floor_plan_booth_ids: boothIds, booth_item_codes: boothItemCodes, exhibitor_name: exhibitorName });
         navigate('/opportunities');
       }
     } catch (err) {
@@ -232,32 +363,94 @@ export default function OpportunityDetail({ user }) {
     }
   }
 
-  // Hands off to the Floor Plan screen's booth picker (see FloorPlan.jsx's
-  // pickFor handling) — it navigates back here with the chosen booth in
-  // router state, picked up by the effects above. For a brand-new,
-  // not-yet-saved opportunity, the in-progress form has to travel along too
-  // since navigating away unmounts this page and would otherwise lose it.
-  function handlePickFromFloorPlan() {
+  // Hands off to the Floor Plan's mass-pickup picker (see FloorPlan.jsx's
+  // 'cap' pickFor mode) — the picker only stages a selection and hands it
+  // back via location.state; nothing is written to the database until the
+  // user actually hits Save on this form (see handleSubmit). Works the same
+  // way whether this is a brand-new, never-saved opportunity or an existing
+  // one — no record needs to exist yet just to try out a booth pick. The
+  // Floor Plan trip fully remounts this page, so the in-progress form (and
+  // any billing rows already entered) is stashed in sessionStorage first and
+  // restored on the way back. No cap is passed — Total Sqm is derived FROM
+  // the selection (see the linkedBooths effect above), not a pre-set target.
+  function handlePickBooths() {
+    setError('');
     if (!form.exhibitor_id) {
-      setError('Please select an exhibitor before picking a booth.');
+      setError('Please select an exhibitor before picking booths.');
       return;
+    }
+    const snapshot = billingRef.current?.getSnapshot();
+    sessionStorage.setItem(draftKey, JSON.stringify({
+      form, exhibitorName, linkedBooths: linkedBooths || [],
+      billingItems: snapshot ? snapshot.items : null,
+    }));
+    // Which booth-item codes the current billing already expects — lets the
+    // picker auto-resolve the common single-type case silently, and only
+    // surface per-booth tagging when the contract genuinely mixes types (see
+    // FloorPlan.jsx's capIsMixed).
+    const upgradeCodes = [...UPGRADE_CODES];
+    for (const p of priceList) if (p.is_upgrade_option && !upgradeCodes.includes(p.sales_item_code)) upgradeCodes.push(p.sales_item_code);
+    const upgradeOptions = upgradeCodes.map((code) => ({
+      code, label: priceList.find((p) => p.sales_item_code === code)?.description || FIXED_LABELS[code] || code,
+    }));
+    const itemTypeTotals = {};
+    for (const it of (snapshot?.items || [])) {
+      if (it.sales_item_code === 'BAS' || upgradeCodes.includes(it.sales_item_code)) {
+        itemTypeTotals[it.sales_item_code] = (itemTypeTotals[it.sales_item_code] || 0) + Number(it.qty || 0);
+      }
     }
     navigate('/floor-plan', {
       state: {
         pickFor: {
+          mode: 'cap',
+          recordType: 'opportunity',
+          recordId: isNew ? null : id,
           returnPath: isNew ? '/opportunities/new' : `/opportunities/${id}`,
           exhibitorName,
-          boothStatus: 'RESERVED',
-          formSnapshot: isNew ? { form, exhibitorName } : undefined,
+          preSelectedBooths: linkedBooths || [],
+          cap: null,
+          upgradeOptions,
+          itemTypeTotals,
         },
       },
     });
+  }
+
+  // Proposal Sent is system-driven, same reasoning as Contract Sent on the
+  // Contract page (see SalesOrderDetail.jsx's promptMoveOpportunityStage) —
+  // viewing/printing the Proposal document means it's actually been sent to
+  // the exhibitor. Only prompts the FIRST time (still at Initial Contact);
+  // re-viewing it afterward is just a reprint, nothing to confirm again.
+  async function handleViewProposal() {
+    const proposalStage = stages.find((s) => s.code === 'STG40');
+    const initialStage = stages.find((s) => s.code === 'STG10');
+    if (proposalStage && form.stage_id === initialStage?.id) {
+      if (window.confirm("Mark this opportunity as 'Proposal Sent'? This locks the stage from being changed back manually.")) {
+        await api.updateOpportunity(id, { stage_id: proposalStage.id });
+        set('stage_id', proposalStage.id);
+        setOriginal((o) => (o ? { ...o, stage_id: proposalStage.id } : o));
+        setStageChangedAt(new Date().toISOString());
+      }
+    }
+    navigate(`/opportunities/${id}/proposal`);
   }
 
   // Contracts are only ever created by transferring an approved opportunity
   // — this carries the quoted line items across so Sales doesn't have to
   // re-enter them, then lands on the new Contract to review before saving.
   async function handleGenerateContract() {
+    // Tax/registration detail is only ever asked for once a deal is real
+    // enough to invoice — but it MUST be there before a Contract exists,
+    // since the Contract/Invoice documents need it. Malaysia-registered
+    // exhibitors are checked here; other countries have no equivalent
+    // mandatory field today.
+    const { exhibitor } = await api.getExhibitor(form.exhibitor_id);
+    if (exhibitor.country_code === 'MY' && (!exhibitor.reg_no || !exhibitor.tin_no)) {
+      if (window.confirm(`${exhibitorName}'s Reg. No / TIN No. are still missing — these are needed before a Contract can be generated. Open the Exhibitor page now to complete them or send a self-service link?`)) {
+        navigate(`/exhibitors/${form.exhibitor_id}`);
+      }
+      return;
+    }
     if (!window.confirm('Create a Contract from this opportunity? You can review and edit it further afterward.')) return;
     setTransferring(true);
     setError('');
@@ -272,6 +465,8 @@ export default function OpportunityDetail({ user }) {
         hall: form.hall,
         booth_no: form.booth_no,
         dimension: form.dimension,
+        total_sqm: form.total_sqm,
+        credit_terms_id: form.credit_terms_id,
       });
       for (const it of items) {
         await api.addSalesOrderItem(salesOrder.id, {
@@ -289,6 +484,7 @@ export default function OpportunityDetail({ user }) {
     } catch (err) {
       setError(err.message);
       setTransferring(false);
+      if (err.existingSalesOrderId) setExistingSalesOrderId(err.existingSalesOrderId);
     }
   }
 
@@ -303,6 +499,16 @@ export default function OpportunityDetail({ user }) {
           <button type="button" onClick={() => navigate('/opportunities')}>Back to list</button>
         </div>
       </div>
+      {error && <p style={{ color: 'red', fontWeight: 600 }}>{error}</p>}
+      {needsReallocation && (
+        <div style={{ background: '#FBE3E3', border: '1px solid #E5A0A0', borderRadius: 8, padding: 12, margin: '8px 0' }}>
+          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: '#8a1f1f' }}>
+            A booth this opportunity was proposing went to another contract that got approved first — please pick a
+            replacement booth on the Floor Plan as soon as possible.
+          </p>
+          <button type="button" onClick={handlePickBooths} style={{ marginTop: 8 }}>Pick Booths on Floor Plan</button>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit}>
         <fieldset disabled={!editing} style={fieldsetStyle}>
@@ -323,18 +529,51 @@ export default function OpportunityDetail({ user }) {
               onChange={(e) => setExhibitorSearch(e.target.value)}
             />
             {exhibitorResults.length > 0 && (
-              <div style={{ border: '1px solid #ddd', borderTop: 'none', maxHeight: 160, overflowY: 'auto' }}>
-                {exhibitorResults.map((ex) => (
-                  <div
-                    key={ex.id}
-                    onClick={() => selectExhibitor(ex)}
-                    style={{ padding: 8, cursor: 'pointer', borderBottom: '1px solid #eee' }}
-                  >
-                    {ex.company_name}
-                  </div>
-                ))}
+              <div style={{ border: '1px solid #ddd', borderTop: 'none', maxHeight: 200, overflowY: 'auto' }}>
+                {exhibitorResults.map((ex) => {
+                  // A search reveals every matching exhibitor company-wide
+                  // (see listExhibitors) so a duplicate under another rep is
+                  // never invisible — but a non-elevated Sales user can only
+                  // pick their own/unclaimed ones; another rep's shows here
+                  // view-only, just to prove it already exists.
+                  const ownedByOther = !isElevated && ex.salesperson_id && ex.salesperson_id !== user?.id;
+                  return (
+                    <div
+                      key={ex.id}
+                      onClick={() => { if (!ownedByOther) selectExhibitor(ex); }}
+                      style={{
+                        padding: 8, borderBottom: '1px solid #eee',
+                        cursor: ownedByOther ? 'default' : 'pointer',
+                        color: ownedByOther ? '#9099a8' : 'inherit',
+                        display: 'flex', justifyContent: 'space-between', gap: 8,
+                      }}
+                      title={ownedByOther ? `Already assigned to ${ex.salesperson_name || 'another salesperson'} — view only` : undefined}
+                    >
+                      <span>{ex.company_name}</span>
+                      {ex.salesperson_name && <span style={{ fontSize: 12, color: '#9099a8' }}>{ex.salesperson_name}</span>}
+                    </div>
+                  );
+                })}
               </div>
             )}
+          </div>
+        )}
+
+        {isNew && existingOpportunities.length > 0 && (
+          <div style={{ background: '#FFF3BF', border: '1px solid #F0C36D', borderRadius: 8, padding: 12, margin: '12px 0' }}>
+            <strong>{exhibitorName}</strong> already has {existingOpportunities.length} opportunit{existingOpportunities.length === 1 ? 'y' : 'ies'} for this event —
+            splitting the same deal across two records will double-count it in the win/loss conversion rate.
+            <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+              {existingOpportunities.map((o) => (
+                <li key={o.id}>
+                  <a href={`/opportunities/${o.id}`} onClick={(e) => { e.preventDefault(); navigate(`/opportunities/${o.id}`); }}>
+                    {o.stage_name}
+                  </a>
+                  {o.salesperson_name ? ` — ${o.salesperson_name}` : ''}
+                </li>
+              ))}
+            </ul>
+            <p style={{ margin: '6px 0 0', fontSize: 13 }}>Open one of these instead, or continue below if this is genuinely a separate proposal.</p>
           </div>
         )}
 
@@ -365,6 +604,11 @@ export default function OpportunityDetail({ user }) {
                 </option>
               ))}
             </select>
+            {stageChangedAt && (
+              <p style={{ fontSize: 11, color: '#5c6070', margin: '2px 0 0' }}>
+                Since {new Date(stageChangedAt).toLocaleString('en-MY', { dateStyle: 'medium', timeStyle: 'short' })}
+              </p>
+            )}
           </div>
           <div style={{ flex: 1 }}>
             <label style={label}>Salesperson</label>
@@ -388,7 +632,18 @@ export default function OpportunityDetail({ user }) {
             <label style={label}>Tier *</label>
             <select
               style={inputStyle} value={form.booking_type} required
-              onChange={(e) => { set('booking_type', e.target.value); billingRef.current?.repriceAll(undefined, e.target.value); }}
+              onChange={(e) => {
+                const tier = e.target.value;
+                set('booking_type', tier);
+                billingRef.current?.repriceAll(undefined, tier);
+                // Suggest the Tier's default Credit Terms — only when
+                // nothing's been explicitly chosen yet, so this never
+                // silently overrides a deliberate pick.
+                if (!form.credit_terms_id) {
+                  const match = creditTerms.find((t) => t.default_for_tier === tier);
+                  if (match) set('credit_terms_id', match.id);
+                }
+              }}
             >
               <option value="">— Select —</option>
               <option value="PUBLISHED RATE">Published Rate</option>
@@ -408,27 +663,52 @@ export default function OpportunityDetail({ user }) {
               <option value="USD">USD</option>
             </select>
           </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Credit Terms</label>
+            <select style={inputStyle} value={form.credit_terms_id} onChange={(e) => set('credit_terms_id', e.target.value)}>
+              <option value="">— None —</option>
+              {creditTerms.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Bill To (Proposal recipient name)</label>
+            <select style={inputStyle} value={form.bill_to_type} onChange={(e) => set('bill_to_type', e.target.value)}>
+              <option value="EXHIBITOR">Exhibitor Name — {exhibitorName || '—'}</option>
+              <option value="BILLING">Billing Company Name — {billToPreview.billingName || exhibitorName || '—'}</option>
+              <option value="AGENT">Agent Name — {billToPreview.agentName || '(no agent assigned)'}</option>
+            </select>
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
           <div style={{ flex: 1 }}>
-            <label style={label}>Hall (optional)</label>
-            <input style={inputStyle} value={form.hall} onChange={(e) => set('hall', e.target.value)} />
+            <label style={label}>Hall</label>
+            <input style={{ ...inputStyle, background: '#F5F6FA' }} value={form.hall} readOnly title="Derived from the booths picked on the Floor Plan below" />
+          </div>
+          <div style={{ flex: 1.5 }}>
+            <label style={label}>Booth No</label>
+            <input style={{ ...inputStyle, background: '#F5F6FA' }} value={form.booth_no} readOnly title="Derived from the booths picked on the Floor Plan below" />
           </div>
           <div style={{ flex: 1 }}>
-            <label style={label}>Booth No (optional)</label>
-            <input style={inputStyle} value={form.booth_no} onChange={(e) => set('booth_no', e.target.value)} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <label style={label}>Dimension (optional)</label>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
-              <button type="button" onClick={handlePickFromFloorPlan} title="Pick a booth from the Floor Plan" style={{ whiteSpace: 'nowrap' }}>
-                📍 Pick
-              </button>
-            </div>
+            <label style={label}>Total Sqm</label>
+            <input style={{ ...inputStyle, background: '#F5F6FA' }} value={form.total_sqm || 0} readOnly title="Derived from the booths picked on the Floor Plan below" />
           </div>
         </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={label}>Dimension (optional)</label>
+            <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
+          </div>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end' }}>
+            <button type="button" onClick={handlePickBooths} title="Pick booths on the Floor Plan" style={{ padding: 8, width: '100%', marginBottom: 12 }}>
+              📍 Pick Booths on Floor Plan
+            </button>
+          </div>
+        </div>
+        {isNew && (
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: -8 }}>Select an exhibitor above, then Pick Booths — Hall, Booth No and Total Sqm fill in from your selection, but nothing is saved until you click Save below.</p>
+        )}
 
         <div style={{ marginTop: 20 }}>
           <h3 style={{ marginBottom: 4 }}>Billing (estimate)</h3>
@@ -444,9 +724,10 @@ export default function OpportunityDetail({ user }) {
             parentId={id}
             currency={form.currency}
             bookingType={form.booking_type}
-            items={items}
+            items={draftBillingItems || items}
             priceList={priceList}
             taxCodes={taxCodes}
+            lodPct={lodPct}
             onSaved={loadItems}
             showSaveButton={false}
           />
@@ -459,22 +740,45 @@ export default function OpportunityDetail({ user }) {
         <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} />
         </fieldset>
 
-        {error && <p style={{ color: 'red' }}>{error}</p>}
         {editing && !isNew && <ChangesBanner changes={changes} />}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           {editing && (
             <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
               {saving ? 'Saving...' : 'Save'}
             </button>
           )}
-          {!isNew && !isViewOnly(user) && (
-            <button type="button" disabled={transferring} onClick={handleGenerateContract} style={{ padding: '8px 16px' }}>
-              {transferring ? 'Creating...' : 'Generate Contract'}
+          {/* Right at eye level next to Save, not buried up top — a
+              validation failure (e.g. upgrade sqm over Bare Space) is
+              impossible to miss here. */}
+          {editing && error && (
+            <span style={{ color: '#B23A3A', fontSize: 13, fontWeight: 600, background: '#FBE3E3', padding: '4px 10px', borderRadius: 6 }}>
+              {error}
+            </span>
+          )}
+          {!isNew && (
+            <button type="button" onClick={handleViewProposal} style={{ padding: '8px 16px' }}>
+              View Proposal
             </button>
+          )}
+          {!isNew && !isViewOnly(user) && (
+            existingSalesOrderId ? (
+              <button type="button" onClick={() => navigate(`/sales-orders/${existingSalesOrderId}`)} style={{ padding: '8px 16px' }}>
+                View Contract
+              </button>
+            ) : (
+              <button type="button" disabled={transferring} onClick={handleGenerateContract} style={{ padding: '8px 16px' }}>
+                {transferring ? 'Creating...' : 'Generate Contract'}
+              </button>
+            )
+          )}
+          {!isNew && user?.role_code === 'ADM' && (
+            <DeleteRecordButton type="opportunity" id={id} label="opportunity" onDeleted={() => navigate('/opportunities')} />
           )}
         </div>
       </form>
+
+      {!isNew && <CorrespondenceLog entityType="opportunity" entityId={id} />}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import PerfByCountry from './reports/PerfByCountry';
 import PerfByMonth from './reports/PerfByMonth';
 import PerfPipeline from './reports/PerfPipeline';
 import PerfComparison from './reports/PerfComparison';
+import AgentCommission from './reports/AgentCommission';
 import CustomerAging from './CustomerAging';
 
 // One Reports module with a visible sub-menu (no dropdown chains) — the
@@ -19,6 +20,7 @@ const SECTIONS = [
   { key: 'monthly', label: 'By Month', Component: PerfByMonth },
   { key: 'pipeline', label: 'Pipeline', Component: PerfPipeline },
   { key: 'comparison', label: 'Comparison', Component: PerfComparison },
+  { key: 'agent-commission', label: 'Agent Commission', Component: AgentCommission },
   { key: 'aging', label: 'Customer Aging', Component: CustomerAging },
 ];
 

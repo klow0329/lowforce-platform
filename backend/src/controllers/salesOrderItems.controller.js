@@ -62,7 +62,7 @@ async function listItems(req, res) {
 async function addItem(req, res) {
   const {
     price_list_id, sales_item_code, description, category,
-    qty, unit_price, discount_type, discount_value, tax_code_id,
+    qty, unit_price, discount_type, discount_value, tax_code_id, edit_reason,
   } = req.body;
 
   if (!sales_item_code || qty === undefined || unit_price === undefined) {
@@ -125,7 +125,7 @@ async function addItem(req, res) {
       client, req.companyId, req.params.id, discount_type, discount_value, subtotal, req.userId
     );
     if (!discountFlagged) {
-      await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId);
+      await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId, edit_reason);
     }
     // Revenue threshold is about the contract's absolute value, independent
     // of why this particular line changed — always checked, not gated
@@ -209,7 +209,7 @@ async function updateItem(req, res) {
       // Covers every other kind of change to an already-approved contract —
       // including a tax code change, which used to be its own separate
       // trigger but is really just one flavour of "edited after approval".
-      await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId);
+      await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId, req.body.edit_reason);
     }
     await checkRevenueThreshold(client, req.companyId, req.params.id, totalMyr, req.userId);
 
@@ -251,4 +251,4 @@ async function deleteItem(req, res) {
   }
 }
 
-module.exports = { listItems, addItem, updateItem, deleteItem };
+module.exports = { listItems, addItem, updateItem, deleteItem, recomputeTotals, calcLine };

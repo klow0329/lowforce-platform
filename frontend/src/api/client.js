@@ -13,7 +13,14 @@ async function apiFetch(path, options = {}) {
     },
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
+  if (!res.ok) {
+    const err = new Error(data.error || 'Request failed');
+    // Carries any extra fields an error response included (e.g.
+    // existingSalesOrderId on a duplicate-contract 409) through to the
+    // caller's catch block, not just the message.
+    Object.assign(err, data);
+    throw err;
+  }
   return data;
 }
 
@@ -37,6 +44,8 @@ export const api = {
     apiFetch(`/exhibitors/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
 
   listCountries: () => apiFetch('/reference/countries'),
+  createTaxDetailLink: (exhibitorId) =>
+    apiFetch('/tax-details/create', { method: 'POST', body: JSON.stringify({ exhibitor_id: exhibitorId }) }),
   listAgents: () => apiFetch('/reference/agents'),
   listSegments: () => apiFetch('/reference/segments'),
   listSalespeople: () => apiFetch('/reference/salespeople'),
@@ -75,6 +84,9 @@ export const api = {
     apiFetch('/invoices/generate-draft', { method: 'POST', body: JSON.stringify(payload) }),
   updateInvoice: (id, payload) =>
     apiFetch(`/invoices/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  withdrawInvoice: (id) => apiFetch(`/invoices/${id}`, { method: 'DELETE' }),
+  issueScheduledInvoice: (id) => apiFetch(`/invoices/${id}/issue`, { method: 'POST' }),
+  acknowledgeInvoiceConfirm: (id) => apiFetch(`/invoices/${id}/acknowledge`, { method: 'POST' }),
 
   listSalesOrderItems: (soId) => apiFetch(`/sales-orders/${soId}/items`),
   addSalesOrderItem: (soId, payload) =>
@@ -102,20 +114,70 @@ export const api = {
   deleteAttachment: (soId, attachmentId) =>
     apiFetch(`/sales-orders/${soId}/attachments/${attachmentId}`, { method: 'DELETE' }),
 
+  listInvoiceAttachments: (invId) => apiFetch(`/invoices/${invId}/attachments`),
+  uploadInvoiceAttachment: (invId, file, docType) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (docType) formData.append('doc_type', docType);
+    return apiFetch(`/invoices/${invId}/attachments`, { method: 'POST', body: formData });
+  },
+  invoiceAttachmentDownloadUrl: (invId, attachmentId) => `/api/invoices/${invId}/attachments/${attachmentId}/download`,
+  deleteInvoiceAttachment: (invId, attachmentId) =>
+    apiFetch(`/invoices/${invId}/attachments/${attachmentId}`, { method: 'DELETE' }),
+  acknowledgeInvoicePaymentProof: (invId, attachmentId) =>
+    apiFetch(`/invoices/${invId}/attachments/${attachmentId}/acknowledge`, { method: 'POST' }),
+
+  listCorrespondence: (entityType, entityId) =>
+    apiFetch(`/correspondence?entity_type=${entityType}&entity_id=${entityId}`),
+  addCorrespondence: (entityType, entityId, note) =>
+    apiFetch('/correspondence', { method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId, note }) }),
+  updateCorrespondence: (id, note) =>
+    apiFetch(`/correspondence/${id}`, { method: 'PUT', body: JSON.stringify({ note }) }),
+
+  listEmailTemplates: () => apiFetch('/email-templates'),
+  getEmailTemplate: (key) => apiFetch(`/email-templates/${key}`),
+  updateEmailTemplate: (key, payload) => apiFetch(`/email-templates/${key}`, { method: 'PUT', body: JSON.stringify(payload) }),
+
   listApprovalLog: (soId) => apiFetch(`/sales-orders/${soId}/approval-log`),
   submitForApproval: (soId, payload) =>
     apiFetch(`/sales-orders/${soId}/submit-for-approval`, { method: 'POST', body: JSON.stringify(payload || {}) }),
+  withdrawApproval: (soId, payload) =>
+    apiFetch(`/sales-orders/${soId}/withdraw-approval`, { method: 'POST', body: JSON.stringify(payload || {}) }),
   approveSalesOrder: (soId, payload) =>
     apiFetch(`/sales-orders/${soId}/approve`, { method: 'POST', body: JSON.stringify(payload || {}) }),
   rejectSalesOrder: (soId, payload) =>
     apiFetch(`/sales-orders/${soId}/reject`, { method: 'POST', body: JSON.stringify(payload || {}) }),
+  voidSalesOrder: (soId, payload) =>
+    apiFetch(`/sales-orders/${soId}/void`, { method: 'POST', body: JSON.stringify(payload || {}) }),
+  acknowledgeSalesOrderApproval: (soId) => apiFetch(`/sales-orders/${soId}/acknowledge`, { method: 'POST' }),
 
   listCreditNotes: (params) => apiFetch(`/credit-notes?${new URLSearchParams(params)}`),
   getCreditNote: (id) => apiFetch(`/credit-notes/${id}`),
   requestCreditNote: (payload) => apiFetch('/credit-notes', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCreditNote: (id, payload) => apiFetch(`/credit-notes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteCreditNote: (id) => apiFetch(`/credit-notes/${id}`, { method: 'DELETE' }),
   approveCreditNote: (id) => apiFetch(`/credit-notes/${id}/approve`, { method: 'PUT' }),
   rejectCreditNote: (id, payload) => apiFetch(`/credit-notes/${id}/reject`, { method: 'PUT', body: JSON.stringify(payload || {}) }),
   confirmCreditNote: (id) => apiFetch(`/credit-notes/${id}/confirm`, { method: 'PUT' }),
+  acknowledgeCnConfirm: (id) => apiFetch(`/credit-notes/${id}/acknowledge`, { method: 'POST' }),
+  listCnReasonCodes: () => apiFetch('/reference/cn-reason-codes'),
+
+  listContractReductions: (salesOrderId) => apiFetch(`/contract-reductions?sales_order_id=${salesOrderId}`),
+  getContractReduction: (id) => apiFetch(`/contract-reductions/${id}`),
+  requestContractReduction: (payload) => apiFetch('/contract-reductions', { method: 'POST', body: JSON.stringify(payload) }),
+  updateContractReduction: (id, payload) => apiFetch(`/contract-reductions/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteContractReduction: (id) => apiFetch(`/contract-reductions/${id}`, { method: 'DELETE' }),
+  approveContractReduction: (id) => apiFetch(`/contract-reductions/${id}/approve`, { method: 'PUT' }),
+  rejectContractReduction: (id, payload) => apiFetch(`/contract-reductions/${id}/reject`, { method: 'PUT', body: JSON.stringify(payload || {}) }),
+  issueContractReductionCn: (id, payload) => apiFetch(`/contract-reductions/${id}/issue-cn`, { method: 'POST', body: JSON.stringify(payload) }),
+  listCreditNoteAttachments: (id) => apiFetch(`/credit-notes/${id}/attachments`),
+  uploadCreditNoteAttachment: (id, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch(`/credit-notes/${id}/attachments`, { method: 'POST', body: formData });
+  },
+  creditNoteAttachmentDownloadUrl: (id, attachmentId) => `/api/credit-notes/${id}/attachments/${attachmentId}/download`,
+  deleteCreditNoteAttachment: (id, attachmentId) => apiFetch(`/credit-notes/${id}/attachments/${attachmentId}`, { method: 'DELETE' }),
 
   getSettings: () => apiFetch('/settings'),
   updateSettings: (payload) => apiFetch('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
@@ -130,6 +192,24 @@ export const api = {
     apiFetch('/settings/expense-codes', { method: 'POST', body: JSON.stringify(payload) }),
   updateExpenseCode: (id, payload) =>
     apiFetch(`/settings/expense-codes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+
+  listAgentsAdmin: () => apiFetch('/settings/agents'),
+  createAgent: (payload) =>
+    apiFetch('/settings/agents', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAgent: (id, payload) =>
+    apiFetch(`/settings/agents/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  listAgentCommissionRates: (agentId) => apiFetch(`/settings/agents/${agentId}/commission-rates`),
+  saveAgentCommissionRates: (agentId, rates) =>
+    apiFetch(`/settings/agents/${agentId}/commission-rates`, { method: 'PUT', body: JSON.stringify({ rates }) }),
+  importRepeatExhibitors: (rows) => apiFetch('/exhibitors/import-repeat-list', { method: 'POST', body: JSON.stringify({ rows }) }),
+
+  createSegmentMain: (payload) => apiFetch('/settings/segments/main', { method: 'POST', body: JSON.stringify(payload) }),
+  updateSegmentMain: (id, payload) => apiFetch(`/settings/segments/main/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteSegmentMain: (id) => apiFetch(`/settings/segments/main/${id}`, { method: 'DELETE' }),
+  createSegmentSub: (payload) => apiFetch('/settings/segments/sub', { method: 'POST', body: JSON.stringify(payload) }),
+  updateSegmentSub: (id, payload) => apiFetch(`/settings/segments/sub/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteSegmentSub: (id) => apiFetch(`/settings/segments/sub/${id}`, { method: 'DELETE' }),
+  importSegments: (rows) => apiFetch('/settings/segments/import', { method: 'POST', body: JSON.stringify({ rows }) }),
 
   getBudget: (eventId) => apiFetch(`/budgets?event_id=${eventId}`),
   createBudget: (eventId) => apiFetch('/budgets', { method: 'POST', body: JSON.stringify({ event_id: eventId }) }),
@@ -164,6 +244,7 @@ export const api = {
     apiFetch('/payments', { method: 'POST', body: JSON.stringify(payload) }),
   updatePayment: (id, payload) =>
     apiFetch(`/payments/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deletePayment: (id) => apiFetch(`/payments/${id}`, { method: 'DELETE' }),
   addPaymentAllocation: (paymentId, payload) =>
     apiFetch(`/payments/${paymentId}/allocations`, { method: 'POST', body: JSON.stringify(payload) }),
   deletePaymentAllocation: (paymentId, allocationId) =>
@@ -182,6 +263,7 @@ export const api = {
   getPerfPipeline: (eventId) => apiFetch(`/reports/performance/pipeline?event_id=${eventId}`),
   getPerfByCountry: (eventId) => apiFetch(`/reports/performance/by-country?event_id=${eventId}`),
   getPerfByMonth: (eventId) => apiFetch(`/reports/performance/by-month?event_id=${eventId}`),
+  getAgentCommission: (eventId) => apiFetch(`/reports/performance/agent-commission?event_id=${eventId}`),
   getPerfComparison: (eventId, compareEventId) =>
     apiFetch(`/reports/performance/comparison?event_id=${eventId}${compareEventId ? `&compare_event_id=${compareEventId}` : ''}`),
   getSalesTargets: (eventId) => apiFetch(`/reports/performance/targets?event_id=${eventId}`),
@@ -206,12 +288,24 @@ export const api = {
   updatePriceItem: (id, payload) =>
     apiFetch(`/price-list/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deletePriceItem: (id) => apiFetch(`/price-list/${id}`, { method: 'DELETE' }),
+  listCreditTerms: (eventId) => apiFetch(`/credit-terms?event_id=${eventId}`),
+  createCreditTerm: (payload) =>
+    apiFetch('/credit-terms', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCreditTerm: (id, payload) =>
+    apiFetch(`/credit-terms/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteCreditTerm: (id) => apiFetch(`/credit-terms/${id}`, { method: 'DELETE' }),
+  resolveCreditTermForContract: (salesOrderId) => apiFetch(`/credit-terms/resolve/${salesOrderId}`),
   adminListRoles: () => apiFetch('/admin/roles'),
   adminListEvents: () => apiFetch('/admin/events'),
   adminCreateEvent: (payload) =>
     apiFetch('/admin/events', { method: 'POST', body: JSON.stringify(payload) }),
   adminUpdateEvent: (id, payload) =>
     apiFetch(`/admin/events/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  archiveRecord: (type, id, reason) =>
+    apiFetch(`/admin/archive/${type}/${id}`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  restoreRecord: (type, id) =>
+    apiFetch(`/admin/archive/${type}/${id}/restore`, { method: 'POST' }),
+  listArchivedRecords: (type) => apiFetch(`/admin/archive/${type}`),
 
   listFloorPlanHalls: (eventId) => apiFetch(`/floor-plan/halls?event_id=${eventId}`),
   createFloorPlanHall: (payload) =>
@@ -232,8 +326,19 @@ export const api = {
     apiFetch(`/floor-plan/halls/${hallId}/booths/auto-detect`, { method: 'POST', body: JSON.stringify({}) }),
   updateFloorPlanBooth: (hallId, boothId, payload) =>
     apiFetch(`/floor-plan/halls/${hallId}/booths/${boothId}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  bulkUpdateFloorPlanBooths: (hallId, payload) =>
+    apiFetch(`/floor-plan/halls/${hallId}/booths/bulk-update`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteFloorPlanBooth: (hallId, boothId) =>
     apiFetch(`/floor-plan/halls/${hallId}/booths/${boothId}`, { method: 'DELETE' }),
+
+  listSalesOrderBooths: (soId) => apiFetch(`/sales-orders/${soId}/booths`),
+  bulkSetSalesOrderBooths: (soId, payload) =>
+    apiFetch(`/sales-orders/${soId}/booths`, { method: 'PUT', body: JSON.stringify(payload) }),
+  acknowledgeSalesOrderBoothLoss: (soId) => apiFetch(`/sales-orders/${soId}/acknowledge-booth-loss`, { method: 'POST' }),
+  listOpportunityBooths: (oppId) => apiFetch(`/opportunities/${oppId}/booths`),
+  bulkSetOpportunityBooths: (oppId, payload) =>
+    apiFetch(`/opportunities/${oppId}/booths`, { method: 'PUT', body: JSON.stringify(payload) }),
+  acknowledgeOpportunityBoothLoss: (oppId) => apiFetch(`/opportunities/${oppId}/acknowledge-booth-loss`, { method: 'POST' }),
 
   listTableViews: (screen) => apiFetch(`/table-views?screen=${screen}`),
   createTableView: (payload) =>

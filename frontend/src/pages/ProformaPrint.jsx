@@ -4,29 +4,55 @@ import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
 import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
-const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmt = (n, ccy = 'MYR') => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-const line = { display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #eee' };
+// Booth-area items are priced per sqm, everything else is a flat per-unit
+// charge — same convention as InvoicePrint.jsx.
+const SQM_CODES = ['BAS', 'SSS', 'ESS', 'WOP', 'CUB', 'COR', 'LOD'];
+const unitFor = (code) => (SQM_CODES.includes(code) ? 'SQM' : 'EA');
 
 export default function ProformaPrint() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [salesOrder, setSalesOrder] = useState(null);
   const [company, setCompany] = useState(null);
+  const [items, setItems] = useState([]);
 
   useEffect(() => {
-    Promise.all([api.getSalesOrder(id), api.getCompany()]).then(([so, c]) => {
+    Promise.all([api.getSalesOrder(id), api.getCompany(), api.listSalesOrderItems(id)]).then(([so, c, it]) => {
       setSalesOrder(so.salesOrder);
       setCompany(c.company);
+      setItems(it.items);
     });
   }, [id]);
 
   if (!salesOrder || !company) return <p style={{ maxWidth: 700, margin: '40px auto' }}>Loading...</p>;
 
-  const same = salesOrder.billing_same_as_company;
+  const ccy = salesOrder.currency;
+  const lines = items.length > 0
+    ? items.map((it) => ({
+        description: it.description, qty: it.qty, unit: unitFor(it.sales_item_code),
+        unitPrice: it.unit_price, disc: Number(it.discount_amount || 0), preTax: Number(it.subtotal || 0) - Number(it.discount_amount || 0),
+        tax: Number(it.tax_amount || 0), taxCode: it.tax_code || '—', taxRate: Number(it.tax_rate_pct || 0),
+      }))
+    : [{
+        description: salesOrder.booth_type
+          ? `Exhibition Booth Space — ${salesOrder.booth_type}${salesOrder.total_sqm ? ` (${salesOrder.total_sqm} sqm)` : ''}`
+          : `Exhibition Booth Space — ${salesOrder.event_name}`,
+        qty: 1, unit: 'EA', unitPrice: salesOrder.total_foreign, disc: 0,
+        preTax: Number(salesOrder.total_foreign || 0), tax: 0, taxCode: '—', taxRate: 0,
+      }];
+  const subTotal = lines.reduce((s, l) => s + l.preTax, 0);
+  const taxTotal = lines.reduce((s, l) => s + l.tax, 0);
+  const grandTotal = subTotal + taxTotal;
+
+  const billToType = salesOrder.bill_to_type || 'BILLING';
+  const same = billToType === 'EXHIBITOR' || salesOrder.billing_same_as_company;
   const billTo = {
-    name: same ? salesOrder.company_name : (salesOrder.billing_name || salesOrder.company_name),
+    name: billToType === 'AGENT' ? (salesOrder.agent_name || salesOrder.company_name)
+      : billToType === 'EXHIBITOR' ? salesOrder.company_name
+      : (salesOrder.billing_name || salesOrder.company_name),
     address: salesOrder.billing_address || '—',
     postcodeCity: [same ? salesOrder.postcode : salesOrder.billing_postcode, same ? salesOrder.city : salesOrder.billing_city]
       .filter(Boolean).join(' '),
@@ -39,9 +65,6 @@ export default function ProformaPrint() {
   };
 
   const proformaNo = `PF-${id.slice(0, 8).toUpperCase()}`;
-  const description = salesOrder.booth_type
-    ? `Exhibition Booth Space — ${salesOrder.booth_type}${salesOrder.booth_sqm ? ` (${salesOrder.booth_sqm} sqm)` : ''}`
-    : `Exhibition Booth Space — ${salesOrder.event_name}`;
 
   return (
     <div className="page" style={{ maxWidth: 700, margin: '40px auto' }}>
@@ -81,23 +104,52 @@ export default function ProformaPrint() {
         <div>{billTo.email}</div>
       </div>
 
-      <table width="100%" cellPadding="6" style={{ marginBottom: 16 }}>
+      <table width="100%" cellPadding="6" style={{ marginBottom: 4, fontSize: 13 }}>
         <thead>
-          <tr style={{ textAlign: 'left', borderBottom: '2px solid #1B3A6B' }}>
+          <tr style={{ textAlign: 'left', borderBottom: '2px solid #1B3A6B', fontSize: 12 }}>
+            <th style={{ width: 28 }}>#</th>
             <th>Description</th>
-            <th style={{ textAlign: 'right' }}>Amount</th>
+            <th style={{ textAlign: 'right' }}>Qty</th>
+            <th>Unit</th>
+            <th style={{ textAlign: 'right' }}>Unit Price</th>
+            <th style={{ textAlign: 'right' }}>Disc.</th>
+            <th style={{ textAlign: 'right' }}>Total</th>
           </tr>
         </thead>
         <tbody>
-          <tr style={{ borderBottom: '1px solid #eee' }}>
-            <td>{description}</td>
-            <td style={{ textAlign: 'right' }}>{fmtMYR(salesOrder.total_myr)}</td>
-          </tr>
+          {lines.map((l, i) => (
+            <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+              <td>{i + 1}.</td>
+              <td>{l.description}</td>
+              <td style={{ textAlign: 'right' }}>{Number(l.qty)}</td>
+              <td>{l.unit}</td>
+              <td style={{ textAlign: 'right' }}>{fmt(l.unitPrice, ccy)}</td>
+              <td style={{ textAlign: 'right' }}>{l.disc > 0.004 ? fmt(l.disc, ccy) : ''}</td>
+              <td style={{ textAlign: 'right' }}>{fmt(l.preTax, ccy)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
 
-      <div style={{ ...line, fontWeight: 700, fontSize: 16, borderBottom: '2px solid #1B3A6B' }}>
-        <span>Total Due</span><span>{fmtMYR(salesOrder.total_myr)}</span>
+      {salesOrder.booth_no && <p style={{ fontSize: 12, color: '#5c6070' }}>Booth No: {salesOrder.booth_no}</p>}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+        <table cellPadding="4" style={{ minWidth: 260 }}>
+          <tbody>
+            <tr>
+              <td>Sub Total (Excluding Tax)</td>
+              <td style={{ textAlign: 'right', border: '1px solid #ccc', padding: '2px 8px' }}>{fmt(subTotal, ccy)}</td>
+            </tr>
+            <tr>
+              <td>Tax</td>
+              <td style={{ textAlign: 'right', border: '1px solid #ccc', padding: '2px 8px' }}>{fmt(taxTotal, ccy)}</td>
+            </tr>
+            <tr style={{ fontWeight: 700 }}>
+              <td>Total Due</td>
+              <td style={{ textAlign: 'right', border: '1px solid #ccc', padding: '2px 8px' }}>{fmt(grandTotal, ccy)}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <p style={{ fontSize: 12, color: '#5c6070', marginTop: 24 }}>

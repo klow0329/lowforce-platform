@@ -6,8 +6,16 @@
 const { pool } = require('../config/db');
 const { isElevated, visibilityClause } = require('../utils/visibility');
 
-// Booth-category line items carry sqm in qty; everything else (Corner,
-// Loading, MEP, Sponsorship...) is a count, not floor space.
+// "Total Sqm" is always sales_orders.total_sqm / opportunities.total_sqm —
+// the one field Sales actually enters for "how much physical space does
+// this deal cover" (see the booth mass-pickup feature). It is NOT derived
+// from summing category='BOOTH' line items' qty: Bare Space's qty already
+// equals the full total_sqm, and an Upgrade item (Shell Scheme, Enhanced
+// Shell...) mirrors that SAME sqm to price its surcharge on the same
+// space — summing both would double-count the floor space 2x on any
+// contract with an upgrade selected. Per-item sqm breakdowns (which upgrade
+// type covers how much of the total, for revenue/sqm analysis) still come
+// from line items — see getByItem, which is a by-item report, not a total.
 const EVENT_SCOPE = `IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)`;
 
 async function getOverview(req, res) {
@@ -15,7 +23,7 @@ async function getOverview(req, res) {
   if (!event_id) return res.status(400).json({ error: 'event_id is required.' });
   const params = [req.companyId, event_id];
 
-  const [targetR, achievedR, sqmR, invoicedR, collectedR, eventR, trendR, countsR] = await Promise.all([
+  const [targetR, achievedR, sqmR, invoicedR, collectedR, eventR, trendR, countsR, byTypeR, bySegmentR] = await Promise.all([
     pool.query(
       `SELECT COALESCE(SUM(target_myr),0) AS myr, COALESCE(SUM(target_sqm),0) AS sqm
        FROM sales_targets WHERE company_id = $1 AND event_id ${EVENT_SCOPE}`, params
@@ -27,11 +35,10 @@ async function getOverview(req, res) {
        WHERE company_id = $1 AND event_id ${EVENT_SCOPE} AND is_active = TRUE AND status = 'APPROVED'`, params
     ),
     pool.query(
-      `SELECT COALESCE(SUM(soi.qty),0) AS sqm
-       FROM sales_order_items soi
-       JOIN sales_orders so ON so.id = soi.sales_order_id
-       WHERE so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
-         AND so.is_active = TRUE AND so.status = 'APPROVED' AND soi.category = 'BOOTH'`, params
+      `SELECT COALESCE(SUM(total_sqm),0) AS sqm
+       FROM sales_orders
+       WHERE company_id = $1 AND event_id ${EVENT_SCOPE}
+         AND is_active = TRUE AND status = 'APPROVED'`, params
     ),
     pool.query(
       `SELECT COALESCE(SUM(amount_myr),0) AS myr FROM invoices
@@ -66,6 +73,29 @@ async function getOverview(req, res) {
        FROM opportunities o JOIN sales_stages st ON st.id = o.stage_id
        WHERE o.company_id = $1 AND o.event_id ${EVENT_SCOPE} AND o.is_active = TRUE`, params
     ),
+    // Local (Malaysia) vs International split — same MY-code rule as
+    // getByCountry/getByItem, rolled up into just the two buckets so the
+    // whole-company Overview page doesn't need its own By Country trip.
+    pool.query(
+      `SELECT CASE WHEN ex.country_code = 'MY' THEN 'LOCAL' ELSE 'INT' END AS type,
+              COUNT(*) AS contracts, COALESCE(SUM(so.total_myr),0) AS myr, COALESCE(SUM(so.total_sqm),0) AS sqm
+       FROM sales_orders so JOIN exhibitors ex ON ex.id = so.exhibitor_id
+       WHERE so.company_id = $1 AND so.event_id ${EVENT_SCOPE} AND so.is_active = TRUE AND so.status = 'APPROVED'
+       GROUP BY 1`, params
+    ),
+    // By Segment — an exhibitor can carry more than one segment tag, so its
+    // contract value counts toward each (same convention as any CRM segment
+    // breakdown); unsegmented exhibitors roll into "Unsegmented".
+    pool.query(
+      `SELECT COALESCE(sm.name, 'UNSEGMENTED') AS segment,
+              COUNT(DISTINCT so.id) AS contracts, COALESCE(SUM(so.total_myr),0) AS myr, COALESCE(SUM(so.total_sqm),0) AS sqm
+       FROM sales_orders so
+       JOIN exhibitors ex ON ex.id = so.exhibitor_id
+       LEFT JOIN exhibitor_segments es ON es.exhibitor_id = ex.id
+       LEFT JOIN segment_main sm ON sm.id = es.segment_main_id
+       WHERE so.company_id = $1 AND so.event_id ${EVENT_SCOPE} AND so.is_active = TRUE AND so.status = 'APPROVED'
+       GROUP BY 1 ORDER BY myr DESC`, params
+    ),
   ]);
 
   const target = targetR.rows[0];
@@ -96,6 +126,14 @@ async function getOverview(req, res) {
       collected: Number(r.collected),
     })),
     opportunities: { won: Number(countsR.rows[0].won), open: Number(countsR.rows[0].open) },
+    byType: (() => {
+      const byCode = Object.fromEntries(byTypeR.rows.map((r) => [r.type, r]));
+      const pick = (r) => ({ contracts: Number(r?.contracts || 0), myr: Number(r?.myr || 0), sqm: Number(r?.sqm || 0) });
+      return { local: pick(byCode.LOCAL), international: pick(byCode.INT) };
+    })(),
+    bySegment: bySegmentR.rows.map((r) => ({
+      segment: r.segment, contracts: Number(r.contracts), myr: Number(r.myr), sqm: Number(r.sqm),
+    })),
   });
 }
 
@@ -118,7 +156,7 @@ async function getBySalesperson(req, res) {
             COALESCE(t.target_sqm, 0)  AS target_sqm,
             COALESCE(c.contracted_myr, 0) AS contracted_myr,
             COALESCE(c.contracts, 0)      AS contracts,
-            COALESCE(sq.sqm, 0)           AS sqm,
+            COALESCE(c.sqm, 0)            AS sqm,
             COALESCE(f.invoiced_myr, 0)   AS invoiced_myr,
             COALESCE(f.collected_myr, 0)  AS collected_myr,
             COALESCE(pl.pipeline_myr, 0)  AS pipeline_myr,
@@ -127,17 +165,11 @@ async function getBySalesperson(req, res) {
      LEFT JOIN sales_targets t
        ON t.user_id = u.id AND t.company_id = $1 AND t.event_id ${EVENT_SCOPE}
      LEFT JOIN LATERAL (
-       SELECT SUM(so.total_myr) AS contracted_myr, COUNT(*) AS contracts
+       SELECT SUM(so.total_myr) AS contracted_myr, COUNT(*) AS contracts, SUM(so.total_sqm) AS sqm
        FROM sales_orders so
        WHERE so.salesperson_id = u.id AND so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
          AND so.is_active = TRUE AND so.status = 'APPROVED'
      ) c ON TRUE
-     LEFT JOIN LATERAL (
-       SELECT SUM(soi.qty) AS sqm
-       FROM sales_order_items soi JOIN sales_orders so ON so.id = soi.sales_order_id
-       WHERE so.salesperson_id = u.id AND so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
-         AND so.is_active = TRUE AND so.status = 'APPROVED' AND soi.category = 'BOOTH'
-     ) sq ON TRUE
      LEFT JOIN LATERAL (
        SELECT SUM(inv.amount_myr) AS invoiced_myr,
               SUM((SELECT COALESCE(SUM(pa.amount_myr),0) FROM payment_allocations pa WHERE pa.invoice_id = inv.id)) AS collected_myr
@@ -183,21 +215,79 @@ async function getByItem(req, res) {
 
   // Line totals are stored in the contract's currency — multiply by the
   // contract's exchange rate to report everything in MYR.
+  //
+  // A large share of approved contracts (legacy/bulk-imported before the
+  // itemized billing template existed — see database/migrations/050) carry
+  // a real total_myr/total_sqm on the contract itself but have NO
+  // sales_order_items rows at all, so a plain item-table query silently
+  // skips them entirely — this was making the whole report undercount by
+  // roughly two orders of magnitude, not overcount as previously assumed.
+  // The legacy CTE below folds each such contract in as a single synthetic
+  // "Bare Space" row (the one thing we can say for certain about an
+  // unitemized legacy contract, per the standing rule that Total Sqm is
+  // always Bare Space) so this report's totals actually reconcile with
+  // Overview's Total Sqm.
+  //
+  // An Upgrade item (Shell Scheme, Enhanced Shell, Walk-On Package, Custom
+  // Build) is priced on the SAME physical footprint as part of Bare Space,
+  // not extra space on top — an upgraded booth is no longer Bare Space, it
+  // IS the upgrade type now. So each contract's Bare Space row must be
+  // reduced by however much of its total_sqm has been reclassified into
+  // upgrade rows (upgrade_totals CTE), leaving only the genuinely-unupgraded
+  // portion as Bare Space. Without this, Bare Space's qty (which mirrors the
+  // contract's full total_sqm) plus every upgrade row's qty (which mirrors
+  // that same sqm again) double- or triple-counts the same floor space, and
+  // this report's grand total no longer reconciles with Overview's Total Sqm.
   const result = await pool.query(
-    `SELECT soi.sales_item_code AS code,
-            MIN(soi.description) AS description,
-            MIN(soi.category)    AS category,
-            SUM(CASE WHEN ex.country_code = 'MY' THEN soi.line_total * so.exchange_rate ELSE 0 END) AS myr_local,
-            SUM(CASE WHEN ex.country_code IS DISTINCT FROM 'MY' THEN soi.line_total * so.exchange_rate ELSE 0 END) AS myr_int,
-            SUM(CASE WHEN soi.category = 'BOOTH' AND ex.country_code = 'MY' THEN soi.qty ELSE 0 END) AS sqm_local,
-            SUM(CASE WHEN soi.category = 'BOOTH' AND ex.country_code IS DISTINCT FROM 'MY' THEN soi.qty ELSE 0 END) AS sqm_int
-     FROM sales_order_items soi
-     JOIN sales_orders so ON so.id = soi.sales_order_id
-     JOIN exhibitors ex ON ex.id = so.exhibitor_id
-     WHERE so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
-       AND so.is_active = TRUE AND so.status = 'APPROVED'
-     GROUP BY soi.sales_item_code
-     ORDER BY (SUM(soi.line_total * so.exchange_rate)) DESC`,
+    `WITH items AS (
+       SELECT soi.sales_order_id, soi.sales_item_code AS code, soi.description, soi.category, soi.line_total, soi.qty,
+              so.exchange_rate, ex.country_code
+       FROM sales_order_items soi
+       JOIN sales_orders so ON so.id = soi.sales_order_id
+       JOIN exhibitors ex ON ex.id = so.exhibitor_id
+       WHERE so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
+         AND so.is_active = TRUE AND so.status = 'APPROVED'
+     ),
+     upgrade_totals AS (
+       SELECT sales_order_id, SUM(qty) AS upgrade_sqm
+       FROM items WHERE category = 'BOOTH' AND code <> 'BAS'
+       GROUP BY sales_order_id
+     ),
+     per_item AS (
+       SELECT i.code, i.description, i.category, i.country_code,
+              CASE WHEN i.country_code = 'MY' THEN i.line_total * i.exchange_rate ELSE 0 END AS myr_local,
+              CASE WHEN i.country_code IS DISTINCT FROM 'MY' THEN i.line_total * i.exchange_rate ELSE 0 END AS myr_int,
+              CASE
+                WHEN i.category <> 'BOOTH' THEN 0
+                WHEN i.code = 'BAS' THEN GREATEST(i.qty - COALESCE(ut.upgrade_sqm, 0), 0)
+                ELSE i.qty
+              END AS booth_sqm
+       FROM items i
+       LEFT JOIN upgrade_totals ut ON ut.sales_order_id = i.sales_order_id
+     ),
+     legacy AS (
+       SELECT 'BAS' AS code, 'BARE SPACE (unitemized legacy contract)' AS description, 'BOOTH' AS category,
+              ex.country_code,
+              CASE WHEN ex.country_code = 'MY' THEN so.total_myr ELSE 0 END AS myr_local,
+              CASE WHEN ex.country_code IS DISTINCT FROM 'MY' THEN so.total_myr ELSE 0 END AS myr_int,
+              COALESCE(so.total_sqm, 0) AS booth_sqm
+       FROM sales_orders so
+       JOIN exhibitors ex ON ex.id = so.exhibitor_id
+       WHERE so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
+         AND so.is_active = TRUE AND so.status = 'APPROVED'
+         AND NOT EXISTS (SELECT 1 FROM sales_order_items x WHERE x.sales_order_id = so.id)
+     )
+     SELECT code, MIN(description) AS description, MIN(category) AS category,
+            SUM(myr_local) AS myr_local, SUM(myr_int) AS myr_int,
+            SUM(CASE WHEN country_code = 'MY' THEN booth_sqm ELSE 0 END) AS sqm_local,
+            SUM(CASE WHEN country_code IS DISTINCT FROM 'MY' THEN booth_sqm ELSE 0 END) AS sqm_int
+     FROM (
+       SELECT code, description, category, country_code, myr_local, myr_int, booth_sqm FROM per_item
+       UNION ALL
+       SELECT code, description, category, country_code, myr_local, myr_int, booth_sqm FROM legacy
+     ) t
+     GROUP BY code
+     ORDER BY (SUM(myr_local) + SUM(myr_int)) DESC`,
     [req.companyId, event_id]
   );
 
@@ -228,7 +318,7 @@ async function getPipeline(req, res) {
     `SELECT st.id, st.code, st.name, st.sort_order, st.is_won, st.is_lost,
             COUNT(o.id) AS count,
             COALESCE(SUM(o.estimated_value_myr),0) AS value_myr,
-            COALESCE(SUM(o.booth_sqm),0) AS sqm
+            COALESCE(SUM(o.total_sqm),0) AS sqm
      FROM sales_stages st
      LEFT JOIN opportunities o
        ON o.stage_id = st.id AND o.company_id = $1 AND o.event_id ${EVENT_SCOPE}
@@ -314,14 +404,10 @@ async function getByCountry(req, res) {
             COUNT(DISTINCT so.exhibitor_id) AS exhibitors,
             COUNT(*) AS contracts,
             COALESCE(SUM(so.total_myr),0) AS contracted_myr,
-            COALESCE(SUM(sq.sqm),0) AS sqm
+            COALESCE(SUM(so.total_sqm),0) AS sqm
      FROM sales_orders so
      JOIN exhibitors ex ON ex.id = so.exhibitor_id
      LEFT JOIN countries cy ON cy.code = ex.country_code
-     LEFT JOIN LATERAL (
-       SELECT SUM(soi.qty) AS sqm FROM sales_order_items soi
-       WHERE soi.sales_order_id = so.id AND soi.category = 'BOOTH'
-     ) sq ON TRUE
      WHERE so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
        AND so.is_active = TRUE AND so.status = 'APPROVED'
      GROUP BY ex.country_code, cy.name
@@ -428,4 +514,110 @@ async function saveTargets(req, res) {
   res.json({ ok: true });
 }
 
-module.exports = { getOverview, getBySalesperson, getByItem, getPipeline, getComparison, getByCountry, getByMonth, getTargets, saveTargets };
+// Agent commission — computed against actually CONFIRMED invoices (real
+// billed revenue in the invoice's own currency, not the contract's paper
+// estimate), per the user's own requirement. Each invoice is prorated
+// across booth vs non-booth (see EVENT_SCOPE-scoped item totals below)
+// using the contract's own item mix, since a milestone invoice is a
+// proportional slice of the whole contract rather than tied to specific
+// line items; the agent's own rate table (agent_commission_rates) is then
+// applied per category using whether the exhibitor is flagged repeat or
+// new. A contract with no line items at all (see getByItem's identical
+// note — a legacy/bulk-imported contract predating itemized billing) is
+// treated as 100% Bare Space, the one thing known for certain about it.
+async function getAgentCommission(req, res) {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id is required.' });
+
+  const invoicesResult = await pool.query(
+    `SELECT inv.id AS invoice_id, inv.invoice_no, inv.amount_foreign, inv.currency, inv.amount_myr,
+            so.id AS sales_order_id, so.total_foreign AS contract_total_foreign,
+            ex.id AS exhibitor_id, ex.company_name AS exhibitor_name, ex.is_repeat_exhibitor,
+            ex.agent_id, ag.name AS agent_name
+     FROM invoices inv
+     JOIN sales_orders so ON so.id = inv.sales_order_id
+     JOIN exhibitors ex ON ex.id = inv.exhibitor_id
+     JOIN agents ag ON ag.id = ex.agent_id
+     WHERE inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE}
+       AND inv.status = 'CONFIRMED' AND ex.agent_id IS NOT NULL
+     ORDER BY ag.name, ex.company_name, inv.invoice_date`,
+    [req.companyId, event_id]
+  );
+
+  const soIds = [...new Set(invoicesResult.rows.map((r) => r.sales_order_id))];
+  const itemsResult = soIds.length > 0
+    ? await pool.query(
+        `SELECT sales_order_id, category, SUM(line_total) AS total
+         FROM sales_order_items WHERE sales_order_id = ANY($1::uuid[])
+         GROUP BY sales_order_id, category`,
+        [soIds]
+      )
+    : { rows: [] };
+  const ratesResult = await pool.query(
+    `SELECT agent_id, category, exhibitor_tier, rate_pct FROM agent_commission_rates WHERE company_id = $1`,
+    [req.companyId]
+  );
+
+  const categoryTotalsBySo = {};
+  for (const row of itemsResult.rows) {
+    categoryTotalsBySo[row.sales_order_id] = categoryTotalsBySo[row.sales_order_id] || {};
+    categoryTotalsBySo[row.sales_order_id][row.category] = Number(row.total);
+  }
+  const rateMap = {};
+  for (const r of ratesResult.rows) {
+    rateMap[r.agent_id] = rateMap[r.agent_id] || {};
+    rateMap[r.agent_id][r.category] = rateMap[r.agent_id][r.category] || {};
+    rateMap[r.agent_id][r.category][r.exhibitor_tier] = Number(r.rate_pct);
+  }
+
+  const rows = [];
+  for (const inv of invoicesResult.rows) {
+    let categoryTotals = categoryTotalsBySo[inv.sales_order_id];
+    let contractTotal;
+    if (!categoryTotals || Object.keys(categoryTotals).length === 0) {
+      contractTotal = Number(inv.contract_total_foreign) || 0;
+      categoryTotals = { BOOTH: contractTotal };
+    } else {
+      contractTotal = Object.values(categoryTotals).reduce((s, v) => s + v, 0);
+    }
+    if (!(contractTotal > 0)) continue;
+
+    const tier = inv.is_repeat_exhibitor ? 'REPEAT' : 'NEW';
+    const invoiceAmount = Number(inv.amount_foreign);
+    let commissionForeign = 0;
+    const breakdown = [];
+    for (const [category, catTotal] of Object.entries(categoryTotals)) {
+      const proportion = catTotal / contractTotal;
+      const catInvoiceAmount = invoiceAmount * proportion;
+      const rate = rateMap[inv.agent_id]?.[category]?.[tier] || 0;
+      const catCommission = catInvoiceAmount * (rate / 100);
+      if (rate > 0) breakdown.push({ category, amount_foreign: catInvoiceAmount, rate_pct: rate, commission_foreign: catCommission });
+      commissionForeign += catCommission;
+    }
+
+    rows.push({
+      invoice_id: inv.invoice_id, invoice_no: inv.invoice_no,
+      agent_id: inv.agent_id, agent_name: inv.agent_name,
+      exhibitor_id: inv.exhibitor_id, exhibitor_name: inv.exhibitor_name,
+      is_repeat_exhibitor: inv.is_repeat_exhibitor,
+      currency: inv.currency, invoice_amount: invoiceAmount,
+      commission: commissionForeign, breakdown,
+    });
+  }
+
+  // Subtotal per agent, kept in each invoice's own currency (never
+  // converted) — the user's own requirement, since an agent is paid in
+  // whatever currency their exhibitors were actually billed in.
+  const byAgent = {};
+  for (const r of rows) {
+    if (!byAgent[r.agent_id]) byAgent[r.agent_id] = { agent_id: r.agent_id, agent_name: r.agent_name, byCurrency: {} };
+    byAgent[r.agent_id].byCurrency[r.currency] = (byAgent[r.agent_id].byCurrency[r.currency] || 0) + r.commission;
+  }
+
+  res.json({ rows, agentSummary: Object.values(byAgent) });
+}
+
+module.exports = {
+  getOverview, getBySalesperson, getByItem, getPipeline, getComparison, getByCountry, getByMonth, getTargets, saveTargets,
+  getAgentCommission,
+};

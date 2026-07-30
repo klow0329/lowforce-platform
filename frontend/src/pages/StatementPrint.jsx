@@ -5,6 +5,10 @@ import { downloadPdf } from '../utils/pdf';
 import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// A running balance can go negative — e.g. a Credit Note lands against an
+// invoice that's already been paid in full — which reads as a confusing
+// "RM -500.00" rather than the credit it actually is.
+const fmtBalance = (n) => (Number(n) < 0 ? `Credit ${fmtMYR(Math.abs(n))}` : fmtMYR(n));
 
 // "Email Statement" opens a draft in the user's own mail client with the
 // customer's address and a subject/body pre-filled — no API/OAuth setup
@@ -85,7 +89,7 @@ export default function StatementPrint() {
                 <td>{a.label}</td>
                 <td style={{ textAlign: 'right' }}>{a.debit > 0 ? fmtMYR(a.debit) : '—'}</td>
                 <td style={{ textAlign: 'right' }}>{a.credit > 0 ? fmtMYR(a.credit) : '—'}</td>
-                <td style={{ textAlign: 'right' }}>{fmtMYR(a.balance)}</td>
+                <td style={{ textAlign: 'right' }}>{fmtBalance(a.balance)}</td>
               </tr>
             ))}
             {activities.length === 0 && <tr><td colSpan={5}>No activity yet.</td></tr>}
@@ -96,7 +100,7 @@ export default function StatementPrint() {
           {creditBalance > 0.01 && (
             <div><strong>Available Credit:</strong> {fmtMYR(creditBalance)}</div>
           )}
-          <div style={{ fontWeight: 700 }}><strong>Total Outstanding:</strong> {fmtMYR(totalOutstanding)}</div>
+          <div style={{ fontWeight: 700 }}><strong>Total Outstanding:</strong> {fmtBalance(totalOutstanding)}</div>
         </div>
         <FooterBand company={company} />
       </div>

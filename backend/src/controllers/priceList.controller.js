@@ -13,6 +13,7 @@ async function listPriceList(req, res) {
   const result = await pool.query(
     `SELECT pl.id, pl.booth_type, pl.sales_item_code, pl.description, pl.category,
             pl.unit_price_myr, pl.unit_price_usd, pl.default_tax_code_id,
+            pl.is_upgrade_option, pl.is_addon_item, pl.pricing_mode, pl.pricing_pct, pl.is_wide_row,
             tc.code AS default_tax_code
      FROM price_list pl
      LEFT JOIN tax_codes tc ON tc.id = pl.default_tax_code_id
@@ -25,18 +26,25 @@ async function listPriceList(req, res) {
 }
 
 async function createPriceItem(req, res) {
-  const { event_id, booth_type, sales_item_code, description, category, unit_price_myr, unit_price_usd, default_tax_code_id } = req.body;
+  const {
+    event_id, booth_type, sales_item_code, description, category, unit_price_myr, unit_price_usd, default_tax_code_id,
+    is_upgrade_option, is_addon_item, pricing_mode, pricing_pct, is_wide_row,
+  } = req.body;
 
   if (!event_id || !booth_type || !sales_item_code) {
     return res.status(400).json({ error: 'event_id, booth_type and sales_item_code are required.' });
   }
 
   const result = await pool.query(
-    `INSERT INTO price_list (company_id, event_id, booth_type, sales_item_code, description, category, unit_price_myr, unit_price_usd, default_tax_code_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO price_list (
+       company_id, event_id, booth_type, sales_item_code, description, category, unit_price_myr, unit_price_usd, default_tax_code_id,
+       is_upgrade_option, is_addon_item, pricing_mode, pricing_pct, is_wide_row
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING id`,
     [req.companyId, event_id, booth_type, sales_item_code,
-     description || null, category || 'OTHER', unit_price_myr || null, unit_price_usd || null, default_tax_code_id || null]
+     description || null, category || 'OTHER', unit_price_myr || null, unit_price_usd || null, default_tax_code_id || null,
+     !!is_upgrade_option, !!is_addon_item, pricing_mode || 'FIXED', pricing_pct || null, !!is_wide_row]
   );
 
   res.status(201).json({ priceItem: { id: result.rows[0].id } });
@@ -44,7 +52,10 @@ async function createPriceItem(req, res) {
 
 async function updatePriceItem(req, res) {
   const fields = {};
-  for (const field of ['booth_type', 'sales_item_code', 'description', 'category', 'unit_price_myr', 'unit_price_usd', 'default_tax_code_id']) {
+  for (const field of [
+    'booth_type', 'sales_item_code', 'description', 'category', 'unit_price_myr', 'unit_price_usd', 'default_tax_code_id',
+    'is_upgrade_option', 'is_addon_item', 'pricing_mode', 'pricing_pct', 'is_wide_row',
+  ]) {
     if (field in req.body) fields[field] = req.body[field] === '' ? null : req.body[field];
   }
   const columns = Object.keys(fields);

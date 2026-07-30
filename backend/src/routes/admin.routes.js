@@ -7,6 +7,7 @@ const {
   listUsers, createUser, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
   listEvents, createEvent, updateEvent,
 } = require('../controllers/admin.controller');
+const { archiveRecord, restoreRecord, listArchived } = require('../controllers/archive.controller');
 
 router.use(attachTenant);
 router.use(requireAdmin); // everything below is admin-only
@@ -22,5 +23,11 @@ router.get('/roles', asyncHandler(listRoles));
 router.get('/events', asyncHandler(listEvents));
 router.post('/events', asyncHandler(createEvent));
 router.put('/events/:id', asyncHandler(updateEvent));
+
+// Reversible archive/delete — :type is one of exhibitor/opportunity/
+// contract/invoice/creditnote/payment (see archive.controller.js's ENTITIES).
+router.get('/archive/:type', asyncHandler(listArchived));
+router.post('/archive/:type/:id', asyncHandler(archiveRecord));
+router.post('/archive/:type/:id/restore', asyncHandler(restoreRecord));
 
 module.exports = router;

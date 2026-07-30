@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { computeChanges, confirmSave, ChangesBanner, fieldsetStyle } from '../utils/recordForm';
+import { setUnsavedChanges } from '../utils/unsavedChanges';
+import DeleteRecordButton from '../components/DeleteRecordButton';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
 const fmt = (n) => `RM ${Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtCcy = (n, ccy) => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // A payment is money received from a customer, not tied to one invoice —
 // it gets allocated across whichever of their open invoices it's for (in
@@ -15,8 +18,12 @@ const fmt = (n) => `RM ${Number(n || 0).toLocaleString('en-MY', { minimumFractio
 // unallocated), and an agent's lump sum against many invoices without
 // saying which up front (allocate now, or come back and allocate more
 // later via addPaymentAllocation).
-export default function PaymentDetail() {
+export default function PaymentDetail({ user }) {
   const { id } = useParams();
+  // Editing or removing an already-recorded payment is Finance-only (see
+  // payments.controller.js's updatePayment/deletePayment) — recording a
+  // NEW one stays open to whoever's on the Invoice/Exhibitor screen.
+  const canEditPayment = user?.role_code === 'FIN';
   const isNew = !id;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -25,11 +32,20 @@ export default function PaymentDetail() {
   const exhibitorName = searchParams.get('exhibitor_name') || '';
   const eventId = searchParams.get('event_id') || '';
   const originInvoiceId = searchParams.get('invoice_id') || '';
-  const originBalanceDue = searchParams.get('balance_due') || '';
+  const originBalanceDueForeign = searchParams.get('balance_due_foreign') || searchParams.get('balance_due') || '';
+  const originCurrency = searchParams.get('currency') || 'MYR';
+  const originExchangeRate = searchParams.get('exchange_rate') || '1';
+  // A payment reached from a specific invoice locks to that invoice's own
+  // currency — reached generically from the Exhibitor screen, Finance picks
+  // it (defaulting MYR), since a payment can only ever be in one currency
+  // (see payments.controller.js's createPayment).
+  const currencyLocked = !!originInvoiceId;
 
   const [form, setForm] = useState({
     payment_date: new Date().toISOString().slice(0, 10),
-    amount_myr: originBalanceDue,
+    currency: originCurrency,
+    exchange_rate: originCurrency === 'USD' ? originExchangeRate : '1',
+    amount_foreign: originBalanceDueForeign,
     payment_method: '',
     bank_ref: '',
   });
@@ -48,32 +64,38 @@ export default function PaymentDetail() {
     if (!isNew) return;
     if (!exhibitorId) return;
     api.listInvoices({ exhibitor_id: exhibitorId }).then(({ invoices }) => {
-      const open = invoices.filter((inv) => Number(inv.balance_due) > 0.01);
+      const open = invoices.filter((inv) => Number(inv.balance_due) > 0.01 && inv.currency === form.currency);
       setOpenInvoices(open);
       if (originInvoiceId) {
         const originInv = open.find((inv) => inv.id === originInvoiceId);
         if (originInv) {
-          setAllocations({ [originInvoiceId]: Math.min(Number(originInv.balance_due), Number(originBalanceDue) || Number(originInv.balance_due)) });
+          setAllocations({
+            [originInvoiceId]: Math.min(Number(originInv.balance_due_foreign), Number(originBalanceDueForeign) || Number(originInv.balance_due_foreign)),
+          });
         }
       }
     });
-  }, [isNew, exhibitorId, originInvoiceId, originBalanceDue]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, exhibitorId, originInvoiceId, originBalanceDueForeign, form.currency]);
 
   // Same open-invoices list, fetched again once we know the payment's own
   // customer — feeds the invoice picker in the "allocate more later" form.
+  // Filtered to the payment's own currency, same rule as new-payment above.
   useEffect(() => {
     if (isNew || !payment?.exhibitor_id) return;
     api.listInvoices({ exhibitor_id: payment.exhibitor_id }).then(({ invoices }) => {
-      setOpenInvoices(invoices.filter((inv) => Number(inv.balance_due) > 0.01));
+      setOpenInvoices(invoices.filter((inv) => Number(inv.balance_due) > 0.01 && inv.currency === payment.currency));
     });
-  }, [isNew, payment?.exhibitor_id]);
+  }, [isNew, payment?.exhibitor_id, payment?.currency]);
 
   function loadPayment() {
     if (isNew) return;
     api.getPayment(id).then(({ payment }) => {
       const loaded = {
         payment_date: payment.payment_date || '',
-        amount_myr: payment.amount_myr,
+        currency: payment.currency,
+        exchange_rate: payment.exchange_rate,
+        amount_foreign: payment.amount_foreign,
         payment_method: payment.payment_method || '',
         bank_ref: payment.bank_ref || '',
       };
@@ -95,20 +117,30 @@ export default function PaymentDetail() {
   }
 
   const allocatedTotal = Object.values(allocations).reduce((sum, v) => sum + (Number(v) || 0), 0);
-  const unallocated = (Number(form.amount_myr) || 0) - allocatedTotal;
+  const unallocated = (Number(form.amount_foreign) || 0) - allocatedTotal;
 
   const changes = computeChanges(original, form);
+
+  // Warns before the user navigates away (nav bar links, tab close/refresh)
+  // with unsaved edits — cleared on unmount so it never leaks onto the next
+  // page after a confirmed discard or a successful Save.
+  useEffect(() => {
+    const isDirty = editing && (isNew ? Boolean(form.amount_foreign) : changes.length > 0);
+    setUnsavedChanges(isDirty, 'You have unsaved payment changes that will be lost if you leave. Continue?');
+    return () => setUnsavedChanges(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, isNew, changes.length, form.amount_foreign]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
     if (isNew) {
-      if (!window.confirm(`Record a payment of ${fmt(form.amount_myr)} from ${exhibitorName}?`)) return;
+      if (!window.confirm(`Record a payment of ${fmtCcy(form.amount_foreign, form.currency)} from ${exhibitorName}?`)) return;
       setSaving(true);
       try {
         const allocList = Object.entries(allocations)
           .filter(([, amt]) => Number(amt) > 0)
-          .map(([invoice_id, amt]) => ({ invoice_id, amount_myr: Number(amt) }));
+          .map(([invoice_id, amt]) => ({ invoice_id, amount_foreign: Number(amt) }));
         const { payment } = await api.createPayment({
           exhibitor_id: exhibitorId, event_id: eventId || null,
           ...form, allocations: allocList,
@@ -138,7 +170,7 @@ export default function PaymentDetail() {
     e.preventDefault();
     setError('');
     try {
-      await api.addPaymentAllocation(id, { invoice_id: newAllocInvoiceId, amount_myr: newAllocAmount });
+      await api.addPaymentAllocation(id, { invoice_id: newAllocInvoiceId, amount_foreign: newAllocAmount });
       setNewAllocInvoiceId('');
       setNewAllocAmount('');
       loadPayment();
@@ -158,6 +190,17 @@ export default function PaymentDetail() {
     }
   }
 
+  async function handleDeletePayment() {
+    if (!window.confirm(`Delete payment ${payment.receipt_no}? Every invoice it's allocated to reopens for that amount.`)) return;
+    setError('');
+    try {
+      await api.deletePayment(id);
+      navigate(backHref);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   if (loading) return <p style={{ maxWidth: 600, margin: '40px auto' }}>Loading...</p>;
 
   if (isNew && !exhibitorId) {
@@ -165,6 +208,15 @@ export default function PaymentDetail() {
       <div className="page" style={{ maxWidth: 600, margin: '40px auto' }}>
         <h2>Record Payment</h2>
         <p style={{ color: 'red' }}>No customer specified — record a payment from an Invoice or an Exhibitor's screen.</p>
+      </div>
+    );
+  }
+
+  if (isNew && !canEditPayment) {
+    return (
+      <div className="page" style={{ maxWidth: 600, margin: '40px auto' }}>
+        <h2>Record Payment</h2>
+        <p style={{ color: 'red' }}>Only Finance can record a payment.</p>
       </div>
     );
   }
@@ -180,10 +232,12 @@ export default function PaymentDetail() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2>{isNew ? 'Record Payment' : `Payment ${payment.receipt_no}`}</h2>
         <div style={{ display: 'flex', gap: 8 }}>
-          {!isNew && !editing && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          {!isNew && !editing && canEditPayment && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
+          {!isNew && canEditPayment && <button type="button" onClick={handleDeletePayment} style={{ color: '#B23A3A' }}>Delete</button>}
           <button type="button" onClick={() => navigate(backHref)}>Back</button>
         </div>
       </div>
+      {error && <p style={{ color: 'red', fontWeight: 600 }}>{error}</p>}
 
       {(exhibitorName || payment?.company_name) && (
         <p style={{ fontSize: 13, color: '#5c6070' }}>From {exhibitorName || payment.company_name}</p>
@@ -194,8 +248,25 @@ export default function PaymentDetail() {
           <label style={label}>Payment Date</label>
           <input type="date" style={inputStyle} value={form.payment_date} onChange={(e) => set('payment_date', e.target.value)} />
 
-          <label style={label}>Amount Received (MYR)</label>
-          <input type="number" step="0.01" style={inputStyle} value={form.amount_myr} onChange={(e) => set('amount_myr', e.target.value)} />
+          <label style={label}>Currency</label>
+          {currencyLocked || !isNew ? (
+            <div style={{ padding: 8, background: '#F5F6FA', borderRadius: 4 }}>{form.currency}</div>
+          ) : (
+            <select style={inputStyle} value={form.currency} onChange={(e) => set('currency', e.target.value)}>
+              <option value="MYR">MYR</option>
+              <option value="USD">USD</option>
+            </select>
+          )}
+
+          <label style={label}>Amount Received ({form.currency})</label>
+          <input type="number" step="0.01" style={inputStyle} value={form.amount_foreign} onChange={(e) => set('amount_foreign', e.target.value)} />
+
+          {form.currency === 'USD' && (
+            <>
+              <label style={label}>Exchange Rate (1 USD = ? MYR)</label>
+              <input type="number" step="0.0001" style={inputStyle} value={form.exchange_rate} onChange={(e) => set('exchange_rate', e.target.value)} />
+            </>
+          )}
 
           <label style={label}>Payment Method</label>
           <select style={inputStyle} value={form.payment_method} onChange={(e) => set('payment_method', e.target.value)}>
@@ -204,6 +275,7 @@ export default function PaymentDetail() {
             <option value="Cheque">Cheque</option>
             <option value="Cash">Cash</option>
             <option value="Credit Card">Credit Card</option>
+            <option value="Contra">Contra</option>
           </select>
 
           <label style={label}>Bank Reference</label>
@@ -230,7 +302,7 @@ export default function PaymentDetail() {
                   {openInvoices.map((inv) => (
                     <tr key={inv.id} style={{ borderBottom: '1px solid #eee' }}>
                       <td>{inv.invoice_no}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(inv.balance_due)}</td>
+                      <td style={{ textAlign: 'right' }}>{fmtCcy(inv.balance_due_foreign, inv.currency)}</td>
                       <td style={{ textAlign: 'right' }}>
                         <input
                           type="number" step="0.01" style={{ width: 110, textAlign: 'right' }}
@@ -244,9 +316,9 @@ export default function PaymentDetail() {
               </table>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 24, fontSize: 13, fontWeight: 600, marginTop: 8 }}>
-              <span>Allocated: {fmt(allocatedTotal)}</span>
+              <span>Allocated: {fmtCcy(allocatedTotal, form.currency)}</span>
               <span style={{ color: unallocated < -0.01 ? '#c83c3c' : unallocated > 0.01 ? '#8a6d1a' : 'inherit' }}>
-                Unallocated (credit): {fmt(unallocated)}
+                Unallocated (credit): {fmtCcy(unallocated, form.currency)}
               </span>
             </div>
             {unallocated < -0.01 && (
@@ -255,7 +327,6 @@ export default function PaymentDetail() {
           </div>
         )}
 
-        {error && <p style={{ color: 'red' }}>{error}</p>}
         {editing && !isNew && <ChangesBanner changes={changes} />}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
@@ -268,6 +339,9 @@ export default function PaymentDetail() {
             <button type="button" onClick={() => navigate(`/payments/${id}/print`)} style={{ padding: '8px 16px' }}>
               View / Print Receipt
             </button>
+          )}
+          {!isNew && user?.role_code === 'ADM' && (
+            <DeleteRecordButton type="payment" id={id} label="payment" onDeleted={() => navigate(backHref)} />
           )}
         </div>
       </form>
@@ -290,7 +364,7 @@ export default function PaymentDetail() {
               {payment.allocations.map((a) => (
                 <tr key={a.id} style={{ borderBottom: '1px solid #eee' }}>
                   <td><a href={`/invoices/${a.invoice_id}`} onClick={(e) => { e.preventDefault(); navigate(`/invoices/${a.invoice_id}`); }}>{a.invoice_no}</a></td>
-                  <td style={{ textAlign: 'right' }}>{fmt(a.amount_myr)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtCcy(a.amount_foreign, payment.currency)}</td>
                   <td style={{ textAlign: 'right' }}><button type="button" onClick={() => handleRemoveAllocation(a.id)}>Remove</button></td>
                 </tr>
               ))}
@@ -298,23 +372,23 @@ export default function PaymentDetail() {
             </tbody>
           </table>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 24, fontSize: 13, fontWeight: 600, marginTop: 8 }}>
-            <span>Allocated: {fmt(payment.allocated_myr)}</span>
-            <span style={{ color: payment.unallocated_myr > 0.01 ? '#8a6d1a' : 'inherit' }}>Unallocated (credit): {fmt(payment.unallocated_myr)}</span>
+            <span>Allocated: {fmtCcy(payment.allocated_foreign, payment.currency)}</span>
+            <span style={{ color: payment.unallocated_foreign > 0.01 ? '#8a6d1a' : 'inherit' }}>Unallocated (credit): {fmtCcy(payment.unallocated_foreign, payment.currency)}</span>
           </div>
 
-          {payment.unallocated_myr > 0.01 && (
+          {payment.unallocated_foreign > 0.01 && (
             <form onSubmit={handleAddAllocation} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginTop: 12, border: '1px solid #ddd', borderRadius: 8, padding: 12 }}>
               <div style={{ flex: 1 }}>
                 <label style={label}>Allocate to Invoice</label>
                 <select style={inputStyle} value={newAllocInvoiceId} onChange={(e) => setNewAllocInvoiceId(e.target.value)} required>
                   <option value="">— Select —</option>
                   {openInvoices.map((inv) => (
-                    <option key={inv.id} value={inv.id}>{inv.invoice_no} ({fmt(inv.balance_due)} due)</option>
+                    <option key={inv.id} value={inv.id}>{inv.invoice_no} ({fmtCcy(inv.balance_due_foreign, inv.currency)} due)</option>
                   ))}
                 </select>
               </div>
               <div style={{ width: 120 }}>
-                <label style={label}>Amount</label>
+                <label style={label}>Amount ({payment.currency})</label>
                 <input type="number" step="0.01" style={inputStyle} value={newAllocAmount} onChange={(e) => setNewAllocAmount(e.target.value)} required />
               </div>
               <button type="submit">Allocate</button>

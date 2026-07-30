@@ -26,9 +26,18 @@ export default function ContractPrint() {
   const isCoex = salesOrder.contract_type === 'COEX';
   const docTitle = isCoex ? 'CO-EXHIBITOR CONTRACT' : 'EXHIBITION SPACE CONTRACT';
 
-  const same = salesOrder.billing_same_as_company;
+  // Which name prints as the recipient — chosen on the Contract screen (see
+  // SalesOrderDetail.jsx's Bill To dropdown), not just derived from the
+  // exhibitor's billing_same_as_company flag. EXHIBITOR skips the separate
+  // "Bill To" column entirely below (redundant with the Exhibitor column);
+  // BILLING/AGENT still fall back to the exhibitor's own address/contact
+  // fields, since neither billing_name nor an agent carries a full address.
+  const billToType = salesOrder.bill_to_type || 'BILLING';
+  const same = billToType === 'EXHIBITOR' || salesOrder.billing_same_as_company;
   const billTo = {
-    name: same ? salesOrder.company_name : (salesOrder.billing_name || salesOrder.company_name),
+    name: billToType === 'AGENT' ? (salesOrder.agent_name || salesOrder.company_name)
+      : billToType === 'EXHIBITOR' ? salesOrder.company_name
+      : (salesOrder.billing_name || salesOrder.company_name),
     address: salesOrder.billing_address || '—',
     postcodeCity: [same ? salesOrder.postcode : salesOrder.billing_postcode, same ? salesOrder.city : salesOrder.billing_city]
       .filter(Boolean).join(' '),
@@ -74,18 +83,20 @@ export default function ContractPrint() {
           <div>{salesOrder.contact1_name || '—'}</div>
           <div>{salesOrder.contact1_email || '—'}</div>
         </div>
-        <div style={{ flex: 1 }}>
-          <h4>Bill To</h4>
-          <div>{billTo.name}</div>
-          <div>{billTo.address}</div>
-          {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
-          <div>{billTo.country}</div>
-          {billTo.regNo && <div>Co. Reg No: {billTo.regNo}</div>}
-          {billTo.tinNo && <div>TIN No: {billTo.tinNo}</div>}
-          {billTo.sstNo && <div>SST No: {billTo.sstNo}</div>}
-          {billTo.contactNo && <div>Contact: {billTo.contactNo}</div>}
-          <div>{billTo.email}</div>
-        </div>
+        {billToType !== 'EXHIBITOR' && (
+          <div style={{ flex: 1 }}>
+            <h4>Bill To</h4>
+            <div>{billTo.name}</div>
+            <div>{billTo.address}</div>
+            {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
+            <div>{billTo.country}</div>
+            {billTo.regNo && <div>Co. Reg No: {billTo.regNo}</div>}
+            {billTo.tinNo && <div>TIN No: {billTo.tinNo}</div>}
+            {billTo.sstNo && <div>SST No: {billTo.sstNo}</div>}
+            {billTo.contactNo && <div>Contact: {billTo.contactNo}</div>}
+            <div>{billTo.email}</div>
+          </div>
+        )}
       </div>
 
       <h4>Contract Details</h4>
@@ -95,7 +106,7 @@ export default function ContractPrint() {
       <div style={line}><span>Hall / Booth No</span><span>{[salesOrder.hall, salesOrder.booth_no].filter(Boolean).join(' / ') || '—'}</span></div>
       <div style={line}><span>Booth Type</span><span>{salesOrder.booth_type || '—'}</span></div>
       <div style={line}><span>Dimension</span><span>{salesOrder.dimension || '—'}</span></div>
-      <div style={line}><span>Booth Area</span><span>{salesOrder.booth_sqm ? `${salesOrder.booth_sqm} sqm` : '—'}</span></div>
+      <div style={line}><span>Booth Area</span><span>{salesOrder.total_sqm ? `${salesOrder.total_sqm} sqm` : '—'}</span></div>
       <div style={line}><span>Salesperson</span><span>{salesOrder.salesperson_name || '—'}</span></div>
       {salesOrder.discount_type && (
         <div style={line}>
@@ -121,6 +132,13 @@ export default function ContractPrint() {
           <div style={{ marginTop: 32, borderTop: '1px solid #333', paddingTop: 4 }}>Date</div>
         </div>
       </div>
+
+      {company.contract_terms && (
+        <div style={{ pageBreakBefore: 'always', marginTop: 32 }}>
+          <h4>Terms &amp; Conditions</h4>
+          <div style={{ fontSize: 12, whiteSpace: 'pre-line', color: '#333' }}>{company.contract_terms}</div>
+        </div>
+      )}
       <FooterBand company={company} />
       </div>
     </div>

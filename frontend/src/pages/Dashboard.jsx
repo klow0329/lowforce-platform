@@ -41,6 +41,59 @@ export default function Dashboard() {
     api.acknowledgePaymentAllocation(allocationId).then(loadTasks);
   }
 
+  function handleAcknowledgeInvoiceConfirm(invoiceId) {
+    api.acknowledgeInvoiceConfirm(invoiceId).then(loadTasks);
+  }
+
+  function handleAcknowledgeCnConfirm(cnId) {
+    api.acknowledgeCnConfirm(cnId).then(loadTasks);
+  }
+
+  function handleAcknowledgeContractApproval(soId) {
+    api.acknowledgeSalesOrderApproval(soId).then(loadTasks);
+  }
+
+  // Acknowledging doesn't just dismiss the notification — it hands the user
+  // straight to the Floor Plan's picker for that record (pre-loaded with
+  // whatever booths it still legitimately holds, capped at its own
+  // Total Sqm) so picking a replacement is the very next thing they do.
+  // If they don't actually commit a new pick there, the persistent banner
+  // on the record itself (see OpportunityDetail/SalesOrderDetail's
+  // needs_booth_reallocation) keeps reminding them until they do.
+  async function handleAcknowledgeBoothLoss(t) {
+    const isContract = t.record_type === 'sales_order';
+    const ackFn = isContract ? api.acknowledgeSalesOrderBoothLoss : api.acknowledgeOpportunityBoothLoss;
+    const getFn = isContract ? api.getSalesOrder : api.getOpportunity;
+    const listBoothsFn = isContract ? api.listSalesOrderBooths : api.listOpportunityBooths;
+    const [, recordResult, boothsResult] = await Promise.all([
+      ackFn(t.record_id), getFn(t.record_id), listBoothsFn(t.record_id),
+    ]);
+    const record = isContract ? recordResult.salesOrder : recordResult.opportunity;
+    navigate('/floor-plan', {
+      state: {
+        pickFor: {
+          mode: 'cap',
+          recordType: isContract ? 'contract' : 'opportunity',
+          recordId: t.record_id,
+          returnPath: isContract ? `/sales-orders/${t.record_id}` : `/opportunities/${t.record_id}`,
+          exhibitorName: t.exhibitor_name,
+          preSelectedBooths: boothsResult.booths || [],
+          cap: record.total_sqm || null,
+        },
+      },
+    });
+    loadTasks();
+  }
+
+  function handleAcknowledgePaymentProof(invoiceId, attachmentId) {
+    api.acknowledgeInvoicePaymentProof(invoiceId, attachmentId).then(loadTasks);
+  }
+
+  function handleIssueScheduled(invoiceId) {
+    if (!window.confirm('Issue this milestone invoice now? It gets a real invoice number and moves to Finance for confirmation.')) return;
+    api.issueScheduledInvoice(invoiceId).then(loadTasks);
+  }
+
   if (eventLoading || (selectedEventId && !data)) return <p style={{ maxWidth: 900, margin: '40px auto' }}>Loading...</p>;
   if (!selectedEventId) {
     return <p style={{ maxWidth: 900, margin: '40px auto' }}>No events set up yet — create one in Admin first.</p>;
@@ -54,7 +107,7 @@ export default function Dashboard() {
     })),
     ...tasks.pendingApprovals.map((t) => ({
       key: `so-${t.id}`, urgency: t.urgency,
-      label: `Approve contract — ${t.exhibitor_name}`,
+      label: `Approve — ${t.exhibitor_name} (${t.submit_reason || 'new contract'})`,
       meta: 'Pending approval', href: `/sales-orders/${t.id}`,
     })),
     ...tasks.outstandingInvoices.map((t) => ({
@@ -72,19 +125,87 @@ export default function Dashboard() {
       key: `payment-${t.id}`, urgency: t.urgency,
       label: `Payment received — ${t.exhibitor_name} (${t.invoice_no})`,
       meta: `${fmtMYR(t.amount_myr)} on ${t.payment_date}`,
-      // Clicking the row goes straight to the receipt (already generated
-      // at payment time) so "print the receipt" is one click; the separate
-      // Acknowledge button dismisses the to-do without leaving the page —
-      // it stays on the list indefinitely until one of those happens.
-      href: `/payments/${t.payment_id}/print`,
+      // Clicking the row goes to the payment record itself — how much was
+      // received, which invoice(s) it covers — with its own "View / Print
+      // Receipt" button from there. The separate Acknowledge button
+      // dismisses the to-do without leaving the page; it stays on the list
+      // indefinitely until one of those happens.
+      href: `/payments/${t.payment_id}`,
       actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgePayment(t.id) }],
+    })),
+    ...tasks.recentConfirmedInvoices.map((t) => ({
+      key: `inv-confirmed-${t.id}`, urgency: t.urgency,
+      label: `Invoice confirmed by Finance — ${t.exhibitor_name} (${t.invoice_no})`,
+      meta: `${t.currency} ${Number(t.amount_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`,
+      href: `/invoices/${t.id}`,
+      actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgeInvoiceConfirm(t.id) }],
+    })),
+    // Milestone billing planned for later (see SalesOrderDetail.jsx's
+    // milestone split form) — listed here regardless of how far off the
+    // date is, since Sales can issue one early if the customer's ready
+    // sooner; urgency just goes up as the date approaches.
+    ...tasks.scheduledMilestones.map((t) => ({
+      key: `scheduled-${t.id}`, urgency: t.urgency,
+      label: `Milestone billing due — ${t.exhibitor_name}${t.billing_pct ? ` (${Number(t.billing_pct)}%)` : ''}`,
+      meta: `${t.currency} ${Number(t.amount_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })} on ${t.expected_billing_date}`,
+      href: `/sales-orders/${t.sales_order_id}`,
+      actions: [{ label: 'Issue Invoice', onClick: () => handleIssueScheduled(t.id) }],
+    })),
+    ...tasks.pendingCnApprovals.map((t) => ({
+      key: `cn-pending-${t.id}`, urgency: t.urgency,
+      label: `Approve credit note — ${t.exhibitor_name}`,
+      meta: fmtMYR(t.amount_myr), href: `/credit-notes/${t.id}`,
+    })),
+    ...tasks.pendingReductionApprovals.map((t) => ({
+      key: `reduction-pending-${t.id}`, urgency: t.urgency,
+      label: `Approve contract reduction — ${t.exhibitor_name}`,
+      meta: `${t.currency} ${Number(t.old_total_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })} → ${Number(t.new_total_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`
+        + (Number(t.cn_amount_myr) > 0.01 ? ` (+ ${fmtMYR(t.cn_amount_myr)} credit note)` : ''),
+      href: `/sales-orders/${t.sales_order_id}`,
+    })),
+    ...tasks.draftCns.map((t) => ({
+      key: `cn-draft-${t.id}`, urgency: t.urgency,
+      label: `Confirm credit note — ${t.exhibitor_name} (${t.cn_no})`,
+      meta: fmtMYR(t.amount_myr), href: `/credit-notes/${t.id}`,
+    })),
+    ...tasks.recentConfirmedCns.map((t) => ({
+      key: `cn-confirmed-${t.id}`, urgency: t.urgency,
+      label: `Credit note confirmed by Finance — ${t.exhibitor_name} (${t.cn_no})`,
+      meta: fmtMYR(t.amount_myr),
+      href: `/credit-notes/${t.id}`,
+      actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgeCnConfirm(t.id) }],
+    })),
+    ...tasks.recentApprovedContracts.map((t) => ({
+      key: `contract-approved-${t.id}`, urgency: t.urgency,
+      label: t.status === 'APPROVED'
+        ? `Approved — ${t.exhibitor_name}${t.change_reason ? ` (${t.change_reason})` : ''}`
+        : `Rejected — ${t.exhibitor_name}${t.reject_reason ? `: ${t.reject_reason}` : ''}`,
+      meta: fmtMYR(t.total_myr),
+      href: `/sales-orders/${t.id}`,
+      actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgeContractApproval(t.id) }],
+    })),
+    // Booths this user's own Opportunity/draft Contract was still proposing
+    // when a COMPETING contract for the same booth got approved first (Round
+    // 6's "several deals can propose the same unsold booth at once" rule) —
+    // they need to go back to the Floor Plan and pick a replacement.
+    ...tasks.lostBoothClaims.map((t) => ({
+      key: `booth-lost-${t.record_type}-${t.record_id}`, urgency: t.urgency,
+      label: `Booth ${t.lost_booth_nos} went to another contract — ${t.exhibitor_name}`,
+      meta: 'Please pick a replacement booth',
+      href: t.record_type === 'sales_order' ? `/sales-orders/${t.record_id}` : `/opportunities/${t.record_id}`,
+      actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgeBoothLoss(t) }],
+    })),
+    ...(tasks.paymentProofAttachments || []).map((t) => ({
+      key: `payment-proof-${t.attachment_id}`, urgency: t.urgency,
+      label: `Proof of payment attached — ${t.exhibitor_name} (${t.invoice_no})`,
+      meta: t.original_filename,
+      href: `/invoices/${t.id}`,
+      actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgePaymentProof(t.id, t.attachment_id) }],
     })),
   ] : [];
 
   return (
     <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
-      <h2>Sales Dashboard</h2>
-
       {tasks && (
         <TaskToDoBox
           title="Task To-Do"
@@ -92,6 +213,8 @@ export default function Dashboard() {
           emptyText="Nothing urgent, due or coming up in the next 7 days."
         />
       )}
+
+      <h2>Sales Dashboard</h2>
 
       <h3 style={{ fontSize: 14, color: '#5c6070', marginTop: 24 }}>Pipeline</h3>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

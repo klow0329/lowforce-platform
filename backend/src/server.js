@@ -1,6 +1,7 @@
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 const express = require('express');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
@@ -24,6 +25,11 @@ const floorPlanRoutes = require('./routes/floorPlan.routes');
 const budgetRoutes = require('./routes/budget.routes');
 const auditRoutes = require('./routes/audit.routes');
 const creditNotesRoutes = require('./routes/creditNotes.routes');
+const contractReductionsRoutes = require('./routes/contractReductions.routes');
+const creditTermsRoutes = require('./routes/creditTerms.routes');
+const taxDetailLinksRoutes = require('./routes/taxDetailLinks.routes');
+const correspondenceRoutes = require('./routes/correspondence.routes');
+const emailTemplatesRoutes = require('./routes/emailTemplates.routes');
 
 const app = express();
 
@@ -72,6 +78,11 @@ app.use('/api/floor-plan', floorPlanRoutes);
 app.use('/api/budgets', budgetRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/credit-notes', creditNotesRoutes);
+app.use('/api/contract-reductions', contractReductionsRoutes);
+app.use('/api/credit-terms', creditTermsRoutes);
+app.use('/api/tax-details', taxDetailLinksRoutes);
+app.use('/api/correspondence', correspondenceRoutes);
+app.use('/api/email-templates', emailTemplatesRoutes);
 
 // If the frontend has been built (npm run build in frontend/), serve it from
 // this same server — one port, one URL to share. During development the Vite
@@ -88,6 +99,9 @@ if (fs.existsSync(distDir)) {
 
 // Basic error handler so a thrown error doesn't crash the whole server
 app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'File is too large — the limit is 5MB. Please compress it and try again.' });
+  }
   console.error(err);
   res.status(500).json({ error: 'Something went wrong.' });
 });

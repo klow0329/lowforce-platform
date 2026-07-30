@@ -21,7 +21,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB — signed PDFs/scans, not video
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB — signed PDFs/scans, not video
 });
 
 async function listAttachments(req, res) {

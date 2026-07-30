@@ -21,19 +21,38 @@ async function getCustomerAging(req, res) {
   const invoicesResult = await pool.query(
     `WITH invoice_balances AS (
        SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr,
+              COALESCE(inv.due_date, inv.invoice_date) AS due_date,
               inv.expected_payment_date, inv.aging_notes, inv.aging_updated_at,
-              ex.company_name AS exhibitor_name,
+              ex.company_name AS exhibitor_name, ex.billing_name,
+              u.full_name AS salesperson_name, ag.name AS agent_name,
+              -- Latest correspondence log entry — see correspondence.controller.js;
+              -- the list here only ever needs the most recent one, the full
+              -- history lives on the Invoice detail page.
+              (SELECT c.note FROM correspondence_entries c
+               WHERE c.entity_type = 'invoice' AND c.entity_id = inv.id
+               ORDER BY c.created_at DESC LIMIT 1) AS latest_correspondence,
+              (SELECT c.created_at FROM correspondence_entries c
+               WHERE c.entity_type = 'invoice' AND c.entity_id = inv.id
+               ORDER BY c.created_at DESC LIMIT 1) AS latest_correspondence_at,
               COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS total_paid,
               inv.amount_myr
                 - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0)
                 - COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED'), 0)
                 AS balance_due,
-              GREATEST(0, CURRENT_DATE - inv.invoice_date) AS days_overdue
+              -- Bucketed by the invoice's own due date (its Credit Term
+              -- installment date when it has one, else its issue date —
+              -- "due on receipt") rather than a flat age from invoice_date,
+              -- so a milestone that isn't due yet doesn't read as overdue
+              -- just because it was issued a while ago.
+              GREATEST(0, CURRENT_DATE - COALESCE(inv.due_date, inv.invoice_date)) AS days_overdue
        FROM invoices inv
        JOIN exhibitors ex ON ex.id = inv.exhibitor_id
        JOIN sales_orders so ON so.id = inv.sales_order_id
+       LEFT JOIN users u ON u.id = so.salesperson_id
+       LEFT JOIN agents ag ON ag.id = ex.agent_id
        WHERE inv.company_id = $1
          AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND inv.status = 'CONFIRMED'
          AND ${vis.sql}
      )
      SELECT ib.*, ab.label AS bucket_label, ab.sort_order AS bucket_sort_order
@@ -109,7 +128,8 @@ async function getDashboard(req, res) {
       ),
       pool.query(
         `SELECT COALESCE(SUM(amount_myr), 0) AS total FROM invoices
-         WHERE company_id = $1 AND event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)`,
+         WHERE company_id = $1 AND event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+           AND status = 'CONFIRMED'`,
         [req.companyId, event_id]
       ),
       // "Collected for this event" = payments actually allocated to this
@@ -118,7 +138,8 @@ async function getDashboard(req, res) {
       pool.query(
         `SELECT COALESCE(SUM(pa.amount_myr), 0) AS total
          FROM payment_allocations pa JOIN invoices inv ON inv.id = pa.invoice_id
-         WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)`,
+         WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+           AND inv.status = 'CONFIRMED'`,
         [req.companyId, event_id]
       ),
       // Confirmed credit notes for this event's invoices — reduces
@@ -139,15 +160,37 @@ async function getDashboard(req, res) {
            AND o.next_follow_up_date IS NOT NULL AND o.next_follow_up_date <= CURRENT_DATE`,
         [req.companyId, event_id]
       ),
-      // "Total Booths" only counts BOOTH-category items (BAS/SSS/ESS/WOP/CUB
-      // per the product catalogue) on Won opportunities — OTHER-category
-      // items (Corner, Loading, MEP, Badge, Sponsorship...) aren't booths.
+      // "Total Booths" counts physical booths on Won/approved contracts.
+      // Since the booth-selection-first redesign (picking booths from the
+      // Floor Plan drives Total Sqm directly), opportunities.booth_type is
+      // no longer populated for newer deals — it's a stale single-value
+      // field left over from before multi-booth support, and a contract can
+      // now carry several booths of different types at once. So the real
+      // count comes from floor_plan_booths linked to the approved contract
+      // (one row per physical booth), falling back to the legacy
+      // opportunities.booth_type field (one contract = one booth) only for
+      // older Won deals that predate Floor Plan linkage entirely.
       pool.query(
-        `SELECT COUNT(*) AS count, COALESCE(SUM(o.booth_sqm), 0) AS total_sqm
-         FROM opportunities o
-         JOIN sales_stages st ON st.id = o.stage_id
-         WHERE o.company_id = $1 AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
-           AND o.is_active = TRUE AND st.is_won AND o.booth_type = ANY($3)`,
+        `SELECT COUNT(*) AS count, COALESCE(SUM(sqm), 0) AS total_sqm FROM (
+           SELECT fpb.sqm AS sqm
+           FROM floor_plan_booths fpb
+           JOIN sales_orders so ON so.id = fpb.sales_order_id
+           WHERE so.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+             AND so.status = 'APPROVED' AND so.is_active = TRUE
+
+           UNION ALL
+
+           SELECT o.total_sqm AS sqm
+           FROM opportunities o
+           JOIN sales_stages st ON st.id = o.stage_id
+           WHERE o.company_id = $1 AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+             AND o.is_active = TRUE AND st.is_won AND o.booth_type = ANY($3)
+             AND NOT EXISTS (
+               SELECT 1 FROM sales_orders so2
+               JOIN floor_plan_booths fpb2 ON fpb2.sales_order_id = so2.id
+               WHERE so2.opportunity_id = o.id
+             )
+         ) sub`,
         [req.companyId, event_id, BOOTH_TYPE_CODES]
       ),
     ]);
@@ -214,9 +257,21 @@ async function getTasks(req, res) {
   // job company-wide, not scoped to their own deals like the other
   // categories below.
   const financeVis = financeVisibilityClause(req, 'so.salesperson_id', 3);
+  // Acting as Finance, the Task To-Do is narrowed to just the two things
+  // that are actually Finance's job (confirm invoice / confirm CN) — every
+  // other category here is scoped by the user's own salesperson_id, which
+  // still matches for someone whose account also happens to be a
+  // salesperson on real deals (common on a small team), so without this
+  // they'd keep seeing Sales/Management items while acting as Finance.
+  const financeOnly = req.roleCode === 'FIN';
+  const skip = Promise.resolve({ rows: [] });
 
-  const [followUpsResult, approvalsResult, invoicesResult, draftInvoicesResult, recentPaymentsResult] = await Promise.all([
-    pool.query(
+  const [
+    followUpsResult, approvalsResult, invoicesResult, draftInvoicesResult, recentPaymentsResult, recentConfirmedInvoicesResult, scheduledMilestonesResult,
+    pendingCnApprovalsResult, draftCnsResult, recentConfirmedCnsResult, recentApprovedContractsResult, lostBoothClaimsResult, paymentProofAttachmentsResult,
+    pendingReductionApprovalsResult,
+  ] = await Promise.all([
+    financeOnly ? skip : pool.query(
       `SELECT o.id, ex.company_name AS exhibitor_name, o.next_follow_up_date, o.remarks
        FROM opportunities o
        JOIN exhibitors ex ON ex.id = o.exhibitor_id
@@ -228,9 +283,19 @@ async function getTasks(req, res) {
        ORDER BY o.next_follow_up_date`,
       [req.companyId, event_id, ...(oppVis.param !== undefined ? [oppVis.param] : [])]
     ),
-    pool.query(
+    financeOnly ? skip : pool.query(
       `SELECT so.id, ex.company_name AS exhibitor_name, so.contract_date, so.total_myr, so.currency,
-              u.full_name AS salesperson_name
+              u.full_name AS salesperson_name,
+              -- contract_date is when the deal was originally booked, not
+              -- when THIS approval cycle started — the most recent
+              -- SUBMITTED/FLAGGED approval_log entry is the real "when did
+              -- this land in the queue" timestamp (a FLAGGED entry covers
+              -- the auto-resubmit case, e.g. an edit after approval).
+              (SELECT MAX(al.created_at) FROM approval_log al
+               WHERE al.sales_order_id = so.id AND al.action IN ('SUBMITTED', 'FLAGGED')) AS submitted_at,
+              (SELECT al.notes FROM approval_log al
+               WHERE al.sales_order_id = so.id AND al.action IN ('SUBMITTED', 'FLAGGED')
+               ORDER BY al.created_at DESC LIMIT 1) AS submit_reason
        FROM sales_orders so
        JOIN exhibitors ex ON ex.id = so.exhibitor_id
        LEFT JOIN users u ON u.id = so.salesperson_id
@@ -240,7 +305,7 @@ async function getTasks(req, res) {
        ORDER BY so.contract_date NULLS LAST`,
       [req.companyId, event_id, ...(soVis.param !== undefined ? [soVis.param] : [])]
     ),
-    pool.query(
+    financeOnly ? skip : pool.query(
       `SELECT inv.id, inv.invoice_no, inv.expected_payment_date,
               ex.company_name AS exhibitor_name,
               inv.amount_myr
@@ -281,7 +346,7 @@ async function getTasks(req, res) {
     // Stays visible with no time limit until acknowledged (see
     // payments.controller.js's acknowledgeAllocation) — it used to just
     // age out after 7 days whether or not anyone had actually seen it.
-    pool.query(
+    financeOnly ? skip : pool.query(
       `SELECT pa.id, p.id AS payment_id, p.payment_date, pa.amount_myr, inv.invoice_no, inv.id AS invoice_id,
               ex.company_name AS exhibitor_name
        FROM payment_allocations pa
@@ -290,10 +355,172 @@ async function getTasks(req, res) {
        JOIN sales_orders so ON so.id = inv.sales_order_id
        JOIN exhibitors ex ON ex.id = inv.exhibitor_id
        WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
-         AND so.salesperson_id = $3
+         AND COALESCE(so.salesperson_id, ex.salesperson_id) = $3
          AND pa.acknowledged_at IS NULL
        ORDER BY p.payment_date DESC`,
       [req.companyId, event_id, req.userId]
+    ),
+    // Invoices Finance has just confirmed on THIS user's own contracts —
+    // mirrors recentPayments above (see invoices.controller.js's
+    // acknowledgeConfirm). Sales cross-checked the billing detail when
+    // drafting it; this is the "yes, Finance signed off on it" handoff back.
+    financeOnly ? skip : pool.query(
+      `SELECT inv.id, inv.invoice_no, inv.amount_myr, inv.currency, inv.amount_foreign,
+              ex.company_name AS exhibitor_name
+       FROM invoices inv
+       JOIN sales_orders so ON so.id = inv.sales_order_id
+       JOIN exhibitors ex ON ex.id = inv.exhibitor_id
+       WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND COALESCE(so.salesperson_id, ex.salesperson_id) = $3
+         AND inv.status = 'CONFIRMED'
+         AND inv.confirm_acknowledged_at IS NULL
+       ORDER BY inv.invoice_date DESC`,
+      [req.companyId, event_id, req.userId]
+    ),
+    // Milestone billings planned but not yet issued (see
+    // invoices.controller.js's SCHEDULED status) — "coming soon" once
+    // within 7 days of their target date, but always listed regardless so
+    // Sales can issue one early if the customer's ready sooner.
+    financeOnly ? skip : pool.query(
+      `SELECT inv.id, inv.sales_order_id, inv.amount_foreign, inv.currency, inv.expected_billing_date, inv.billing_pct,
+              ex.company_name AS exhibitor_name
+       FROM invoices inv
+       JOIN exhibitors ex ON ex.id = inv.exhibitor_id
+       JOIN sales_orders so ON so.id = inv.sales_order_id
+       WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND inv.status = 'SCHEDULED'
+         AND ${soVis.sql}
+       ORDER BY inv.expected_billing_date`,
+      [req.companyId, event_id, ...(soVis.param !== undefined ? [soVis.param] : [])]
+    ),
+    // Credit notes pending your approval — mirrors pendingApprovals above,
+    // same simplification (a real tiered-matrix approver check happens
+    // server-side on the actual approve/reject action; this list just needs
+    // to reach elevated roles broadly so nobody misses a request).
+    financeOnly ? skip : pool.query(
+      `SELECT cn.id, ex.company_name AS exhibitor_name, cn.amount_myr, cn.created_at
+       FROM credit_notes cn
+       JOIN exhibitors ex ON ex.id = cn.exhibitor_id
+       JOIN sales_orders so ON so.id = cn.sales_order_id
+       WHERE cn.company_id = $1 AND cn.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND cn.status = 'PENDING_APPROVAL' AND ${soVis.sql}
+       ORDER BY cn.created_at`,
+      [req.companyId, event_id, ...(soVis.param !== undefined ? [soVis.param] : [])]
+    ),
+    // Credit notes approved and numbered, waiting on Finance to confirm —
+    // mirrors draftInvoices above.
+    pool.query(
+      `SELECT cn.id, cn.cn_no, cn.amount_myr, cn.approved_at, ex.company_name AS exhibitor_name
+       FROM credit_notes cn
+       JOIN exhibitors ex ON ex.id = cn.exhibitor_id
+       JOIN sales_orders so ON so.id = cn.sales_order_id
+       WHERE cn.company_id = $1 AND cn.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND cn.status = 'DRAFT' AND ${financeVis.sql}
+       ORDER BY cn.approved_at NULLS LAST`,
+      [req.companyId, event_id, ...(financeVis.param !== undefined ? [financeVis.param] : [])]
+    ),
+    // Credit notes Finance has just confirmed on THIS user's own contracts
+    // — mirrors recentConfirmedInvoices above.
+    financeOnly ? skip : pool.query(
+      `SELECT cn.id, cn.cn_no, cn.amount_myr, ex.company_name AS exhibitor_name
+       FROM credit_notes cn
+       JOIN sales_orders so ON so.id = cn.sales_order_id
+       JOIN exhibitors ex ON ex.id = cn.exhibitor_id
+       WHERE cn.company_id = $1 AND cn.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND COALESCE(so.salesperson_id, ex.salesperson_id) = $3
+         AND cn.status = 'CONFIRMED'
+         AND cn.confirm_acknowledged_at IS NULL
+       ORDER BY cn.confirmed_at DESC`,
+      [req.companyId, event_id, req.userId]
+    ),
+    // Contracts Management has just approved (or sent back to Draft via
+    // reject) on THIS user's own deals — mirrors recentConfirmedInvoices;
+    // this was a genuine gap (contract approval never notified Sales at
+    // all until this was added).
+    financeOnly ? skip : pool.query(
+      `SELECT so.id, so.status, so.total_myr, ex.company_name AS exhibitor_name,
+              -- What this specific approval/rejection cycle was actually
+              -- about (booth change, discount, revenue threshold, new
+              -- contract...) — same reasoning as the pendingApprovals query
+              -- above, so the notification isn't just a bare status change.
+              (SELECT al.notes FROM approval_log al
+               WHERE al.sales_order_id = so.id AND al.action IN ('SUBMITTED', 'FLAGGED')
+               ORDER BY al.created_at DESC LIMIT 1) AS change_reason,
+              (SELECT al.notes FROM approval_log al
+               WHERE al.sales_order_id = so.id AND al.action = 'REJECTED'
+               ORDER BY al.created_at DESC LIMIT 1) AS reject_reason
+       FROM sales_orders so
+       JOIN exhibitors ex ON ex.id = so.exhibitor_id
+       WHERE so.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND COALESCE(so.salesperson_id, ex.salesperson_id) = $3
+         AND (so.status = 'APPROVED' OR (so.status = 'DRAFT' AND so.rejected_at IS NOT NULL))
+         AND so.approval_acknowledged_at IS NULL
+       ORDER BY so.contract_date DESC NULLS LAST`,
+      [req.companyId, event_id, req.userId]
+    ),
+    // Booths this user's own Opportunities/draft Contracts were still
+    // proposing when a COMPETING contract for the same booth got approved
+    // first (competing-claims rule, Round 6 item 4) — grouped one row per
+    // losing record, since it may have lost more than one booth at once.
+    financeOnly ? skip : pool.query(
+      `SELECT record_type, record_id, exhibitor_name, salesperson_id,
+              STRING_AGG(booth_no, ', ' ORDER BY booth_no) AS lost_booth_nos, MAX(released_at) AS released_at
+       FROM (
+         SELECT c.record_type, c.record_id, ex.company_name AS exhibitor_name, opp.salesperson_id, b.booth_no, c.released_at
+         FROM floor_plan_booth_claims c
+         JOIN floor_plan_booths b ON b.id = c.booth_id
+         JOIN floor_plan_halls h ON h.id = b.hall_id
+         JOIN opportunities opp ON opp.id = c.record_id
+         JOIN exhibitors ex ON ex.id = opp.exhibitor_id
+         WHERE c.record_type = 'opportunity' AND c.release_reason = 'LOST_TO_APPROVAL' AND c.acknowledged_at IS NULL
+           AND h.company_id = $1 AND opp.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND opp.salesperson_id = $3
+         UNION ALL
+         SELECT c.record_type, c.record_id, ex.company_name AS exhibitor_name, so.salesperson_id, b.booth_no, c.released_at
+         FROM floor_plan_booth_claims c
+         JOIN floor_plan_booths b ON b.id = c.booth_id
+         JOIN floor_plan_halls h ON h.id = b.hall_id
+         JOIN sales_orders so ON so.id = c.record_id
+         JOIN exhibitors ex ON ex.id = so.exhibitor_id
+         WHERE c.record_type = 'sales_order' AND c.release_reason = 'LOST_TO_APPROVAL' AND c.acknowledged_at IS NULL
+           AND h.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND so.salesperson_id = $3
+       ) x
+       GROUP BY record_type, record_id, exhibitor_name, salesperson_id
+       ORDER BY MAX(released_at) DESC`,
+      [req.companyId, event_id, req.userId]
+    ),
+    // A customer's proof of payment was attached to an invoice — Finance-
+    // only (only surfaced while actively acting as Finance, unlike the
+    // other categories above which stay visible to Sales too), since
+    // acknowledging it is Finance's action alone (see
+    // invoiceAttachments.controller.js's acknowledgePaymentProof).
+    financeOnly ? pool.query(
+      `SELECT a.id AS attachment_id, inv.id, inv.invoice_no, ex.company_name AS exhibitor_name,
+              a.original_filename, a.uploaded_at
+       FROM invoice_attachments a
+       JOIN invoices inv ON inv.id = a.invoice_id
+       JOIN sales_orders so ON so.id = inv.sales_order_id
+       JOIN exhibitors ex ON ex.id = inv.exhibitor_id
+       WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND a.doc_type = 'PAYMENT_PROOF' AND a.finance_acknowledged_at IS NULL
+         AND ${financeVis.sql}
+       ORDER BY a.uploaded_at`,
+      [req.companyId, event_id, ...(financeVis.param !== undefined ? [financeVis.param] : [])]
+    ) : skip,
+    // Contract Reductions pending your approval — mirrors
+    // pendingCnApprovalsResult above. This was a genuine gap: the request
+    // deliberately leaves sales_orders.status alone while pending (same as
+    // Credit Notes), so it never showed up in the plain
+    // sales_orders-status-based approvalsResult query above.
+    financeOnly ? skip : pool.query(
+      `SELECT cr.id, cr.sales_order_id, ex.company_name AS exhibitor_name,
+              cr.old_total_foreign, cr.new_total_foreign, cr.cn_amount_myr, cr.created_at, so.currency
+       FROM contract_reductions cr
+       JOIN exhibitors ex ON ex.id = cr.exhibitor_id
+       JOIN sales_orders so ON so.id = cr.sales_order_id
+       WHERE cr.company_id = $1 AND cr.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND cr.status = 'PENDING_APPROVAL' AND ${soVis.sql}
+       ORDER BY cr.created_at`,
+      [req.companyId, event_id, ...(soVis.param !== undefined ? [soVis.param] : [])]
     ),
   ]);
 
@@ -311,8 +538,22 @@ async function getTasks(req, res) {
   const draftInvoices = draftInvoicesResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
 
   const recentPayments = recentPaymentsResult.rows.map((r) => ({ ...r, urgency: 'info' }));
+  const recentConfirmedInvoices = recentConfirmedInvoicesResult.rows.map((r) => ({ ...r, urgency: 'info' }));
+  const scheduledMilestones = scheduledMilestonesResult.rows.map((r) => ({ ...r, urgency: urgencyOf(r.expected_billing_date) || 'info' }));
 
-  res.json({ opportunityFollowUps, pendingApprovals, outstandingInvoices, draftInvoices, recentPayments });
+  const pendingCnApprovals = pendingCnApprovalsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
+  const draftCns = draftCnsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
+  const recentConfirmedCns = recentConfirmedCnsResult.rows.map((r) => ({ ...r, urgency: 'info' }));
+  const recentApprovedContracts = recentApprovedContractsResult.rows.map((r) => ({ ...r, urgency: 'info' }));
+  const lostBoothClaims = lostBoothClaimsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
+  const paymentProofAttachments = paymentProofAttachmentsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
+  const pendingReductionApprovals = pendingReductionApprovalsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
+
+  res.json({
+    opportunityFollowUps, pendingApprovals, outstandingInvoices, draftInvoices, recentPayments, recentConfirmedInvoices, scheduledMilestones,
+    pendingCnApprovals, draftCns, recentConfirmedCns, recentApprovedContracts, lostBoothClaims, paymentProofAttachments,
+    pendingReductionApprovals,
+  });
 }
 
 // Statement of Account — one customer's full history: every confirmed

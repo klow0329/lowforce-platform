@@ -6,6 +6,10 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const {
   listTaxCodes, createTaxCode, updateTaxCode,
   listExpenseCodes, createExpenseCode, updateExpenseCode,
+  listAgentsAdmin, createAgent, updateAgent,
+  listAgentCommissionRates, saveAgentCommissionRates,
+  createSegmentMain, updateSegmentMain, deleteSegmentMain,
+  createSegmentSub, updateSegmentSub, deleteSegmentSub, importSegments,
   getSettings, updateSettings,
   uploadBranding, uploadBrandingImage, getBrandingImage, deleteBrandingImage,
 } = require('../controllers/settings.controller');
@@ -23,6 +27,27 @@ router.put('/tax-codes/:id', requireAdmin, asyncHandler(updateTaxCode));
 router.get('/expense-codes', asyncHandler(listExpenseCodes)); // everyone can read (needed for Budget line dropdowns)
 router.post('/expense-codes', requireAdmin, asyncHandler(createExpenseCode));
 router.put('/expense-codes/:id', requireAdmin, asyncHandler(updateExpenseCode));
+
+router.get('/agents', asyncHandler(listAgentsAdmin)); // everyone can read (needed by the exhibitor Agent picker)
+router.post('/agents', requireAdmin, asyncHandler(createAgent));
+// Editing an agent's own details is open to Admin plus whichever salesperson
+// is that agent's assigned owner (ag.salesperson_id) — see updateAgent's own
+// ownership check — everyone else stays read-only.
+router.put('/agents/:id', asyncHandler(updateAgent));
+// Commission rates: readable by everyone (same as the agent record itself),
+// writes gated inside saveAgentCommissionRates by the same ownership rule.
+router.get('/agents/:agentId/commission-rates', asyncHandler(listAgentCommissionRates));
+router.put('/agents/:agentId/commission-rates', asyncHandler(saveAgentCommissionRates));
+
+// Reads live under /api/reference/segments (open to everyone — needed by
+// exhibitor forms); these are the Admin-only writes.
+router.post('/segments/main', requireAdmin, asyncHandler(createSegmentMain));
+router.put('/segments/main/:id', requireAdmin, asyncHandler(updateSegmentMain));
+router.delete('/segments/main/:id', requireAdmin, asyncHandler(deleteSegmentMain));
+router.post('/segments/sub', requireAdmin, asyncHandler(createSegmentSub));
+router.put('/segments/sub/:id', requireAdmin, asyncHandler(updateSegmentSub));
+router.delete('/segments/sub/:id', requireAdmin, asyncHandler(deleteSegmentSub));
+router.post('/segments/import', requireAdmin, asyncHandler(importSegments));
 
 router.get('/', asyncHandler(getSettings));
 router.put('/', requireAdmin, asyncHandler(updateSettings));

@@ -1,26 +1,50 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import DataTable from '../components/DataTable';
 import TaskToDoBox from '../components/TaskToDoBox';
 import { isViewOnly } from '../utils/permissions';
+import { toTitleCase } from '../utils/format';
 
-const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const columns = [
-  { key: 'exhibitor_name', label: 'Company', default: true },
-  {
-    key: 'stage_name', label: 'Stage', default: true,
-    render: (r) => <span style={{ color: r.is_won ? '#1A9C5B' : r.is_lost ? '#D13434' : 'inherit' }}>{r.stage_name}</span>,
-  },
-  { key: 'booth_sqm', label: 'Sqm', default: true },
-  { key: 'booth_type', label: 'Booth Type', default: false },
-  { key: 'estimated_value_myr', label: 'Value', default: true, value: (r) => fmtMYR(r.estimated_value_myr) },
-  { key: 'salesperson_name', label: 'Salesperson', default: true },
-  { key: 'next_follow_up_date', label: 'Follow-up', default: true },
-  { key: 'remarks', label: 'Remarks / Latest Correspondence', default: true },
-];
+function buildColumns(countryNames) {
+  return [
+    { key: 'exhibitor_name', label: 'Company', default: true },
+    {
+      key: 'created_at', label: 'Date', default: true,
+      value: (r) => (r.created_at ? new Date(r.created_at).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'),
+    },
+    {
+      key: 'stage_name', label: 'Stage', default: true,
+      render: (r) => <span style={{ color: r.is_won ? '#1A9C5B' : r.is_lost ? '#D13434' : 'inherit' }}>{r.stage_name}</span>,
+    },
+    { key: 'total_sqm', label: 'Sqm', default: true, value: (r) => (r.total_sqm ?? '—') },
+    { key: 'exhibitor_country', label: 'Country', default: false, value: (r) => (countryNames[r.exhibitor_country] || r.exhibitor_country || '—') },
+    {
+      key: 'booth_type_display', label: 'Booth Type', default: true,
+      value: (r) => (toTitleCase(r.booth_type_display) || '—'),
+    },
+    { key: 'estimated_value_myr', label: 'Value', default: true, value: (r) => fmtMYR(r.estimated_value_myr) },
+    { key: 'salesperson_name', label: 'Salesperson', default: true },
+    { key: 'agent_name', label: 'Agent', default: false, value: (r) => r.agent_name || '—' },
+    {
+      key: 'existing_sales_order_id', label: 'Contract', default: true,
+      render: (r) => (r.existing_sales_order_id ? <span style={{ color: '#1E7B34' }}>Yes</span> : '—'),
+    },
+    { key: 'next_follow_up_date', label: 'Follow-up', default: true },
+    {
+      key: 'latest_correspondence', label: 'Latest Correspondence', default: true,
+      value: (r) => (r.latest_correspondence || '—'),
+      render: (r) => (r.latest_correspondence ? (
+        <span title={new Date(r.latest_correspondence_at).toLocaleString('en-MY', { dateStyle: 'medium', timeStyle: 'short' })}>
+          {r.latest_correspondence}
+        </span>
+      ) : <span style={{ color: '#5c6070' }}>—</span>),
+    },
+  ];
+}
 
 export default function OpportunitiesList({ user }) {
   const { selectedEventId, loading: eventLoading } = useEventContext();
@@ -33,10 +57,14 @@ export default function OpportunitiesList({ user }) {
   const [mineOnly, setMineOnly] = useState(false);
   const [search, setSearch] = useState('');
   const [tasks, setTasks] = useState(null);
+  const [countryNames, setCountryNames] = useState({});
 
   useEffect(() => {
     api.listStages().then(({ stages }) => setStages(stages));
+    api.listCountries().then(({ countries }) => setCountryNames(Object.fromEntries(countries.map((c) => [c.code, c.name]))));
   }, []);
+
+  const cols = useMemo(() => buildColumns(countryNames), [countryNames]);
 
   useEffect(() => {
     if (!selectedEventId) return;
@@ -63,11 +91,6 @@ export default function OpportunitiesList({ user }) {
 
   return (
     <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <h2>Opportunities</h2>
-        {!isViewOnly(user) && <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>}
-      </div>
-
       {tasks && (
         <TaskToDoBox
           title="Follow-Ups Due"
@@ -79,6 +102,11 @@ export default function OpportunitiesList({ user }) {
           emptyText="No follow-ups due, urgent or coming up in the next 7 days."
         />
       )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <h2>Opportunities</h2>
+        {!isViewOnly(user) && <button onClick={() => navigate('/opportunities/new')}>+ Add Opportunity</button>}
+      </div>
 
       {summary && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '16px 0 24px' }}>
@@ -132,7 +160,7 @@ export default function OpportunitiesList({ user }) {
 
       <DataTable
         screenKey="opportunities"
-        columns={columns}
+        columns={cols}
         rows={opportunities}
         getRowKey={(r) => r.id}
         onRowClick={(r) => navigate(`/opportunities/${r.id}`)}
