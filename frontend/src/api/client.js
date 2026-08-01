@@ -170,6 +170,7 @@ export const api = {
   approveContractReduction: (id) => apiFetch(`/contract-reductions/${id}/approve`, { method: 'PUT' }),
   rejectContractReduction: (id, payload) => apiFetch(`/contract-reductions/${id}/reject`, { method: 'PUT', body: JSON.stringify(payload || {}) }),
   issueContractReductionCn: (id, payload) => apiFetch(`/contract-reductions/${id}/issue-cn`, { method: 'POST', body: JSON.stringify(payload) }),
+  acknowledgeReductionApproval: (id) => apiFetch(`/contract-reductions/${id}/acknowledge`, { method: 'POST' }),
   listCreditNoteAttachments: (id) => apiFetch(`/credit-notes/${id}/attachments`),
   uploadCreditNoteAttachment: (id, file) => {
     const formData = new FormData();
@@ -192,6 +193,7 @@ export const api = {
     apiFetch('/settings/expense-codes', { method: 'POST', body: JSON.stringify(payload) }),
   updateExpenseCode: (id, payload) =>
     apiFetch(`/settings/expense-codes/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  importExpenseCodes: (rows) => apiFetch('/settings/expense-codes/import', { method: 'POST', body: JSON.stringify({ rows }) }),
 
   listAgentsAdmin: () => apiFetch('/settings/agents'),
   createAgent: (payload) =>
@@ -201,7 +203,12 @@ export const api = {
   listAgentCommissionRates: (agentId) => apiFetch(`/settings/agents/${agentId}/commission-rates`),
   saveAgentCommissionRates: (agentId, rates) =>
     apiFetch(`/settings/agents/${agentId}/commission-rates`, { method: 'PUT', body: JSON.stringify({ rates }) }),
+  listAgentCommissionBonusTiers: (agentId) => apiFetch(`/settings/agents/${agentId}/commission-bonus-tiers`),
+  saveAgentCommissionBonusTiers: (agentId, bonusTiers) =>
+    apiFetch(`/settings/agents/${agentId}/commission-bonus-tiers`, { method: 'PUT', body: JSON.stringify({ bonusTiers }) }),
   importRepeatExhibitors: (rows) => apiFetch('/exhibitors/import-repeat-list', { method: 'POST', body: JSON.stringify({ rows }) }),
+  importExhibitors: (rows) => apiFetch('/exhibitors/import', { method: 'POST', body: JSON.stringify({ rows }) }),
+  importAgents: (rows) => apiFetch('/settings/agents/import', { method: 'POST', body: JSON.stringify({ rows }) }),
 
   createSegmentMain: (payload) => apiFetch('/settings/segments/main', { method: 'POST', body: JSON.stringify(payload) }),
   updateSegmentMain: (id, payload) => apiFetch(`/settings/segments/main/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
@@ -253,12 +260,14 @@ export const api = {
     apiFetch(`/payments/allocations/${allocationId}/acknowledge`, { method: 'POST' }),
 
   getCustomerAging: (eventId) => apiFetch(`/reports/customer-aging?event_id=${eventId}`),
+  getCustomerAgingByContract: (eventId) => apiFetch(`/reports/customer-aging-by-contract?event_id=${eventId}`),
   getStatementOfAccount: (exhibitorId) => apiFetch(`/reports/statement-of-account?exhibitor_id=${exhibitorId}`),
   getDashboard: (eventId) => apiFetch(`/reports/dashboard?event_id=${eventId}`),
   getTasks: (eventId) => apiFetch(`/reports/tasks?event_id=${eventId}`),
 
   getPerfOverview: (eventId) => apiFetch(`/reports/performance/overview?event_id=${eventId}`),
   getPerfBySalesperson: (eventId) => apiFetch(`/reports/performance/by-salesperson?event_id=${eventId}`),
+  getPerfByAgent: (eventId) => apiFetch(`/reports/performance/by-agent?event_id=${eventId}`),
   getPerfByItem: (eventId) => apiFetch(`/reports/performance/by-item?event_id=${eventId}`),
   getPerfPipeline: (eventId) => apiFetch(`/reports/performance/pipeline?event_id=${eventId}`),
   getPerfByCountry: (eventId) => apiFetch(`/reports/performance/by-country?event_id=${eventId}`),
@@ -273,6 +282,7 @@ export const api = {
   adminListUsers: () => apiFetch('/admin/users'),
   adminCreateUser: (payload) =>
     apiFetch('/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
+  adminImportUsers: (rows) => apiFetch('/admin/users/import', { method: 'POST', body: JSON.stringify({ rows }) }),
   adminUpdateUser: (id, payload) =>
     apiFetch(`/admin/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   adminResetPassword: (id, payload) =>
@@ -296,6 +306,9 @@ export const api = {
   deleteCreditTerm: (id) => apiFetch(`/credit-terms/${id}`, { method: 'DELETE' }),
   resolveCreditTermForContract: (salesOrderId) => apiFetch(`/credit-terms/resolve/${salesOrderId}`),
   adminListRoles: () => apiFetch('/admin/roles'),
+  adminCreateRole: (payload) => apiFetch('/admin/roles', { method: 'POST', body: JSON.stringify(payload) }),
+  adminUpdateRole: (id, payload) => apiFetch(`/admin/roles/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  adminDeleteRole: (id) => apiFetch(`/admin/roles/${id}`, { method: 'DELETE' }),
   adminListEvents: () => apiFetch('/admin/events'),
   adminCreateEvent: (payload) =>
     apiFetch('/admin/events', { method: 'POST', body: JSON.stringify(payload) }),

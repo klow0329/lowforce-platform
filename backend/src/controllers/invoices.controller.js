@@ -106,6 +106,101 @@ async function generateInvoiceNo(client, companyId) {
   return `${prefix}${String(lastSeq + 1).padStart(4, '0')}`;
 }
 
+// Core of "Generate Draft Invoice(s)" — splits whatever's left un-invoiced
+// on a contract by percentage (a single 100% invoice, or several for
+// milestone billing) and creates DRAFT/SCHEDULED invoices for it. Pulled out
+// of the route handler so a Contract Value increase's own approval can call
+// it directly for the newly-invoiceable delta (2026-08-01 item 4) — same
+// tested "remaining = current contract total - already invoiced" math, no
+// separate invoice-creation logic to keep in sync with this one. Runs inside
+// the caller's own transaction (client); throws { status, message } on a
+// validation failure rather than writing a response itself.
+async function internalGenerateDraftInvoices(client, companyId, salesOrderId, splits) {
+  const soResult = await client.query(
+    `SELECT id, event_id, exhibitor_id, currency, exchange_rate, total_foreign, bill_to_type, remarks
+     FROM sales_orders WHERE id = $1 AND company_id = $2`,
+    [salesOrderId, companyId]
+  );
+  const salesOrder = soResult.rows[0];
+  if (!salesOrder) throw Object.assign(new Error('Contract not found.'), { status: 404 });
+
+  // Together, all invoices on a contract can't exceed the contract total —
+  // tracked in the contract's OWN currency so a run of different actual
+  // rates across installments can't drift the balance check.
+  const invoicedResult = await client.query(
+    `SELECT COALESCE(SUM(amount_foreign), 0) AS total_invoiced
+     FROM invoices WHERE sales_order_id = $1 AND company_id = $2`,
+    [salesOrderId, companyId]
+  );
+  const contractTotal = Number(salesOrder.total_foreign);
+  const remaining = contractTotal - Number(invoicedResult.rows[0].total_invoiced);
+  if (remaining <= 0.01) throw Object.assign(new Error('This contract is already fully invoiced.'), { status: 400 });
+
+  // Default: one draft invoice for the whole remaining balance. Milestone
+  // billing passes several {pct, expected_billing_date} entries (e.g.
+  // 50% now, 50% on a future date) that must sum to EXACTLY 100% — a
+  // partial split left "unclaimed" would be too easy to lose track of
+  // once some lines are scheduled rather than issued immediately.
+  const splitList = splits && splits.length ? splits : [{ pct: 100 }];
+  const totalPct = splitList.reduce((sum, s) => sum + Number(s.pct), 0);
+  if (Math.abs(totalPct - 100) > 0.01) {
+    throw Object.assign(new Error(`Split percentages must add up to exactly 100% (currently ${totalPct.toFixed(2)}%).`), { status: 400 });
+  }
+
+  const rate = Number(salesOrder.exchange_rate) || 1;
+  const today = new Date().toISOString().slice(0, 10);
+  const created = [];
+  let allocated = 0;
+  for (let i = 0; i < splitList.length; i++) {
+    const pct = Number(splitList[i].pct);
+    // Last split absorbs any rounding remainder so the splits sum exactly.
+    const rawAmount = i === splitList.length - 1
+      ? (remaining * totalPct) / 100 - allocated
+      : (remaining * pct) / 100;
+    const amountForeign = Math.round(rawAmount * 100) / 100;
+    allocated += amountForeign;
+    const amountMyr = amountForeign * rate;
+
+    // No target date, or a date already in the past/today: issue now, a
+    // real DRAFT with an assigned invoice_no. A future date: park it as
+    // SCHEDULED — an estimate at today's rate, no invoice_no consumed —
+    // until someone actually clicks "Issue" on it (see
+    // issueScheduledInvoice below), possibly much later.
+    // due_date is the real AR-aging due date — for a Credit Term-driven
+    // split it's that installment's own resolved date (even when issued
+    // immediately, e.g. a milestone whose date already passed); otherwise
+    // it falls back to the issue date itself (due on receipt).
+    const expectedDate = splitList[i].expected_billing_date || null;
+    if (!expectedDate || expectedDate <= today) {
+      const invoiceNo = await generateInvoiceNo(client, companyId);
+      const result = await client.query(
+        `INSERT INTO invoices (company_id, event_id, sales_order_id, exhibitor_id, invoice_no, invoice_date,
+                               currency, amount_foreign, exchange_rate, amount_myr, status, billing_pct, due_date, bill_to_type, remarks)
+         VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $9, 'DRAFT', $10, COALESCE($11::date, CURRENT_DATE), $12, $13)
+         RETURNING id, invoice_no, status`,
+        [
+          companyId, salesOrder.event_id, salesOrderId, salesOrder.exhibitor_id,
+          invoiceNo, salesOrder.currency, amountForeign, rate, amountMyr, pct, expectedDate, salesOrder.bill_to_type, salesOrder.remarks,
+        ]
+      );
+      created.push(result.rows[0]);
+    } else {
+      const result = await client.query(
+        `INSERT INTO invoices (company_id, event_id, sales_order_id, exhibitor_id,
+                               currency, amount_foreign, exchange_rate, amount_myr, status, billing_pct, expected_billing_date, due_date, bill_to_type, remarks)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'SCHEDULED', $9, $10, $10, $11, $12)
+         RETURNING id, status, expected_billing_date`,
+        [
+          companyId, salesOrder.event_id, salesOrderId, salesOrder.exhibitor_id,
+          salesOrder.currency, amountForeign, rate, amountMyr, pct, expectedDate, salesOrder.bill_to_type, salesOrder.remarks,
+        ]
+      );
+      created.push(result.rows[0]);
+    }
+  }
+  return created;
+}
+
 // Sales no longer types invoice amounts by hand. The user clicks "Generate
 // Draft Invoice(s)" on the contract; the system splits the contract total by
 // percentage (a single 100% invoice, or several for milestone billing) and
@@ -124,101 +219,12 @@ async function generateDraftInvoices(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    const soResult = await client.query(
-      `SELECT id, event_id, exhibitor_id, currency, exchange_rate, total_foreign, bill_to_type, remarks
-       FROM sales_orders WHERE id = $1 AND company_id = $2`,
-      [sales_order_id, req.companyId]
-    );
-    const salesOrder = soResult.rows[0];
-    if (!salesOrder) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Contract not found.' });
-    }
-
-    // Together, all invoices on a contract can't exceed the contract total —
-    // tracked in the contract's OWN currency so a run of different actual
-    // rates across installments can't drift the balance check.
-    const invoicedResult = await client.query(
-      `SELECT COALESCE(SUM(amount_foreign), 0) AS total_invoiced
-       FROM invoices WHERE sales_order_id = $1 AND company_id = $2`,
-      [sales_order_id, req.companyId]
-    );
-    const contractTotal = Number(salesOrder.total_foreign);
-    const remaining = contractTotal - Number(invoicedResult.rows[0].total_invoiced);
-    if (remaining <= 0.01) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'This contract is already fully invoiced.' });
-    }
-
-    // Default: one draft invoice for the whole remaining balance. Milestone
-    // billing passes several {pct, expected_billing_date} entries (e.g.
-    // 50% now, 50% on a future date) that must sum to EXACTLY 100% — a
-    // partial split left "unclaimed" would be too easy to lose track of
-    // once some lines are scheduled rather than issued immediately.
-    const splitList = splits && splits.length ? splits : [{ pct: 100 }];
-    const totalPct = splitList.reduce((sum, s) => sum + Number(s.pct), 0);
-    if (Math.abs(totalPct - 100) > 0.01) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: `Split percentages must add up to exactly 100% (currently ${totalPct.toFixed(2)}%).` });
-    }
-
-    const rate = Number(salesOrder.exchange_rate) || 1;
-    const today = new Date().toISOString().slice(0, 10);
-    const created = [];
-    let allocated = 0;
-    for (let i = 0; i < splitList.length; i++) {
-      const pct = Number(splitList[i].pct);
-      // Last split absorbs any rounding remainder so the splits sum exactly.
-      const rawAmount = i === splitList.length - 1
-        ? (remaining * totalPct) / 100 - allocated
-        : (remaining * pct) / 100;
-      const amountForeign = Math.round(rawAmount * 100) / 100;
-      allocated += amountForeign;
-      const amountMyr = amountForeign * rate;
-
-      // No target date, or a date already in the past/today: issue now, a
-      // real DRAFT with an assigned invoice_no. A future date: park it as
-      // SCHEDULED — an estimate at today's rate, no invoice_no consumed —
-      // until someone actually clicks "Issue" on it (see
-      // issueScheduledInvoice below), possibly much later.
-      // due_date is the real AR-aging due date — for a Credit Term-driven
-      // split it's that installment's own resolved date (even when issued
-      // immediately, e.g. a milestone whose date already passed); otherwise
-      // it falls back to the issue date itself (due on receipt).
-      const expectedDate = splitList[i].expected_billing_date || null;
-      if (!expectedDate || expectedDate <= today) {
-        const invoiceNo = await generateInvoiceNo(client, req.companyId);
-        const result = await client.query(
-          `INSERT INTO invoices (company_id, event_id, sales_order_id, exhibitor_id, invoice_no, invoice_date,
-                                 currency, amount_foreign, exchange_rate, amount_myr, status, billing_pct, due_date, bill_to_type, remarks)
-           VALUES ($1, $2, $3, $4, $5, CURRENT_DATE, $6, $7, $8, $9, 'DRAFT', $10, COALESCE($11::date, CURRENT_DATE), $12, $13)
-           RETURNING id, invoice_no, status`,
-          [
-            req.companyId, salesOrder.event_id, sales_order_id, salesOrder.exhibitor_id,
-            invoiceNo, salesOrder.currency, amountForeign, rate, amountMyr, pct, expectedDate, salesOrder.bill_to_type, salesOrder.remarks,
-          ]
-        );
-        created.push(result.rows[0]);
-      } else {
-        const result = await client.query(
-          `INSERT INTO invoices (company_id, event_id, sales_order_id, exhibitor_id,
-                                 currency, amount_foreign, exchange_rate, amount_myr, status, billing_pct, expected_billing_date, due_date, bill_to_type, remarks)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'SCHEDULED', $9, $10, $10, $11, $12)
-           RETURNING id, status, expected_billing_date`,
-          [
-            req.companyId, salesOrder.event_id, sales_order_id, salesOrder.exhibitor_id,
-            salesOrder.currency, amountForeign, rate, amountMyr, pct, expectedDate, salesOrder.bill_to_type, salesOrder.remarks,
-          ]
-        );
-        created.push(result.rows[0]);
-      }
-    }
-
+    const created = await internalGenerateDraftInvoices(client, req.companyId, sales_order_id, splits);
     await client.query('COMMIT');
     res.status(201).json({ invoices: created });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.status) return res.status(err.status).json({ error: err.message });
     throw err;
   } finally {
     client.release();
@@ -418,4 +424,4 @@ async function acknowledgeConfirm(req, res) {
   res.json({ success: true });
 }
 
-module.exports = { listInvoices, getInvoice, generateDraftInvoices, issueScheduledInvoice, updateInvoice, withdrawInvoice, acknowledgeConfirm };
+module.exports = { listInvoices, getInvoice, generateDraftInvoices, internalGenerateDraftInvoices, issueScheduledInvoice, updateInvoice, withdrawInvoice, acknowledgeConfirm };

@@ -1,6 +1,8 @@
 const { pool } = require('../config/db');
 const { getRequiredApprover, canActOnTier } = require('../utils/approverMatrix');
 const { recomputeTotals, calcLine } = require('./salesOrderItems.controller');
+const { releaseClaim } = require('../utils/floorPlanClaims');
+const { syncBoothFieldsAndMirror } = require('../utils/opportunitySync');
 
 // Credit Notes are a value-REDUCTION against one already-CONFIRMED invoice
 // on an already-APPROVED contract, but — per the user's explicit design
@@ -32,6 +34,7 @@ const DETAIL_SELECT = `
   SELECT cn.*, ex.company_name AS exhibitor_name, ev.name AS event_name,
          inv.invoice_no, inv.amount_myr AS invoice_amount_myr,
          so.legacy_order_no, so.salesperson_id, so.total_sqm AS contract_total_sqm,
+         sp.full_name AS salesperson_name,
          rc.code AS reason_code, rc.label AS reason_label,
          req.full_name AS requested_by_name, appr.full_name AS approved_by_name, conf.full_name AS confirmed_by_name
   FROM credit_notes cn
@@ -39,25 +42,33 @@ const DETAIL_SELECT = `
   JOIN events ev ON ev.id = cn.event_id
   JOIN invoices inv ON inv.id = cn.invoice_id
   JOIN sales_orders so ON so.id = cn.sales_order_id
+  LEFT JOIN users sp ON sp.id = so.salesperson_id
   LEFT JOIN cn_reason_codes rc ON rc.id = cn.reason_code_id
   LEFT JOIN users req ON req.id = cn.requested_by
   LEFT JOIN users appr ON appr.id = cn.approved_by
   LEFT JOIN users conf ON conf.id = cn.confirmed_by
 `;
 
+// event_id lists every CN for the event (used by the Invoices list, which
+// merges Invoice + Credit Note rows into one screen — see the user's
+// explicit request 2026-07-31: Finance had no standalone place to find CNs
+// other than the Dashboard to-do widget). sales_order_id/exhibitor_id keep
+// their original narrower scoping (used by SalesOrderDetail.jsx's own CN
+// section) — at least one of the three is required.
 async function listCreditNotes(req, res) {
-  const { sales_order_id, exhibitor_id } = req.query;
-  if (!sales_order_id && !exhibitor_id) {
-    return res.status(400).json({ error: 'sales_order_id or exhibitor_id is required.' });
+  const { sales_order_id, exhibitor_id, event_id } = req.query;
+  if (!sales_order_id && !exhibitor_id && !event_id) {
+    return res.status(400).json({ error: 'sales_order_id, exhibitor_id, or event_id is required.' });
   }
   const result = await pool.query(
     `${DETAIL_SELECT}
      WHERE cn.company_id = $1
        AND ($2::uuid IS NULL OR cn.sales_order_id = $2)
        AND ($3::uuid IS NULL OR cn.exhibitor_id = $3)
+       AND ($4::uuid IS NULL OR cn.event_id IN (SELECT id FROM events WHERE id = $4 OR parent_event_id = $4))
        AND cn.is_active = TRUE
      ORDER BY cn.created_at DESC`,
-    [req.companyId, sales_order_id || null, exhibitor_id || null]
+    [req.companyId, sales_order_id || null, exhibitor_id || null, event_id || null]
   );
   res.json({ creditNotes: result.rows });
 }
@@ -349,8 +360,8 @@ async function approveCreditNote(req, res) {
       return res.status(400).json({ error: 'This credit note is not pending approval.' });
     }
 
-    const tier = await getRequiredApprover(req.companyId, Number(cn.amount_myr), 'CREDIT_NOTE_ISSUED');
-    if (!canActOnTier(req, tier)) {
+    const tier = await getRequiredApprover(req.companyId, Number(cn.amount_myr), 'CREDIT_NOTE_ISSUED', cn.event_id);
+    if (!canActOnTier(req, tier, cn.created_at)) {
       await client.query('ROLLBACK');
       const who = tier ? (tier.approver_user_name || `the ${tier.approver_role_code} role`) : 'Admin/Management';
       return res.status(403).json({ error: `Only ${who} can approve this credit note (RM${Number(cn.amount_myr).toLocaleString('en-MY')}).` });
@@ -380,6 +391,15 @@ async function approveCreditNote(req, res) {
          WHERE id = ANY($1::uuid[])`,
         [cn.released_booth_ids]
       );
+      // The claim itself (floor_plan_booth_claims) is the real multi-claim
+      // source of truth — clearing the booth's own columns above isn't
+      // enough, or the booth still reads as actively claimed by this
+      // contract everywhere that reads the claims table directly. Scoped to
+      // just these released booths (not releaseAllClaims) since the
+      // contract may still genuinely hold others.
+      for (const boothId of cn.released_booth_ids) {
+        await releaseClaim(client, boothId, 'sales_order', cn.sales_order_id, 'CN_APPROVED');
+      }
     }
 
     // 2. Replace the contract's real line items with the CN's own snapshot
@@ -413,17 +433,20 @@ async function approveCreditNote(req, res) {
       );
     }
 
-    // total_sqm always mirrors Bare Space's own qty (see BillingTemplate.jsx
-    // — an upgrade item is priced per the SAME sqm, never additional space).
-    const basItem = adjustedItems.find((it) => it.sales_item_code === 'BAS');
-    await client.query(
-      `UPDATE sales_orders SET total_sqm = $1 WHERE id = $2 AND company_id = $3`,
-      [basItem ? Number(basItem.qty) || 0 : null, cn.sales_order_id, req.companyId]
-    );
-
     // 3. Recompute the contract's own totals from those new items.
     const afterTotalMyr = await recomputeTotals(client, cn.sales_order_id, req.companyId);
-    const afterTotalSqm = basItem ? Number(basItem.qty) || 0 : null;
+
+    // 4. Re-derive Hall/Booth No/Total Sqm from the claims released above —
+    // the single source of truth for those fields — then mirror everything
+    // onto the linked Opportunity in the same transaction so reopening it
+    // never shows stale pre-CN data (2026-07-31 user request). This used to
+    // set total_sqm from the adjusted BAS item's qty directly, a second
+    // computation independent of the claims table that could disagree with
+    // it and never touched hall/booth_no at all — unified 2026-08-01.
+    await syncBoothFieldsAndMirror(client, req.companyId, 'sales_order', cn.sales_order_id);
+    const afterTotalSqm = (await client.query(
+      `SELECT total_sqm FROM sales_orders WHERE id = $1`, [cn.sales_order_id]
+    )).rows[0].total_sqm;
 
     await client.query(
       `INSERT INTO approval_log (sales_order_id, credit_note_id, action, actor_user_id, notes)
@@ -446,13 +469,13 @@ async function approveCreditNote(req, res) {
 }
 
 async function rejectCreditNote(req, res) {
-  const cnResult = await pool.query(`SELECT amount_myr, status, sales_order_id FROM credit_notes WHERE id = $1 AND company_id = $2`, [req.params.id, req.companyId]);
+  const cnResult = await pool.query(`SELECT amount_myr, status, sales_order_id, event_id, created_at FROM credit_notes WHERE id = $1 AND company_id = $2`, [req.params.id, req.companyId]);
   const cn = cnResult.rows[0];
   if (!cn) return res.status(404).json({ error: 'Credit note not found.' });
   if (cn.status !== 'PENDING_APPROVAL') return res.status(400).json({ error: 'This credit note is not pending approval.' });
 
-  const tier = await getRequiredApprover(req.companyId, Number(cn.amount_myr), 'CREDIT_NOTE_ISSUED');
-  if (!canActOnTier(req, tier)) {
+  const tier = await getRequiredApprover(req.companyId, Number(cn.amount_myr), 'CREDIT_NOTE_ISSUED', cn.event_id);
+  if (!canActOnTier(req, tier, cn.created_at)) {
     const who = tier ? (tier.approver_user_name || `the ${tier.approver_role_code} role`) : 'Admin/Management';
     return res.status(403).json({ error: `Only ${who} can reject this credit note.` });
   }

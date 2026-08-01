@@ -6,7 +6,7 @@ const { blockManagementWrites } = require('../middleware/blockManagementWrites')
 const { asyncHandler } = require('../utils/asyncHandler');
 const {
   listContractReductions, getContractReduction, requestContractReduction, updateContractReduction, deleteContractReduction,
-  approveContractReduction, rejectContractReduction, issueContractReductionCn,
+  approveContractReduction, rejectContractReduction, issueContractReductionCn, acknowledgeReductionApproval,
 } = require('../controllers/contractReductions.controller');
 
 router.use(attachTenant);
@@ -25,5 +25,9 @@ router.put('/:id/reject', asyncHandler(rejectContractReduction));
 // Issuing the pre-approved shortfall CN is a normal Sales write, same gate
 // as everything else that edits the contract.
 router.post('/:id/issue-cn', blockManagementWrites, asyncHandler(issueContractReductionCn));
+// Acknowledging your own notification isn't an edit of the record — same
+// reasoning as acknowledgeApproval on the main contract, not gated by
+// blockManagementWrites.
+router.post('/:id/acknowledge', asyncHandler(acknowledgeReductionApproval));
 
 module.exports = router;

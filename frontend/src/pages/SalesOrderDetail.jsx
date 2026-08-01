@@ -7,6 +7,7 @@ import BillingTemplate, { UPGRADE_CODES, FIXED_LABELS } from '../components/Bill
 import { isViewOnly } from '../utils/permissions';
 import { setUnsavedChanges } from '../utils/unsavedChanges';
 import DeleteRecordButton from '../components/DeleteRecordButton';
+import InfoTooltip from '../components/InfoTooltip';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -16,15 +17,17 @@ const todayStr = new Date().toISOString().slice(0, 10);
 const STATUS_COLORS = {
   DRAFT: { bg: '#F5F6FA', fg: '#5c6070' },
   PENDING_APPROVAL: { bg: '#FFF3BF', fg: '#8a6d1a' },
+  PENDING_APPROVAL_STEP2: { bg: '#FFF3BF', fg: '#8a6d1a' },
   APPROVED: { bg: '#E3F6E8', fg: '#1E7B34' },
   VOID: { bg: '#FBE3E3', fg: '#B23A3A' },
 };
+const STATUS_LABELS = { PENDING_APPROVAL_STEP2: 'PENDING 2ND APPROVAL' };
 
 function StatusBadge({ status }) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.DRAFT;
   return (
     <span style={{ background: c.bg, color: c.fg, padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600 }}>
-      {status.replace('_', ' ')}
+      {STATUS_LABELS[status] || status.replace('_', ' ')}
     </span>
   );
 }
@@ -81,6 +84,7 @@ export default function SalesOrderDetail({ user }) {
   const [salesOrder, setSalesOrder] = useState(null); // full record incl. totals/status/exchange_rate
   const [requiredApprover, setRequiredApprover] = useState(null); // { role_code, user_name } | null — from the tiered revenue matrix, null/null means default Admin/Management
   const [canApprove, setCanApprove] = useState(false); // whether the CURRENT user is the one required above
+  const [approvalStep, setApprovalStep] = useState(null); // 1 | 2 | null — only set when this tier has a 2nd approval step
   const [exhibitorName, setExhibitorName] = useState(lockedExhibitorName);
   const [exhibitorSearch, setExhibitorSearch] = useState('');
   const [exhibitorResults, setExhibitorResults] = useState([]);
@@ -92,9 +96,19 @@ export default function SalesOrderDetail({ user }) {
   const [original, setOriginal] = useState(null);
   const [editing, setEditing] = useState(isNew);
   const [billToPreview, setBillToPreview] = useState({ billingName: '', agentName: '' });
+  // Remarks-only editing on an APPROVED contract — separate from the main
+  // fieldset's editing state (which stays locked once approved) since a
+  // remark is not a value-affecting change and shouldn't need Void/a new
+  // approval to add one (2026-08-01 user request).
+  const [remarksEditOpen, setRemarksEditOpen] = useState(false);
+  const [remarksDraft, setRemarksDraft] = useState('');
+  const [savingRemarks, setSavingRemarks] = useState(false);
 
   const [items, setItems] = useState([]);
   const [priceList, setPriceList] = useState([]);
+  // Which sales_item_code drives Total Sqm on this event — see
+  // BillingTemplate.jsx's is_primary_base; falls back to 'BAS'.
+  const primaryBaseCode = priceList.find((p) => p.is_primary_base)?.sales_item_code || 'BAS';
   const [creditTerms, setCreditTerms] = useState([]);
   const [taxCodes, setTaxCodes] = useState([]);
   const [lodPct, setLodPct] = useState(15);
@@ -110,6 +124,12 @@ export default function SalesOrderDetail({ user }) {
 
   const [approvalLog, setApprovalLog] = useState([]);
   const [showLog, setShowLog] = useState(false);
+  // Which Value Change Request row has its item-level detail expanded —
+  // previously there was no way to see WHAT changed (item qty/rate diff,
+  // booths released/added, notes) short of the one-line summary row, so
+  // MGT clicking through from the approvals queue had nothing to actually
+  // review before approving (2026-08-01 user report).
+  const [expandedReductionId, setExpandedReductionId] = useState(null);
 
   const [creditNotes, setCreditNotes] = useState([]);
   const [reasonCodes, setReasonCodes] = useState([]);
@@ -127,8 +147,22 @@ export default function SalesOrderDetail({ user }) {
   const [reductionNotes, setReductionNotes] = useState('');
   const [reductionBookingType, setReductionBookingType] = useState('');
   const [reductionAdjustedTotal, setReductionAdjustedTotal] = useState(null);
-  const [reductionAdjustedBasQty, setReductionAdjustedBasQty] = useState(null);
   const [reductionReleasedBoothIds, setReductionReleasedBoothIds] = useState([]);
+  // {boothId: sales_item_code} for whichever surviving (not released) booths
+  // had their type re-tagged in the "Adjust Floor Plan Allocation" picker —
+  // applied to their claims on approval (2026-08-01).
+  const [reductionBoothItemCodes, setReductionBoothItemCodes] = useState({});
+  // Booths picked in that same adjuster that weren't already linked to this
+  // contract — newly claimed on approval (2026-08-01).
+  const [reductionAddedBoothIds, setReductionAddedBoothIds] = useState([]);
+  // The full picked-booth objects from the adjuster (sqm/type/corner/
+  // loading per booth) — drives reductionBillingRef's own applyBoothAllocation
+  // below, same as the main picker does for the contract's real billing.
+  // Without this the adjusted-items BillingTemplate never learned about a
+  // new booth's sqm at all, so the total stayed unchanged after Save
+  // Selection (2026-08-01 user report).
+  const [reductionPickedBooths, setReductionPickedBooths] = useState(null);
+  const reductionBoothAppliedRef = useRef(false);
   const [reductionDraftItems, setReductionDraftItems] = useState(null);
   const [reductionBusy, setReductionBusy] = useState(false);
   const [issueCnForId, setIssueCnForId] = useState(null); // which reduction's "Issue Credit Note" picker is open
@@ -144,19 +178,41 @@ export default function SalesOrderDetail({ user }) {
     api.listContractReductions(id).then(({ contractReductions }) => setContractReductions(contractReductions));
   }
 
+  // Scrolls straight to the specific pending request MGT clicked from the
+  // approvals queue (see Management.jsx's approvalHref), instead of leaving
+  // them to hunt for it on a page whose main focus is the Billing section
+  // (2026-08-01 user report).
+  useEffect(() => {
+    if (!location.hash?.startsWith('#openReduction=') || contractReductions.length === 0) return;
+    const targetId = location.hash.replace('#openReduction=', '');
+    setExpandedReductionId(targetId);
+    document.getElementById(`reduction-${targetId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractReductions, location.hash]);
+
   // null = not loaded yet — kept distinct from [] (genuinely zero booths) so
   // the sync-to-form effect below never overwrites hall/booth_no with a
   // premature blank before the real set has actually arrived. This is now
   // the STAGED set (may not match the database until Save) rather than a
   // live server mirror — see handleSubmit for where it actually commits.
   const [linkedBooths, setLinkedBooths] = useState(null);
+  // Server-loaded baseline for linkedBooths (id + allocated_item_code only) —
+  // used solely by the unsaved-changes dirty-check below, since a booth
+  // selection or per-booth type change (e.g. Bare Space -> WOP) doesn't
+  // always move Hall/Booth No/Total Sqm, which computeChanges(original, form)
+  // alone would miss (mirrors the same fix in OpportunityDetail.jsx,
+  // 2026-07-31 bug report).
+  const [originalLinkedBooths, setOriginalLinkedBooths] = useState(null);
   // Overrides the normal server-loaded `items` when restoring a draft after
   // a Floor Plan round trip — BillingTemplate reseeds its rows from
   // whichever of these two is passed as its `items` prop.
   const [draftBillingItems, setDraftBillingItems] = useState(null);
   function loadLinkedBooths() {
     if (!id) return;
-    api.listSalesOrderBooths(id).then(({ booths }) => setLinkedBooths(booths));
+    api.listSalesOrderBooths(id).then(({ booths }) => {
+      setLinkedBooths(booths);
+      setOriginalLinkedBooths(booths);
+    });
   }
 
   function loadItems() {
@@ -180,9 +236,10 @@ export default function SalesOrderDetail({ user }) {
     api.listCreditNotes({ sales_order_id: id }).then(({ creditNotes }) => setCreditNotes(creditNotes));
   }
   function loadSalesOrder() {
-    return api.getSalesOrder(id).then(({ salesOrder, requiredApprover, canApprove }) => {
+    return api.getSalesOrder(id).then(({ salesOrder, requiredApprover, canApprove, approvalStep }) => {
       setRequiredApprover(requiredApprover);
       setCanApprove(canApprove);
+      setApprovalStep(approvalStep);
       const loaded = {
         exhibitor_id: salesOrder.exhibitor_id,
         event_id: salesOrder.event_id,
@@ -237,6 +294,7 @@ export default function SalesOrderDetail({ user }) {
     if (isNew) {
       if (draft) applyDraft();
       else setLinkedBooths([]);
+      setOriginalLinkedBooths([]);
       return;
     }
 
@@ -292,12 +350,22 @@ export default function SalesOrderDetail({ user }) {
     // FloorPlan.jsx's per-booth type tagging in the cap-mode picker).
     const byType = {};
     for (const b of linkedBooths) {
-      const code = b.allocated_item_code || 'BAS';
+      const code = b.allocated_item_code || primaryBaseCode;
       byType[code] = (byType[code] || 0) + (Number(b.sqm) || 0);
     }
     const isCorner = linkedBooths.some((b) => b.is_corner);
     const isLoading = linkedBooths.some((b) => b.is_loading);
-    billingRef.current.applyBoothAllocation({ byType, isCorner, isLoading });
+    // Any other admin-flagged is_booth_related item tagged per-booth on the
+    // Floor Plan (see FloorPlan.jsx's booth editor, migration 070) — Corner/
+    // Loading stay on their own dedicated flags above.
+    const boothAddonCodes = [...new Set(
+      priceList.filter((p) => p.is_booth_related && p.sales_item_code !== 'COR' && p.sales_item_code !== 'LOD').map((p) => p.sales_item_code)
+    )];
+    const byAddon = {};
+    for (const code of boothAddonCodes) {
+      byAddon[code] = linkedBooths.filter((b) => (b.addon_codes || []).includes(code)).length;
+    }
+    billingRef.current.applyBoothAllocation({ byType, isCorner, isLoading, byAddon });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedBooths, priceList, pickedBooths]);
 
@@ -363,6 +431,16 @@ export default function SalesOrderDetail({ user }) {
 
   const changes = computeChanges(original, form);
 
+  // True if the current booth selection (which booths, and each one's
+  // allocated type) differs from what was actually loaded from the server —
+  // catches a booth-type swap or add/remove that didn't happen to move
+  // Hall/Booth No/Total Sqm, which computeChanges alone would miss.
+  function boothsChanged() {
+    if (!linkedBooths || !originalLinkedBooths) return false;
+    const snap = (list) => list.map((b) => `${b.id}:${b.allocated_item_code || ''}`).sort().join('|');
+    return snap(linkedBooths) !== snap(originalLinkedBooths);
+  }
+
   // Warns before the user navigates away (nav bar links, tab close/refresh)
   // with unsaved edits — cleared on unmount so it never leaks onto the next
   // page after a confirmed discard or a successful Save. Also covers an
@@ -370,11 +448,13 @@ export default function SalesOrderDetail({ user }) {
   // state (reductionReasonCodeId etc.) rather than the main contract `form`.
   const reductionFormDirty = showReductionForm && Boolean(reductionReasonCodeId || reductionNotes);
   useEffect(() => {
-    const isDirty = (editing && (isNew ? Boolean(exhibitorName) : changes.length > 0)) || reductionFormDirty;
+    const isDirty = (editing && (isNew
+      ? Boolean(exhibitorName)
+      : changes.length > 0 || boothsChanged())) || reductionFormDirty;
     setUnsavedChanges(isDirty, 'You have unsaved contract changes that will be lost if you leave. Continue?');
     return () => setUnsavedChanges(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, isNew, changes.length, exhibitorName, reductionFormDirty]);
+  }, [editing, isNew, changes.length, exhibitorName, reductionFormDirty, linkedBooths, originalLinkedBooths]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -482,21 +562,14 @@ export default function SalesOrderDetail({ user }) {
       form, exhibitorName, linkedBooths: linkedBooths || [],
       billingItems: snapshot ? snapshot.items : null,
     }));
-    // Which booth-item codes the current billing already expects — lets the
-    // picker auto-resolve the common single-type case silently, and only
-    // surface per-booth tagging when the contract genuinely mixes types (see
-    // FloorPlan.jsx's capIsMixed).
+    // Every admin-configured Upgrade option — offered per-booth in the Floor
+    // Plan picker's own type dropdown (see FloorPlan.jsx), always shown for
+    // every selected booth so Sales sets the real type up front.
     const upgradeCodes = [...UPGRADE_CODES];
     for (const p of priceList) if (p.is_upgrade_option && !upgradeCodes.includes(p.sales_item_code)) upgradeCodes.push(p.sales_item_code);
     const upgradeOptions = upgradeCodes.map((code) => ({
       code, label: priceList.find((p) => p.sales_item_code === code)?.description || FIXED_LABELS[code] || code,
     }));
-    const itemTypeTotals = {};
-    for (const it of (snapshot?.items || [])) {
-      if (it.sales_item_code === 'BAS' || upgradeCodes.includes(it.sales_item_code)) {
-        itemTypeTotals[it.sales_item_code] = (itemTypeTotals[it.sales_item_code] || 0) + Number(it.qty || 0);
-      }
-    }
     navigate('/floor-plan', {
       state: {
         pickFor: {
@@ -508,7 +581,6 @@ export default function SalesOrderDetail({ user }) {
           preSelectedBooths: linkedBooths || [],
           cap: null,
           upgradeOptions,
-          itemTypeTotals,
         },
       },
     });
@@ -541,6 +613,25 @@ export default function SalesOrderDetail({ user }) {
       setError(err.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Remarks are not a value-affecting change — Void/a new approval shouldn't
+  // be needed just to note something down on an already-approved contract
+  // (2026-08-01 item 3). Calls updateSalesOrder directly, independent of the
+  // main fieldset's editing state (which stays locked once approved).
+  async function handleSaveRemarksOnly() {
+    setSavingRemarks(true);
+    setError('');
+    try {
+      await api.updateSalesOrder(id, { remarks: remarksDraft });
+      set('remarks', remarksDraft);
+      setRemarksEditOpen(false);
+      loadSalesOrder();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingRemarks(false);
     }
   }
 
@@ -708,8 +799,10 @@ export default function SalesOrderDetail({ user }) {
     setReductionNotes('');
     setReductionBookingType(form.booking_type || '');
     setReductionAdjustedTotal(null);
-    setReductionAdjustedBasQty(null);
     setReductionReleasedBoothIds([]);
+    setReductionAddedBoothIds([]);
+    setReductionBoothItemCodes({});
+    setReductionPickedBooths(null);
     setReductionDraftItems(null);
     setShowReductionForm(true);
   }
@@ -722,31 +815,48 @@ export default function SalesOrderDetail({ user }) {
     setReductionNotes(cr.notes || '');
     setReductionBookingType(form.booking_type || '');
     setReductionAdjustedTotal(null);
-    setReductionAdjustedBasQty(null);
     setReductionReleasedBoothIds(cr.released_booth_ids || []);
+    setReductionAddedBoothIds(cr.added_booth_ids || []);
+    setReductionBoothItemCodes(cr.booth_item_codes || {});
+    setReductionPickedBooths(null);
     setReductionDraftItems(cr.reduced_items || null);
     setShowReductionForm(true);
   }
 
-  // Sends the user to the Floor Plan to release specific booths down to the
-  // reduction's adjusted Bare Space qty — nothing is saved to the contract
-  // from there (see FloorPlan.jsx's 'cn' pick mode, reused as-is here since
-  // the "stage a release, only committed on approval" behavior is
-  // identical), it just hands the still-selected set back. The in-progress
-  // scratch edits would otherwise be lost on the round trip since this page
-  // fully remounts on navigation — stashed in sessionStorage and restored
-  // below.
+  // Sends the user to the Floor Plan to freely add, retype, or remove
+  // booths for this value change (see FloorPlan.jsx's 'cn' pick mode) — no
+  // sqm cap, same add/change/remove freedom as the Opportunity/draft
+  // Contract picker (2026-08-01). Nothing is saved to the contract from
+  // there; it just hands the new full selection back, staged until the
+  // request itself is approved. The in-progress scratch edits would
+  // otherwise be lost on the round trip since this page fully remounts on
+  // navigation — stashed in sessionStorage and restored below.
   function handleAdjustReductionBooths() {
     const snapshot = reductionBillingRef.current?.getSnapshot();
     sessionStorage.setItem(`reductionDraft:${id}`, JSON.stringify({
       reductionReasonCodeId, reductionNotes, reductionBookingType,
       items: snapshot ? snapshot.items : items,
     }));
+    // Same per-booth type dropdown as the normal Pick Booths/Reassign Booth
+    // picker (see handlePickBooths above) — this used to omit
+    // upgradeOptions entirely, so the picker's type dropdown only ever
+    // offered Bare Space, making every booth look untyped regardless of
+    // what it actually was (2026-08-01 user report).
+    const upgradeCodes = [...UPGRADE_CODES];
+    for (const p of priceList) if (p.is_upgrade_option && !upgradeCodes.includes(p.sales_item_code)) upgradeCodes.push(p.sales_item_code);
+    const upgradeOptions = upgradeCodes.map((code) => ({
+      code, label: priceList.find((p) => p.sales_item_code === code)?.description || FIXED_LABELS[code] || code,
+    }));
     navigate('/floor-plan', {
       state: {
         pickFor: {
           mode: 'cn', recordType: 'contract', recordId: id, exhibitorName,
-          cap: reductionAdjustedBasQty, returnPath: `/sales-orders/${id}`,
+          // No sqm cap — this adjuster is free add/change/remove, same as
+          // the Opportunity/draft Contract picker, not limited to the
+          // contract's current sqm (2026-08-01 user report: "cannot exceed
+          // that current contracted sqm" was the bug, not a rule to keep).
+          cap: null, returnPath: `/sales-orders/${id}`,
+          upgradeOptions,
         },
       },
     });
@@ -763,32 +873,58 @@ export default function SalesOrderDetail({ user }) {
     setReductionNotes(draft.reductionNotes);
     setReductionBookingType(draft.reductionBookingType);
     setReductionDraftItems(draft.items);
-    const selectedIds = new Set(location.state.cnSelectedBoothIds || []);
+    // cnSelectedBooths carries each surviving booth's chosen type back too
+    // (not just which ids stayed selected) — see FloorPlan.jsx's
+    // handleCnCommit (2026-08-01).
+    const pickedBooths = location.state.cnSelectedBooths || [];
+    const selectedIds = new Set(pickedBooths.map((b) => b.id));
+    const originalIds = new Set((linkedBooths || []).map((b) => b.id));
     setReductionReleasedBoothIds(linkedBooths.filter((b) => !selectedIds.has(b.id)).map((b) => b.id));
+    setReductionAddedBoothIds(pickedBooths.filter((b) => !originalIds.has(b.id)).map((b) => b.id));
+    setReductionBoothItemCodes(Object.fromEntries(pickedBooths.map((b) => [b.id, b.allocated_item_code || primaryBaseCode])));
+    reductionBoothAppliedRef.current = false;
+    setReductionPickedBooths(pickedBooths);
     setShowReductionForm(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state, linkedBooths]);
 
-  const reductionLinkedAllocatedSqm = (linkedBooths || []).reduce((sum, b) => sum + (Number(b.sqm) || 0), 0);
-  const reductionReleasedSqm = (linkedBooths || [])
-    .filter((b) => reductionReleasedBoothIds.includes(b.id))
-    .reduce((sum, b) => sum + (Number(b.sqm) || 0), 0);
-  const reductionRemainingAllocatedSqm = reductionLinkedAllocatedSqm - reductionReleasedSqm;
-  const reductionNeedsBoothRelease = reductionAdjustedBasQty !== null && reductionRemainingAllocatedSqm > reductionAdjustedBasQty + 0.01;
+  // Applies the newly-picked booth set's aggregate BAS/upgrade/COR/LOD rows
+  // onto the adjusted-items BillingTemplate — same computation the main
+  // contract form does after a normal booth pick (see the applyBoothAllocation
+  // effect near the top of this component), just targeting reductionBillingRef
+  // instead. Runs once reductionBillingRef has actually mounted (only true
+  // once showReductionForm flips to true and React has committed it).
+  useEffect(() => {
+    if (!reductionPickedBooths || reductionBoothAppliedRef.current || priceList.length === 0 || !reductionBillingRef.current) return;
+    reductionBoothAppliedRef.current = true;
+    const byType = {};
+    for (const b of reductionPickedBooths) {
+      const code = b.allocated_item_code || primaryBaseCode;
+      byType[code] = (byType[code] || 0) + (Number(b.sqm) || 0);
+    }
+    const isCorner = reductionPickedBooths.some((b) => b.is_corner);
+    const isLoading = reductionPickedBooths.some((b) => b.is_loading);
+    const boothAddonCodes = [...new Set(
+      priceList.filter((p) => p.is_booth_related && p.sales_item_code !== 'COR' && p.sales_item_code !== 'LOD').map((p) => p.sales_item_code)
+    )];
+    const byAddon = {};
+    for (const code of boothAddonCodes) {
+      byAddon[code] = reductionPickedBooths.filter((b) => (b.addon_codes || []).includes(code)).length;
+    }
+    reductionBillingRef.current.applyBoothAllocation({ byType, isCorner, isLoading, byAddon });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reductionPickedBooths, priceList, showReductionForm]);
 
   async function handleRequestReduction() {
     if (!reductionReasonCodeId) { setError('Select a reason.'); return; }
     const snapshot = reductionBillingRef.current?.getSnapshot();
     if (!snapshot) return;
-    if (!(snapshot.total < contractTotal - 0.01)) {
-      setError('No reduction detected yet — reduce a quantity/rate or remove a row in the adjusted items below.');
+    if (Math.abs(snapshot.total - contractTotal) < 0.01) {
+      setError('No change detected yet — adjust a quantity/rate, or add/remove a row in the adjusted items below.');
       return;
     }
-    if (reductionNeedsBoothRelease) {
-      setError(`Booth allocation (${reductionRemainingAllocatedSqm} sqm) still exceeds the adjusted Bare Space qty (${reductionAdjustedBasQty} sqm) — release booths on the Floor Plan first.`);
-      return;
-    }
-    if (!window.confirm(`Request reducing this contract from ${fmt(contractTotal, ccy)} to ${fmt(snapshot.total, ccy)}?`)) return;
+    const isIncrease = snapshot.total > contractTotal;
+    if (!window.confirm(`Request ${isIncrease ? 'increasing' : 'reducing'} this contract from ${fmt(contractTotal, ccy)} to ${fmt(snapshot.total, ccy)}?`)) return;
     setReductionBusy(true);
     setError('');
     try {
@@ -797,6 +933,8 @@ export default function SalesOrderDetail({ user }) {
         notes: reductionNotes,
         items: snapshot.items,
         released_booth_ids: reductionReleasedBoothIds,
+        added_booth_ids: reductionAddedBoothIds,
+        booth_item_codes: reductionBoothItemCodes,
       };
       if (reductionEditingId) await api.updateContractReduction(reductionEditingId, payload);
       else await api.requestContractReduction({ sales_order_id: id, ...payload });
@@ -933,9 +1071,9 @@ export default function SalesOrderDetail({ user }) {
   // approved, to everyone but Finance/Admin/Management-gated Void
   // (pre-invoice) or Credit Note (post-invoice) — see
   // approvals.controller.js's voidSalesOrder for the matching backend rule.
-  const isLocked = ['PENDING_APPROVAL', 'APPROVED', 'VOID'].includes(salesOrder?.status);
+  const isLocked = ['PENDING_APPROVAL', 'PENDING_APPROVAL_STEP2', 'APPROVED', 'VOID'].includes(salesOrder?.status);
   const canVoid = !isNew && !isViewOnly(user) && salesOrder
-    && ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(salesOrder.status) && invoices.length === 0;
+    && ['DRAFT', 'PENDING_APPROVAL', 'PENDING_APPROVAL_STEP2', 'APPROVED'].includes(salesOrder.status) && invoices.length === 0;
   const canRequestCn = salesOrder?.status === 'APPROVED' && confirmedInvoices.length > 0;
   const canRequestReduction = salesOrder?.status === 'APPROVED' && !isViewOnly(user);
 
@@ -945,6 +1083,11 @@ export default function SalesOrderDetail({ user }) {
         <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {isNew ? 'New Contract' : editing ? 'Edit Contract' : 'Contract'}
           {!isNew && salesOrder && <StatusBadge status={salesOrder.status} />}
+          {!isNew && salesOrder?.status === 'APPROVED' && salesOrder?.has_pending_value_change && (
+            <span style={{ background: '#FFF3BF', color: '#8a6d1a', padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600 }}>
+              VALUE CHANGE PENDING
+            </span>
+          )}
         </h2>
         <div style={{ display: 'flex', gap: 8 }}>
           {!isNew && !editing && !isViewOnly(user) && !isLocked && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
@@ -992,14 +1135,20 @@ export default function SalesOrderDetail({ user }) {
       {!isNew && salesOrder?.status === 'DRAFT' && (
         <div style={{ background: '#F5F6FA', border: '1px solid #ddd', borderRadius: 8, padding: 12, margin: '12px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>This contract is a draft — send it for approval when it's ready. Invoicing stays locked until Admin/Management approves it.</span>
-          <button type="button" onClick={handleSubmitForApproval}>Send for Approval</button>
+          {/* Only this contract's own salesperson can send it for approval —
+              previously shown (and allowed server-side) for anyone viewing
+              the page (2026-08-01 user instruction: "only sales can edit
+              and withdrawn... no other department"). */}
+          {(!salesOrder?.salesperson_id || salesOrder.salesperson_id === user?.id) && (
+            <button type="button" onClick={handleSubmitForApproval}>Send for Approval</button>
+          )}
         </div>
       )}
 
-      {!isNew && salesOrder?.status === 'PENDING_APPROVAL' && canApprove && (
+      {!isNew && ['PENDING_APPROVAL', 'PENDING_APPROVAL_STEP2'].includes(salesOrder?.status) && canApprove && (
         <div style={{ background: '#FFF3BF', border: '1px solid #F0C36D', borderRadius: 8, padding: 12, margin: '12px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>
-            This contract is pending approval
+            This contract is pending{approvalStep === 2 ? ' its 2nd' : approvalStep === 1 ? ' its 1st (of 2)' : ''} approval
             {requiredApprover?.user_name || requiredApprover?.role_code
               ? ` — requires ${requiredApprover.user_name || `the ${requiredApprover.role_code} role`} (value-based approval tier)`
               : ''}.
@@ -1007,18 +1156,27 @@ export default function SalesOrderDetail({ user }) {
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="button" onClick={handleApprove}>Approve</button>
             <button type="button" onClick={handleReject}>Reject</button>
-            {!isViewOnly(user) && <button type="button" onClick={handleWithdrawApproval}>Withdraw</button>}
+            {/* Withdraw is the submitter's own undo, not a general elevated-
+                role action — restricted to this contract's own salesperson
+                (2026-08-01 user instruction, same as Send for Approval
+                above). */}
+            {(!salesOrder?.salesperson_id || salesOrder.salesperson_id === user?.id) && (
+              <button type="button" onClick={handleWithdrawApproval}>Withdraw</button>
+            )}
           </div>
         </div>
       )}
-      {!isNew && salesOrder?.status === 'PENDING_APPROVAL' && !canApprove && (
+      {!isNew && ['PENDING_APPROVAL', 'PENDING_APPROVAL_STEP2'].includes(salesOrder?.status) && !canApprove && (
         <div style={{ background: '#FFF3BF', border: '1px solid #F0C36D', borderRadius: 8, padding: 12, margin: '12px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>
-            Waiting on approval from {requiredApprover?.user_name || requiredApprover?.role_code
+            {salesOrder.status === 'PENDING_APPROVAL_STEP2' ? '1st approval given — waiting on the 2nd approval from ' : 'Waiting on approval from '}
+            {requiredApprover?.user_name || requiredApprover?.role_code
               ? (requiredApprover.user_name || `the ${requiredApprover.role_code} role`)
               : 'Admin/Management'} (this contract's value falls under their approval tier).
           </span>
-          {!isViewOnly(user) && <button type="button" onClick={handleWithdrawApproval}>Withdraw</button>}
+          {(!salesOrder?.salesperson_id || salesOrder.salesperson_id === user?.id) && (
+            <button type="button" onClick={handleWithdrawApproval}>Withdraw</button>
+          )}
         </div>
       )}
 
@@ -1178,19 +1336,47 @@ export default function SalesOrderDetail({ user }) {
             <label style={label}>Dimension (optional)</label>
             <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
           </div>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end' }}>
-            <button type="button" onClick={handlePickBooths} title="Pick booths on the Floor Plan" style={{ padding: 8, width: '100%', marginBottom: 12 }}>
-              📍 Pick Booths on Floor Plan
-            </button>
+          <div style={{ flex: 1 }}>
+            {/* Matches the Dimension label's own height so the button below
+                starts level with the Dimension input instead of sitting a
+                label's-height higher. */}
+            <label style={label}>&nbsp;</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" onClick={handlePickBooths} title="Pick booths on the Floor Plan" style={{ padding: 8, flex: 1 }}>
+                📍 Pick Booths on Floor Plan
+              </button>
+              {isNew && (
+                <InfoTooltip text="Select an exhibitor above, then Pick Booths — Hall, Booth No and Total Sqm fill in from your selection, but nothing is saved until you click Save below." />
+              )}
+            </div>
           </div>
         </div>
-        {isNew && (
-          <p style={{ fontSize: 12, color: '#5c6070', marginTop: -8 }}>Select an exhibitor above, then Pick Booths — Hall, Booth No and Total Sqm fill in from your selection, but nothing is saved until you click Save below.</p>
-        )}
 
         <label style={label}>Remarks (any other information for this contract)</label>
         <textarea style={{ ...inputStyle, minHeight: 60 }} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} />
         </fieldset>
+
+        {!editing && !isNew && salesOrder?.status === 'APPROVED' && !isViewOnly(user) && (
+          <div style={{ marginTop: -8, marginBottom: 12 }}>
+            {!remarksEditOpen ? (
+              <button type="button" onClick={() => { setRemarksDraft(form.remarks || ''); setRemarksEditOpen(true); }} style={{ padding: '4px 10px', fontSize: 13 }}>
+                Edit Remarks
+              </button>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 480 }}>
+                <textarea style={{ ...inputStyle, minHeight: 60 }} value={remarksDraft} onChange={(e) => setRemarksDraft(e.target.value)} autoFocus />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" disabled={savingRemarks} onClick={handleSaveRemarksOnly} style={{ padding: '4px 10px', fontSize: 13 }}>
+                    {savingRemarks ? 'Saving...' : 'Save Remarks'}
+                  </button>
+                  <button type="button" onClick={() => setRemarksEditOpen(false)} style={{ padding: '4px 10px', fontSize: 13 }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {editing && !isNew && <ChangesBanner changes={changes} />}
 
@@ -1214,8 +1400,8 @@ export default function SalesOrderDetail({ user }) {
             </button>
           )}
           {!isNew && salesOrder?.status === 'APPROVED' && !isViewOnly(user) && (
-            <button type="button" onClick={handlePickBooths} title="Relocate this contract's booth(s) on the Floor Plan" style={{ padding: '8px 16px' }}>
-              📍 Change Booth
+            <button type="button" onClick={handlePickBooths} title="Move this contract to a different booth of the same value — same sqm, upgrade tier, and corner/loading. A value-changing swap will be rejected; use Request Value Change for that." style={{ padding: '8px 16px' }}>
+              📍 Reassign Booth
             </button>
           )}
           {canVoid && (
@@ -1231,20 +1417,19 @@ export default function SalesOrderDetail({ user }) {
 
       {!isNew && (
         <div style={{ marginTop: 32 }}>
-          <h3>Billing</h3>
-          <p style={{ fontSize: 13, color: '#5c6070' }}>
-            Bare Space is the base item for a booth order — pick one upgrade at most, then add whichever
-            services apply. Leave Bare Space unchecked for a non-booth order (badges/sponsorship only).
-          </p>
-          {salesOrder?.status === 'PENDING_APPROVAL' && (
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            Billing
+            <InfoTooltip text={'Booth type and sqm are controlled entirely by your Floor Plan booth selection above — pick booths (and each one’s type) there; billing below follows automatically. MEP, Sponsorship, Other and Badge stay optional add-ons you can still toggle manually.'} />
+          </h3>
+          {['PENDING_APPROVAL', 'PENDING_APPROVAL_STEP2'].includes(salesOrder?.status) && (
             <p style={{ fontSize: 13, color: '#5c6070' }}>
               This contract is locked while pending approval — Withdraw it above if it needs to change.
             </p>
           )}
           {isLocked && salesOrder?.status === 'APPROVED' && (
             <p style={{ fontSize: 13, color: '#5c6070' }}>
-              This contract is approved and locked — {canRequestReduction ? 'use Request Contract Reduction below to reduce it' : 'Void it if it needs to change and nothing has been invoiced yet'}.
-              Need to relocate the booth itself? Use <strong>Change Booth</strong> above.
+              This contract is approved and locked — {canRequestReduction ? 'use Request Value Change below to increase or decrease it' : 'Void it if it needs to change and nothing has been invoiced yet'}.
+              Need to move to a different booth of the same value? Use <strong>Reassign Booth</strong> above.
             </p>
           )}
           <BillingTemplate
@@ -1261,7 +1446,7 @@ export default function SalesOrderDetail({ user }) {
             readOnly={isLocked}
             rightActions={canRequestReduction && (
               <button type="button" onClick={() => (showReductionForm ? setShowReductionForm(false) : openReductionForm())}>
-                {showReductionForm ? 'Cancel' : '+ Request Contract Reduction'}
+                {showReductionForm ? 'Cancel' : '+ Request Value Change'}
               </button>
             )}
           />
@@ -1278,13 +1463,10 @@ export default function SalesOrderDetail({ user }) {
         <div style={{ marginTop: 32 }}>
           {showReductionForm && (
             <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginTop: 16 }}>
-              <h4 style={{ marginTop: 0 }}>{reductionEditingId ? 'Edit' : 'Request'} Contract Reduction</h4>
-              <p style={{ fontSize: 12, color: '#5c6070' }}>
-                Adjust quantities, rates, or remove rows below to reflect the newly agreed deal — the new contract
-                total is computed automatically. If the new total no longer covers everything already confirmed-
-                invoiced, a credit note for that shortfall is approved together with this request (issued
-                afterward, against whichever invoice you pick then).
-              </p>
+              <h4 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                {reductionEditingId ? 'Edit' : 'Request'} Value Change
+                <InfoTooltip text="Adjust quantities, rates, or add/remove rows below to reflect the newly agreed deal — the new contract total is computed automatically, up or down. If the new total no longer covers everything already confirmed-invoiced, a credit note for the shortfall is approved together with this request (issued afterward, against whichever invoice you pick then). If the total goes up and an invoice has already been issued, a new draft invoice for the additional amount is created automatically once this is approved." />
+              </h4>
 
               <label style={label}>Reason</label>
               <select style={inputStyle} value={reductionReasonCodeId} onChange={(e) => setReductionReasonCodeId(e.target.value)}>
@@ -1317,12 +1499,7 @@ export default function SalesOrderDetail({ user }) {
                   lodPct={lodPct}
                   showSaveButton={false}
                   onSaved={() => {}}
-                  onTotalChange={(total) => {
-                    setReductionAdjustedTotal(total);
-                    const snap = reductionBillingRef.current?.getSnapshot();
-                    const bas = snap?.items.find((it) => it.sales_item_code === 'BAS');
-                    setReductionAdjustedBasQty(bas ? Number(bas.qty) || 0 : 0);
-                  }}
+                  onTotalChange={(total) => setReductionAdjustedTotal(total)}
                 />
               </div>
 
@@ -1332,98 +1509,30 @@ export default function SalesOrderDetail({ user }) {
                   const newTotal = reductionAdjustedTotal ?? contractTotal;
                   const alreadyIssued = confirmedInvoices.reduce((s, inv) => s + Number(inv.amount_foreign), 0);
                   const cnNeeded = Math.max(0, alreadyIssued - newTotal);
-                  return cnNeeded > 0.01 ? (
-                    <strong style={{ color: '#8a1f1f' }}>Will need a credit note: {fmt(cnNeeded, ccy)}</strong>
-                  ) : (
-                    <strong style={{ color: '#1E7B34' }}>No credit note needed</strong>
-                  );
+                  if (cnNeeded > 0.01) {
+                    return <strong style={{ color: '#8a1f1f' }}>Will need a credit note: {fmt(cnNeeded, ccy)}</strong>;
+                  }
+                  if (newTotal > contractTotal + 0.01 && invoices.length > 0) {
+                    return <strong style={{ color: '#8a1f1f' }}>Will auto-create a new draft invoice for {fmt(newTotal - contractTotal, ccy)}</strong>;
+                  }
+                  return <strong style={{ color: '#1E7B34' }}>No credit note needed</strong>;
                 })()}
               </div>
 
-              {reductionAdjustedBasQty !== null && reductionLinkedAllocatedSqm > 0 && (
-                <div
-                  style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, padding: 12,
-                    background: reductionNeedsBoothRelease ? '#FBE3E3' : '#E3F6E8', borderRadius: 8, flexWrap: 'wrap', gap: 8,
-                  }}
-                >
-                  <span>
-                    Booth allocation: <strong>{reductionRemainingAllocatedSqm} / {reductionAdjustedBasQty} sqm</strong>
-                    {reductionNeedsBoothRelease
-                      ? ' — release booths on the Floor Plan to match the adjusted Bare Space qty before this can be saved.'
-                      : ' — matches the adjusted Bare Space qty.'}
-                  </span>
-                  <button type="button" onClick={handleAdjustReductionBooths}>Adjust Floor Plan Allocation</button>
-                </div>
-              )}
+              <div style={{ marginTop: 8 }}>
+                <button type="button" onClick={handleAdjustReductionBooths}>Adjust Floor Plan Allocation</button>
+              </div>
 
               <label style={label}>Notes (optional)</label>
               <textarea style={{ ...inputStyle, minHeight: 56 }} value={reductionNotes} onChange={(e) => setReductionNotes(e.target.value)} />
 
               {error && <p style={{ color: 'red', fontWeight: 600 }}>{error}</p>}
-              <button type="button" onClick={handleRequestReduction} disabled={reductionBusy || reductionNeedsBoothRelease} style={{ marginTop: 12 }}>
+              <button type="button" onClick={handleRequestReduction} disabled={reductionBusy} style={{ marginTop: 12 }}>
                 {reductionBusy ? 'Submitting...' : 'Submit Request'}
               </button>
             </div>
           )}
 
-          {contractReductions.length > 0 && (
-            <>
-            <h3>Contract Reductions</h3>
-            <table width="100%" cellPadding="6">
-              <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                  <th>Requested</th><th>New Total</th><th>Credit Note</th><th>Reason</th><th>Status</th><th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {contractReductions.map((cr) => {
-                  const cnAmount = Number(cr.cn_amount_myr) || 0;
-                  const needsCnIssue = cr.status === 'APPROVED' && cnAmount > 0.01 && !cr.cn_issued_at;
-                  return (
-                  <tr key={cr.id} style={{ borderBottom: '1px solid #eee' }}>
-                    <td>{new Date(cr.created_at).toLocaleDateString()}</td>
-                    <td>{fmt(cr.old_total_foreign, ccy)} → {fmt(cr.new_total_foreign, ccy)}</td>
-                    <td>
-                      {cnAmount > 0.01
-                        ? (cr.cn_issued_at ? `${fmt(cnAmount, 'MYR')} (issued)` : `${fmt(cnAmount, 'MYR')} pending`)
-                        : '—'}
-                    </td>
-                    <td>{cr.reason_label || '—'}</td>
-                    <td>{cr.status.replace('_', ' ')}</td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      {cr.status === 'PENDING_APPROVAL' && (
-                        <>
-                          <button type="button" disabled={reductionBusy} onClick={() => handleApproveReduction(cr.id)}>Approve</button>{' '}
-                          <button type="button" disabled={reductionBusy} onClick={() => handleRejectReduction(cr.id)}>Reject</button>{' '}
-                          <button type="button" disabled={reductionBusy} onClick={() => openReductionFormForEdit(cr)}>Edit</button>{' '}
-                          <button type="button" disabled={reductionBusy} onClick={() => handleWithdrawReduction(cr.id)}>Withdraw</button>
-                        </>
-                      )}
-                      {needsCnIssue && (
-                        issueCnForId === cr.id ? (
-                          <>
-                            <select style={{ ...inputStyle, width: 180, display: 'inline-block' }} value={issueCnInvoiceId} onChange={(e) => setIssueCnInvoiceId(e.target.value)}>
-                              <option value="">— Select invoice —</option>
-                              {confirmedInvoices.map((inv) => (
-                                <option key={inv.id} value={inv.id}>{inv.invoice_no} — {fmt(inv.amount_myr, 'MYR')}</option>
-                              ))}
-                            </select>{' '}
-                            <button type="button" disabled={reductionBusy} onClick={() => handleIssueReductionCn(cr.id)}>Confirm</button>{' '}
-                            <button type="button" disabled={reductionBusy} onClick={() => { setIssueCnForId(null); setIssueCnInvoiceId(''); }}>Cancel</button>
-                          </>
-                        ) : (
-                          <button type="button" disabled={reductionBusy} onClick={() => { setIssueCnForId(cr.id); setIssueCnInvoiceId(''); }}>Issue Credit Note</button>
-                        )
-                      )}
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            </>
-          )}
 
           {scheduledInvoices.length > 0 && contractReductions.some((cr) => cr.status === 'APPROVED') && (() => {
             const leftover = Math.max(0, contractTotal - confirmedInvoices.reduce((s, inv) => s + Number(inv.amount_foreign), 0));
@@ -1682,6 +1791,145 @@ export default function SalesOrderDetail({ user }) {
           </div>
         );
       })()}
+
+      {/* Contract Reductions sits directly above Approval History — same
+          "who did what to this contract's value" story, so a user checking
+          one naturally finds the other right there instead of scrolling
+          elsewhere for it (2026-08-01 user request). */}
+      {contractReductions.length > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <h3>Value Change Requests</h3>
+          <table width="100%" cellPadding="6">
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+                <th>Requested</th><th>New Total</th><th>Credit Note</th><th>Reason</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {contractReductions.map((cr) => {
+                const cnAmount = Number(cr.cn_amount_myr) || 0;
+                const needsCnIssue = cr.status === 'APPROVED' && cnAmount > 0.01 && !cr.cn_issued_at;
+                return (
+                <>
+                <tr
+                  key={cr.id} id={`reduction-${cr.id}`}
+                  style={{
+                    borderBottom: '1px solid #eee',
+                    background: location.hash === `#openReduction=${cr.id}` ? '#FFF9E0' : 'transparent',
+                  }}
+                >
+                  <td>{new Date(cr.created_at).toLocaleDateString()}</td>
+                  <td>{fmt(cr.old_total_foreign, ccy)} → {fmt(cr.new_total_foreign, ccy)}</td>
+                  <td>
+                    {cnAmount > 0.01
+                      ? (cr.cn_issued_at ? `${fmt(cnAmount, 'MYR')} (issued)` : `${fmt(cnAmount, 'MYR')} pending`)
+                      : '—'}
+                  </td>
+                  <td>{cr.reason_label || '—'}</td>
+                  <td>{cr.status.replace('_', ' ')}</td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedReductionId(expandedReductionId === cr.id ? null : cr.id)}
+                      style={{ marginRight: 8 }}
+                    >
+                      {expandedReductionId === cr.id ? 'Hide Detail' : 'View Detail'}
+                    </button>
+                    {cr.status === 'PENDING_APPROVAL' && (
+                      <>
+                        {/* Buttons only render for whoever the backend says can
+                            actually act — Approve/Reject was always 403'd
+                            server-side for the wrong person, but Edit/
+                            Withdraw wasn't checked at all before, and none of
+                            these were hidden from an unauthorized viewer
+                            (2026-08-01 user report: "everyone can edit,
+                            approve, reject and view"). */}
+                        {cr.can_approve && (
+                          <>
+                            <button type="button" disabled={reductionBusy} onClick={() => handleApproveReduction(cr.id)}>Approve</button>{' '}
+                            <button type="button" disabled={reductionBusy} onClick={() => handleRejectReduction(cr.id)}>Reject</button>{' '}
+                          </>
+                        )}
+                        {cr.can_edit && (
+                          <>
+                            <button type="button" disabled={reductionBusy} onClick={() => openReductionFormForEdit(cr)}>Edit</button>{' '}
+                            <button type="button" disabled={reductionBusy} onClick={() => handleWithdrawReduction(cr.id)}>Withdraw</button>
+                          </>
+                        )}
+                        {!cr.can_approve && !cr.can_edit && (
+                          <span style={{ fontSize: 12, color: '#5c6070' }}>Waiting on {cr.required_approver_label}</span>
+                        )}
+                      </>
+                    )}
+                    {needsCnIssue && (
+                      issueCnForId === cr.id ? (
+                        <>
+                          <select style={{ ...inputStyle, width: 180, display: 'inline-block' }} value={issueCnInvoiceId} onChange={(e) => setIssueCnInvoiceId(e.target.value)}>
+                            <option value="">— Select invoice —</option>
+                            {confirmedInvoices.map((inv) => (
+                              <option key={inv.id} value={inv.id}>{inv.invoice_no} — {fmt(inv.amount_myr, 'MYR')}</option>
+                            ))}
+                          </select>{' '}
+                          <button type="button" disabled={reductionBusy} onClick={() => handleIssueReductionCn(cr.id)}>Confirm</button>{' '}
+                          <button type="button" disabled={reductionBusy} onClick={() => { setIssueCnForId(null); setIssueCnInvoiceId(''); }}>Cancel</button>
+                        </>
+                      ) : (
+                        <button type="button" disabled={reductionBusy} onClick={() => { setIssueCnForId(cr.id); setIssueCnInvoiceId(''); }}>Issue Credit Note</button>
+                      )
+                    )}
+                  </td>
+                </tr>
+                {expandedReductionId === cr.id && (() => {
+                  const oldItems = cr.original_items || [];
+                  const newItems = cr.reduced_items || [];
+                  const codes = [...new Set([...oldItems.map((it) => it.sales_item_code), ...newItems.map((it) => it.sales_item_code)])];
+                  const releasedCount = (cr.released_booth_ids || []).length;
+                  const addedCount = (cr.added_booth_ids || []).length;
+                  return (
+                    <tr key={`${cr.id}-detail`} style={{ background: '#F9FAFC' }}>
+                      <td colSpan={6} style={{ padding: '12px 16px' }}>
+                        {cr.notes && <p style={{ margin: '0 0 8px', fontSize: 13 }}><strong>Notes:</strong> {cr.notes}</p>}
+                        {(releasedCount > 0 || addedCount > 0) && (
+                          <p style={{ margin: '0 0 8px', fontSize: 13 }}>
+                            {releasedCount > 0 && <span>Releasing {releasedCount} booth{releasedCount === 1 ? '' : 's'}. </span>}
+                            {addedCount > 0 && <span>Adding {addedCount} booth{addedCount === 1 ? '' : 's'}.</span>}
+                          </p>
+                        )}
+                        <table width="100%" cellPadding="4" style={{ fontSize: 13 }}>
+                          <thead>
+                            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>
+                              <th>Item</th><th>Before Qty</th><th>Before Total</th><th>After Qty</th><th>After Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {codes.map((code) => {
+                              const before = oldItems.find((it) => it.sales_item_code === code);
+                              const after = newItems.find((it) => it.sales_item_code === code);
+                              return (
+                                <tr key={code} style={{ borderBottom: '1px solid #eee' }}>
+                                  <td>{after?.description || before?.description || code}</td>
+                                  <td>{before ? before.qty : '—'}</td>
+                                  <td>{before ? fmt(before.line_total ?? (before.qty * before.unit_price), ccy) : '—'}</td>
+                                  <td style={{ color: after && before && Number(after.qty) !== Number(before.qty) ? '#B23A3A' : 'inherit', fontWeight: after && before && Number(after.qty) !== Number(before.qty) ? 600 : 400 }}>
+                                    {after ? after.qty : '—'}
+                                  </td>
+                                  <td>{after ? fmt(after.line_total ?? (after.qty * after.unit_price), ccy) : '—'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  );
+                })()}
+                </>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {!isNew && approvalLog.some((l) => ['APPROVED', 'REJECTED'].includes(l.action) || l.action.startsWith('CN_')) && (
         <div style={{ marginTop: 32 }}>

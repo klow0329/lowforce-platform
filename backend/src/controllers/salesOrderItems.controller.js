@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { checkDiscount, checkPostApprovalEdit, checkRevenueThreshold } = require('../utils/approvalTriggers');
+const { mirrorContractToOpportunity } = require('../utils/opportunitySync');
 
 // Server always recomputes the money — never trust a client-submitted total.
 // total_foreign stays in the contract's own currency (what "un-invoiced
@@ -87,6 +88,7 @@ async function addItem(req, res) {
       return res.status(404).json({ error: 'Contract not found.' });
     }
     const wasApproved = soCheck.rows[0].status === 'APPROVED';
+    const isDraft = soCheck.rows[0].status === 'DRAFT';
 
     let taxRatePct = 0;
     if (tax_code_id) {
@@ -120,17 +122,29 @@ async function addItem(req, res) {
     );
 
     const totalMyr = await recomputeTotals(client, req.params.id, req.companyId);
+    await mirrorContractToOpportunity(client, req.companyId, req.params.id);
 
-    const discountFlagged = await checkDiscount(
-      client, req.companyId, req.params.id, discount_type, discount_value, subtotal, req.userId
-    );
-    if (!discountFlagged) {
-      await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId, edit_reason);
+    // A still-DRAFT contract is Sales freely composing the deal — nothing
+    // has been submitted for review yet, so none of these triggers apply.
+    // They only make sense once a contract is genuinely PENDING_APPROVAL/
+    // APPROVED and something about it changes. Without this gate, building
+    // up a brand-new contract line by line (see OpportunityDetail.jsx's
+    // Generate Contract) could silently flip it to PENDING_APPROVAL the
+    // moment the running total crossed the revenue threshold — often after
+    // just the first line or two — well before Sales ever clicked "Send for
+    // Approval" (2026-08-01 user report).
+    if (!isDraft) {
+      const discountFlagged = await checkDiscount(
+        client, req.companyId, req.params.id, discount_type, discount_value, subtotal, req.userId
+      );
+      if (!discountFlagged) {
+        await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, totalMyr, req.userId, edit_reason);
+      }
+      // Revenue threshold is about the contract's absolute value, independent
+      // of why this particular line changed — always checked, not gated
+      // behind the discount/post-approval-edit flags above.
+      await checkRevenueThreshold(client, req.companyId, req.params.id, totalMyr, req.userId);
     }
-    // Revenue threshold is about the contract's absolute value, independent
-    // of why this particular line changed — always checked, not gated
-    // behind the discount/post-approval-edit flags above.
-    await checkRevenueThreshold(client, req.companyId, req.params.id, totalMyr, req.userId);
 
     await client.query('COMMIT');
     res.status(201).json({ item: { id: result.rows[0].id } });
@@ -160,6 +174,7 @@ async function updateItem(req, res) {
       return res.status(404).json({ error: 'Line item not found.' });
     }
     const wasApproved = item.so_status === 'APPROVED';
+    const isDraft = item.so_status === 'DRAFT';
 
     const merged = {
       qty: Number(req.body.qty !== undefined ? req.body.qty : item.qty) || 0,
@@ -201,17 +216,21 @@ async function updateItem(req, res) {
     );
 
     const totalMyr = await recomputeTotals(client, req.params.id, req.companyId);
+    await mirrorContractToOpportunity(client, req.companyId, req.params.id);
 
-    const flagged = await checkDiscount(
-      client, req.companyId, req.params.id, merged.discount_type, merged.discount_value, subtotal, req.userId
-    );
-    if (!flagged) {
-      // Covers every other kind of change to an already-approved contract —
-      // including a tax code change, which used to be its own separate
-      // trigger but is really just one flavour of "edited after approval".
-      await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, req.userId, req.body.edit_reason);
+    // Same DRAFT gate as addItem — see the comment there.
+    if (!isDraft) {
+      const flagged = await checkDiscount(
+        client, req.companyId, req.params.id, merged.discount_type, merged.discount_value, subtotal, req.userId
+      );
+      if (!flagged) {
+        // Covers every other kind of change to an already-approved contract —
+        // including a tax code change, which used to be its own separate
+        // trigger but is really just one flavour of "edited after approval".
+        await checkPostApprovalEdit(client, req.companyId, req.params.id, wasApproved, totalMyr, req.userId, req.body.edit_reason);
+      }
+      await checkRevenueThreshold(client, req.companyId, req.params.id, totalMyr, req.userId);
     }
-    await checkRevenueThreshold(client, req.companyId, req.params.id, totalMyr, req.userId);
 
     await client.query('COMMIT');
     res.json({ item: { id: req.params.itemId } });
@@ -241,6 +260,7 @@ async function deleteItem(req, res) {
     }
 
     await recomputeTotals(client, req.params.id, req.companyId);
+    await mirrorContractToOpportunity(client, req.companyId, req.params.id);
     await client.query('COMMIT');
     res.json({ success: true });
   } catch (err) {

@@ -8,7 +8,7 @@ async function listCountries(req, res) {
 
 async function listAgents(req, res) {
   const result = await pool.query(
-    `SELECT id, name, comm_rate FROM agents WHERE company_id = $1 AND is_active = TRUE ORDER BY name`,
+    `SELECT id, name FROM agents WHERE company_id = $1 AND is_active = TRUE ORDER BY name`,
     [req.companyId]
   );
   res.json({ agents: result.rows });
@@ -88,10 +88,12 @@ async function getCompany(req, res) {
     `SELECT c.id, c.name,
             cs.reg_no, cs.tin_no, cs.sst_no, cs.address, cs.phone, cs.email,
             cs.bank_name, cs.bank_account_no, cs.bank_swift, cs.payment_instructions,
-            cs.contract_terms,
+            cs.contract_terms, cs.event_name,
             (cs.logo_filename IS NOT NULL) AS has_logo,
             (cs.letterhead_filename IS NOT NULL) AS has_letterhead,
-            (cs.footer_filename IS NOT NULL) AS has_footer
+            (cs.footer_filename IS NOT NULL) AS has_footer,
+            (cs.event_logo_filename IS NOT NULL) AS has_event_logo,
+            (cs.contract_terms_pdf_filename IS NOT NULL) AS has_contract_terms_pdf
      FROM companies c
      LEFT JOIN company_settings cs ON cs.company_id = c.id
      WHERE c.id = $1`,

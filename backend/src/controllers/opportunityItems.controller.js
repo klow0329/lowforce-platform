@@ -207,4 +207,4 @@ async function deleteItem(req, res) {
   }
 }
 
-module.exports = { listItems, addItem, updateItem, deleteItem };
+module.exports = { listItems, addItem, updateItem, deleteItem, recomputeTotals };

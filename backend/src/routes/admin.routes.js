@@ -4,7 +4,8 @@ const { attachTenant } = require('../middleware/tenant');
 const { requireAdmin } = require('../middleware/admin');
 const { asyncHandler } = require('../utils/asyncHandler');
 const {
-  listUsers, createUser, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
+  listUsers, createUser, importUsers, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
+  createRole, updateRole, deleteRole,
   listEvents, createEvent, updateEvent,
 } = require('../controllers/admin.controller');
 const { archiveRecord, restoreRecord, listArchived } = require('../controllers/archive.controller');
@@ -14,11 +15,15 @@ router.use(requireAdmin); // everything below is admin-only
 
 router.get('/users', asyncHandler(listUsers));
 router.post('/users', asyncHandler(createUser));
+router.post('/users/import', asyncHandler(importUsers));
 router.put('/users/:id', asyncHandler(updateUser));
 router.post('/users/:id/reset-password', asyncHandler(resetPassword));
 router.put('/users/:id/events', asyncHandler(setUserEventAccess));
 router.put('/users/:id/roles', asyncHandler(setUserRoles));
 router.get('/roles', asyncHandler(listRoles));
+router.post('/roles', asyncHandler(createRole));
+router.put('/roles/:id', asyncHandler(updateRole));
+router.delete('/roles/:id', asyncHandler(deleteRole));
 
 router.get('/events', asyncHandler(listEvents));
 router.post('/events', asyncHandler(createEvent));

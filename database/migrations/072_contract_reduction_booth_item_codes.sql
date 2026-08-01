@@ -1,0 +1,11 @@
+-- The item-based Contract Reduction / Value Change request UI lets Sales
+-- re-tag a surviving (not released) booth's type in the "Adjust Floor Plan
+-- Allocation" picker (e.g. Bare Space -> Corner) as part of the same value
+-- change — this wasn't captured anywhere before, so the retype never made
+-- it into floor_plan_booth_claims.allocated_item_code even though the
+-- picker itself now lets you choose it (2026-08-01 user report: the picker
+-- only ever offered Bare Space and nothing persisted anyway).
+-- {boothId: sales_item_code} for every booth still selected when the
+-- request was made (both kept and released) — applied to the SURVIVING
+-- booths' claims on approval (see approveContractReduction).
+ALTER TABLE contract_reductions ADD COLUMN booth_item_codes JSONB NOT NULL DEFAULT '{}';

@@ -8,6 +8,7 @@ import { isViewOnly } from '../utils/permissions';
 import { setUnsavedChanges } from '../utils/unsavedChanges';
 import DeleteRecordButton from '../components/DeleteRecordButton';
 import CorrespondenceLog from '../components/CorrespondenceLog';
+import InfoTooltip from '../components/InfoTooltip';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -63,6 +64,9 @@ export default function OpportunityDetail({ user }) {
   const [stages, setStages] = useState([]);
   const [salespeople, setSalespeople] = useState([]);
   const [priceList, setPriceList] = useState([]);
+  // Which sales_item_code drives Total Sqm on this event — see
+  // BillingTemplate.jsx's is_primary_base; falls back to 'BAS'.
+  const primaryBaseCode = priceList.find((p) => p.is_primary_base)?.sales_item_code || 'BAS';
   const [creditTerms, setCreditTerms] = useState([]);
   const [taxCodes, setTaxCodes] = useState([]);
   const [lodPct, setLodPct] = useState(15);
@@ -81,12 +85,21 @@ export default function OpportunityDetail({ user }) {
   const [billToPreview, setBillToPreview] = useState({ billingName: '', agentName: '' });
   const [stageChangedAt, setStageChangedAt] = useState(null);
   const [needsReallocation, setNeedsReallocation] = useState(false);
+  const [hasPendingValueChange, setHasPendingValueChange] = useState(false);
   // null = not loaded yet — kept distinct from [] (genuinely zero booths) so
   // the sync-to-form effect below never overwrites hall/booth_no with a
   // premature blank before the real set has actually arrived. This is now
   // the STAGED set (may not match the database until Save) rather than a
   // live server mirror — see handleSubmit for where it actually commits.
   const [linkedBooths, setLinkedBooths] = useState(null);
+  // Server-loaded baseline for linkedBooths (id + allocated_item_code only) —
+  // used solely by the unsaved-changes dirty-check below, since a booth
+  // selection or per-booth type change (e.g. Bare Space -> WOP) doesn't
+  // always move Hall/Booth No/Total Sqm (same booths, different type), so
+  // computeChanges(original, form) alone can miss it (2026-07-31 bug report:
+  // user left the screen with an unsaved booth-type change and got no
+  // warning).
+  const [originalLinkedBooths, setOriginalLinkedBooths] = useState(null);
   // Overrides the normal server-loaded `items` when restoring a draft after
   // a Floor Plan round trip (see draftKey above) — BillingTemplate reseeds
   // its rows from whichever of these two is passed as its `items` prop.
@@ -128,6 +141,7 @@ export default function OpportunityDetail({ user }) {
     if (isNew) {
       if (draft) applyDraft();
       else setLinkedBooths([]);
+      setOriginalLinkedBooths([]);
       return;
     }
 
@@ -159,8 +173,12 @@ export default function OpportunityDetail({ user }) {
         setBillToPreview({ billingName: opportunity.billing_name || '', agentName: opportunity.agent_name || '' });
         setStageChangedAt(opportunity.stage_changed_at);
         setNeedsReallocation(opportunity.needs_booth_reallocation);
+        setHasPendingValueChange(opportunity.has_pending_value_change);
         loadItems();
-        api.listOpportunityBooths(id).then(({ booths }) => setLinkedBooths(booths));
+        api.listOpportunityBooths(id).then(({ booths }) => {
+          setLinkedBooths(booths);
+          setOriginalLinkedBooths(booths);
+        });
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,12 +218,22 @@ export default function OpportunityDetail({ user }) {
     // per-booth type tagging in the cap-mode picker.
     const byType = {};
     for (const b of linkedBooths) {
-      const code = b.allocated_item_code || 'BAS';
+      const code = b.allocated_item_code || primaryBaseCode;
       byType[code] = (byType[code] || 0) + (Number(b.sqm) || 0);
     }
     const isCorner = linkedBooths.some((b) => b.is_corner);
     const isLoading = linkedBooths.some((b) => b.is_loading);
-    billingRef.current.applyBoothAllocation({ byType, isCorner, isLoading });
+    // Any other admin-flagged is_booth_related item tagged per-booth on the
+    // Floor Plan (see FloorPlan.jsx's booth editor, migration 070) — Corner/
+    // Loading stay on their own dedicated flags above.
+    const boothAddonCodes = [...new Set(
+      priceList.filter((p) => p.is_booth_related && p.sales_item_code !== 'COR' && p.sales_item_code !== 'LOD').map((p) => p.sales_item_code)
+    )];
+    const byAddon = {};
+    for (const code of boothAddonCodes) {
+      byAddon[code] = linkedBooths.filter((b) => (b.addon_codes || []).includes(code)).length;
+    }
+    billingRef.current.applyBoothAllocation({ byType, isCorner, isLoading, byAddon });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedBooths, priceList, pickedBooths]);
 
@@ -297,15 +325,27 @@ export default function OpportunityDetail({ user }) {
 
   const changes = computeChanges(original, form);
 
+  // True if the current booth selection (which booths, and each one's
+  // allocated type) differs from what was actually loaded from the server —
+  // catches a booth-type swap or add/remove that didn't happen to move
+  // Hall/Booth No/Total Sqm, which computeChanges alone would miss.
+  function boothsChanged() {
+    if (!linkedBooths || !originalLinkedBooths) return false;
+    const snap = (list) => list.map((b) => `${b.id}:${b.allocated_item_code || ''}`).sort().join('|');
+    return snap(linkedBooths) !== snap(originalLinkedBooths);
+  }
+
   // Warns before the user navigates away (nav bar links, tab close/refresh)
   // with unsaved edits — cleared on unmount so it never leaks onto the next
   // page after a confirmed discard or a successful Save.
   useEffect(() => {
-    const isDirty = editing && (isNew ? Boolean(exhibitorName) : changes.length > 0);
+    const isDirty = editing && (isNew
+      ? Boolean(exhibitorName)
+      : changes.length > 0 || boothsChanged());
     setUnsavedChanges(isDirty, 'You have unsaved opportunity changes that will be lost if you leave. Continue?');
     return () => setUnsavedChanges(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, isNew, changes.length, exhibitorName]);
+  }, [editing, isNew, changes.length, exhibitorName, linkedBooths, originalLinkedBooths]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -341,10 +381,15 @@ export default function OpportunityDetail({ user }) {
       const boothItemCodes = Object.fromEntries((linkedBooths || []).map((b) => [b.id, b.allocated_item_code || null]));
       if (isNew) {
         const { opportunity } = await api.createOpportunity(form);
+        // Booth links (and their BAS/upgrade type tagging) must land before
+        // the billing sync below, since billing derives Total Sqm and its
+        // rows from whichever booths/types are actually linked — syncing
+        // billing first raced against the still-stale booth link and could
+        // reject the save with a stale-cap error (see 2026-07-31 bug report).
+        await api.bulkSetOpportunityBooths(opportunity.id, { floor_plan_booth_ids: boothIds, booth_item_codes: boothItemCodes, exhibitor_name: exhibitorName });
         // Billing lines were entered on this same form before the record
         // existed — sync them to the new id now, as part of this one Save.
         await billingRef.current?.save(opportunity.id);
-        await api.bulkSetOpportunityBooths(opportunity.id, { floor_plan_booth_ids: boothIds, booth_item_codes: boothItemCodes, exhibitor_name: exhibitorName });
         // First rep to touch an unclaimed account becomes its owner.
         const { exhibitor } = await api.getExhibitor(form.exhibitor_id);
         if (!exhibitor.salesperson_id && form.salesperson_id) {
@@ -353,8 +398,8 @@ export default function OpportunityDetail({ user }) {
         navigate(`/opportunities/${opportunity.id}`);
       } else {
         await api.updateOpportunity(id, form);
-        await billingRef.current?.save(id);
         await api.bulkSetOpportunityBooths(id, { floor_plan_booth_ids: boothIds, booth_item_codes: boothItemCodes, exhibitor_name: exhibitorName });
+        await billingRef.current?.save(id);
         navigate('/opportunities');
       }
     } catch (err) {
@@ -384,21 +429,14 @@ export default function OpportunityDetail({ user }) {
       form, exhibitorName, linkedBooths: linkedBooths || [],
       billingItems: snapshot ? snapshot.items : null,
     }));
-    // Which booth-item codes the current billing already expects — lets the
-    // picker auto-resolve the common single-type case silently, and only
-    // surface per-booth tagging when the contract genuinely mixes types (see
-    // FloorPlan.jsx's capIsMixed).
+    // Every admin-configured Upgrade option — offered per-booth in the Floor
+    // Plan picker's own type dropdown (see FloorPlan.jsx), always shown for
+    // every selected booth so Sales sets the real type up front.
     const upgradeCodes = [...UPGRADE_CODES];
     for (const p of priceList) if (p.is_upgrade_option && !upgradeCodes.includes(p.sales_item_code)) upgradeCodes.push(p.sales_item_code);
     const upgradeOptions = upgradeCodes.map((code) => ({
       code, label: priceList.find((p) => p.sales_item_code === code)?.description || FIXED_LABELS[code] || code,
     }));
-    const itemTypeTotals = {};
-    for (const it of (snapshot?.items || [])) {
-      if (it.sales_item_code === 'BAS' || upgradeCodes.includes(it.sales_item_code)) {
-        itemTypeTotals[it.sales_item_code] = (itemTypeTotals[it.sales_item_code] || 0) + Number(it.qty || 0);
-      }
-    }
     navigate('/floor-plan', {
       state: {
         pickFor: {
@@ -410,7 +448,6 @@ export default function OpportunityDetail({ user }) {
           preSelectedBooths: linkedBooths || [],
           cap: null,
           upgradeOptions,
-          itemTypeTotals,
         },
       },
     });
@@ -451,7 +488,7 @@ export default function OpportunityDetail({ user }) {
       }
       return;
     }
-    if (!window.confirm('Create a Contract from this opportunity? You can review and edit it further afterward.')) return;
+    if (!window.confirm('Create a Draft Contract from this opportunity? It stays a freely-editable Draft until you explicitly send it for approval — nothing is submitted yet.')) return;
     setTransferring(true);
     setError('');
     try {
@@ -493,7 +530,14 @@ export default function OpportunityDetail({ user }) {
   return (
     <div className="page" style={{ maxWidth: 1100, margin: '40px auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>{isNew ? 'Add Opportunity' : editing ? 'Edit Opportunity' : 'Opportunity'}</h2>
+        <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {isNew ? 'Add Opportunity' : editing ? 'Edit Opportunity' : 'Opportunity'}
+          {hasPendingValueChange && (
+            <span style={{ background: '#FFF3BF', color: '#8a6d1a', padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600 }}>
+              VALUE CHANGE PENDING
+            </span>
+          )}
+        </h2>
         <div style={{ display: 'flex', gap: 8 }}>
           {!isNew && !editing && !isViewOnly(user) && <button type="button" onClick={() => setEditing(true)}>Edit</button>}
           <button type="button" onClick={() => navigate('/opportunities')}>Back to list</button>
@@ -510,7 +554,7 @@ export default function OpportunityDetail({ user }) {
         </div>
       )}
 
-      <form onSubmit={handleSubmit}>
+      <form id="opportunity-form" onSubmit={handleSubmit}>
         <fieldset disabled={!editing} style={fieldsetStyle}>
         <label style={label}>Exhibitor *</label>
         {lockedExhibitorId ? (
@@ -700,24 +744,30 @@ export default function OpportunityDetail({ user }) {
             <label style={label}>Dimension (optional)</label>
             <input style={inputStyle} placeholder="e.g. 3m x 3m" value={form.dimension} onChange={(e) => set('dimension', e.target.value)} />
           </div>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end' }}>
-            <button type="button" onClick={handlePickBooths} title="Pick booths on the Floor Plan" style={{ padding: 8, width: '100%', marginBottom: 12 }}>
-              📍 Pick Booths on Floor Plan
-            </button>
+          <div style={{ flex: 1 }}>
+            {/* Matches the Dimension label's own height so the button below
+                starts at the exact same row as the Dimension input, instead
+                of sitting a label's-height higher (2026-08-01 user report:
+                the two boxes weren't level with each other). */}
+            <label style={label}>&nbsp;</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" onClick={handlePickBooths} title="Pick booths on the Floor Plan" style={{ padding: 8, flex: 1 }}>
+                📍 Pick Booths on Floor Plan
+              </button>
+              {isNew && (
+                <InfoTooltip
+                  text="Select an exhibitor above, then Pick Booths — Hall, Booth No and Total Sqm fill in from your selection, but nothing is saved until you click Save below."
+                />
+              )}
+            </div>
           </div>
         </div>
-        {isNew && (
-          <p style={{ fontSize: 12, color: '#5c6070', marginTop: -8 }}>Select an exhibitor above, then Pick Booths — Hall, Booth No and Total Sqm fill in from your selection, but nothing is saved until you click Save below.</p>
-        )}
 
         <div style={{ marginTop: 20 }}>
-          <h3 style={{ marginBottom: 4 }}>Billing (estimate)</h3>
-          <p style={{ fontSize: 13, color: '#5c6070' }}>
-            Bare Space is the base item for a booth order — pick one upgrade at most, then add whichever
-            services apply. Leave Bare Space unchecked for a non-booth order (badges/sponsorship only).
-            This is saved together with the details above, and carries across to the Contract when you
-            click "Generate Contract".
-          </p>
+          <h3 style={{ marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+            Billing (estimate)
+            <InfoTooltip text={'Booth type and sqm are controlled entirely by your Floor Plan booth selection above — pick booths (and each one’s type) there; billing below follows automatically. MEP, Sponsorship, Other and Badge stay optional add-ons you can still toggle manually. This is saved together with the details above, and carries across to the Contract when you click "Generate Contract".'} />
+          </h3>
           <BillingTemplate
             ref={billingRef}
             parentType="opportunity"
@@ -733,52 +783,64 @@ export default function OpportunityDetail({ user }) {
           />
         </div>
 
-        <label style={label}>Next Follow-up Date</label>
-        <input type="date" style={inputStyle} value={form.next_follow_up_date} onChange={(e) => set('next_follow_up_date', e.target.value)} />
-
         <label style={label}>Remarks</label>
         <textarea style={{ ...inputStyle, minHeight: 48 }} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} />
         </fieldset>
-
-        {editing && !isNew && <ChangesBanner changes={changes} />}
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-          {editing && (
-            <button type="submit" disabled={saving} style={{ padding: '8px 16px' }}>
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          )}
-          {/* Right at eye level next to Save, not buried up top — a
-              validation failure (e.g. upgrade sqm over Bare Space) is
-              impossible to miss here. */}
-          {editing && error && (
-            <span style={{ color: '#B23A3A', fontSize: 13, fontWeight: 600, background: '#FBE3E3', padding: '4px 10px', borderRadius: 6 }}>
-              {error}
-            </span>
-          )}
-          {!isNew && (
-            <button type="button" onClick={handleViewProposal} style={{ padding: '8px 16px' }}>
-              View Proposal
-            </button>
-          )}
-          {!isNew && !isViewOnly(user) && (
-            existingSalesOrderId ? (
-              <button type="button" onClick={() => navigate(`/sales-orders/${existingSalesOrderId}`)} style={{ padding: '8px 16px' }}>
-                View Contract
-              </button>
-            ) : (
-              <button type="button" disabled={transferring} onClick={handleGenerateContract} style={{ padding: '8px 16px' }}>
-                {transferring ? 'Creating...' : 'Generate Contract'}
-              </button>
-            )
-          )}
-          {!isNew && user?.role_code === 'ADM' && (
-            <DeleteRecordButton type="opportunity" id={id} label="opportunity" onDeleted={() => navigate('/opportunities')} />
-          )}
-        </div>
       </form>
 
+      {/* CorrespondenceLog renders its own <form> internally, so it has to
+          sit outside the Opportunity form's own <form> tag (nested forms are
+          invalid HTML) — placed here, between Remarks and Next Follow-up
+          Date, to match the reading order the user asked for. The Save
+          button below is still wired to the Opportunity form via its
+          form="opportunity-form" attribute, so submitting works exactly the
+          same as if this were all one form. */}
       {!isNew && <CorrespondenceLog entityType="opportunity" entityId={id} />}
+
+      <div>
+        <label style={label}>Next Follow-up Date</label>
+        <input
+          type="date" style={inputStyle} disabled={!editing} value={form.next_follow_up_date}
+          onChange={(e) => set('next_follow_up_date', e.target.value)}
+        />
+      </div>
+
+      {editing && !isNew && <ChangesBanner changes={changes} />}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+        {editing && (
+          <button type="submit" form="opportunity-form" disabled={saving} style={{ padding: '8px 16px' }}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        )}
+        {/* Right at eye level next to Save, not buried up top — a
+            validation failure (e.g. upgrade sqm over Bare Space) is
+            impossible to miss here. */}
+        {editing && error && (
+          <span style={{ color: '#B23A3A', fontSize: 13, fontWeight: 600, background: '#FBE3E3', padding: '4px 10px', borderRadius: 6 }}>
+            {error}
+          </span>
+        )}
+        {!isNew && (
+          <button type="button" onClick={handleViewProposal} style={{ padding: '8px 16px' }}>
+            View Proposal
+          </button>
+        )}
+        {!isNew && !isViewOnly(user) && (
+          existingSalesOrderId ? (
+            <button type="button" onClick={() => navigate(`/sales-orders/${existingSalesOrderId}`)} style={{ padding: '8px 16px' }}>
+              View Contract
+            </button>
+          ) : (
+            <button type="button" disabled={transferring} onClick={handleGenerateContract} style={{ padding: '8px 16px' }}>
+              {transferring ? 'Creating...' : 'Generate Draft Contract'}
+            </button>
+          )
+        )}
+        {!isNew && user?.role_code === 'ADM' && (
+          <DeleteRecordButton type="opportunity" id={id} label="opportunity" onDeleted={() => navigate('/opportunities')} />
+        )}
+      </div>
     </div>
   );
 }

@@ -33,6 +33,7 @@ export default function CustomerAging({ embedded = false, user }) {
   const [company, setCompany] = useState(null);
   const [emailPanel, setEmailPanel] = useState(null); // { templateKey, vars } | null
   const exhibitorFilter = searchParams.get('exhibitor') || '';
+  const contractFilter = searchParams.get('sales_order_id') || '';
 
   useEffect(() => {
     if (!selectedEventId) return;
@@ -131,6 +132,9 @@ export default function CustomerAging({ embedded = false, user }) {
   if (exhibitorFilter) {
     visibleInvoices = visibleInvoices.filter((inv) => inv.exhibitor_name === exhibitorFilter);
   }
+  if (contractFilter) {
+    visibleInvoices = visibleInvoices.filter((inv) => inv.sales_order_id === contractFilter);
+  }
 
   return (
     <div className={embedded ? '' : 'page'} style={embedded ? {} : { maxWidth: 900, margin: '40px auto' }}>
@@ -140,6 +144,12 @@ export default function CustomerAging({ embedded = false, user }) {
           Filtered to <strong>{exhibitorFilter}</strong>{' '}
           <button type="button" onClick={() => setSearchParams({})} style={{ fontSize: 12 }}>Clear</button>{' '}
           <button type="button" onClick={draftStatement} style={{ fontSize: 12 }}>Draft Statement Email</button>
+        </p>
+      )}
+      {contractFilter && (
+        <p style={{ fontSize: 13 }}>
+          Filtered to this contract's invoices only{' '}
+          <button type="button" onClick={() => setSearchParams({})} style={{ fontSize: 12 }}>Clear</button>
         </p>
       )}
       {emailPanel && (

@@ -27,7 +27,7 @@ async function login(req, res) {
   // account once the user has picked which company to log into; omitted on
   // the first attempt, when it isn't known yet.
   const result = await pool.query(
-    `SELECT u.id, u.company_id, u.email, u.password_hash, u.full_name, u.is_active,
+    `SELECT u.id, u.company_id, u.email, u.password_hash, u.full_name, u.is_active, u.access_level_override,
             r.code AS role_code, c.name AS company_name
      FROM users u
      JOIN companies c ON c.id = u.company_id
@@ -94,6 +94,7 @@ async function login(req, res) {
     email: user.email,
     full_name: user.full_name,
     role_code: user.role_code,
+    access_level_override: user.access_level_override,
   };
 
   recordAudit({
@@ -127,7 +128,7 @@ async function me(req, res) {
   }
 
   const result = await pool.query(
-    `SELECT u.id, u.company_id, u.email, u.full_name, u.is_active,
+    `SELECT u.id, u.company_id, u.email, u.full_name, u.is_active, u.access_level_override,
             r.code AS role_code
      FROM users u
      LEFT JOIN roles r ON r.id = u.role_id
@@ -155,6 +156,7 @@ async function me(req, res) {
     email: user.email,
     full_name: user.full_name,
     role_code: activeRoleCode,
+    access_level_override: user.access_level_override,
   };
 
   res.json({ user: req.session.user, availableRoles });

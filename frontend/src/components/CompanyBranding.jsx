@@ -19,3 +19,12 @@ export function FooterBand({ company }) {
   if (!company?.has_footer) return null;
   return <img src={api.brandingImageUrl('footer')} alt="" style={{ width: '100%', display: 'block', marginTop: 16 }} />;
 }
+
+// The event/brand identity (e.g. "MIFB") is often distinct from the
+// operating company's own name/logo — shown on customer-facing event forms
+// (Contract/Application/Proposal) alongside the company's own branding,
+// rather than replacing it. Renders nothing until Admin sets it up.
+export function EventBrandLogo({ company, height = 44, style }) {
+  if (!company?.has_event_logo) return null;
+  return <img src={api.brandingImageUrl('event_logo')} alt="" style={{ height, display: 'block', marginBottom: 6, ...style }} />;
+}

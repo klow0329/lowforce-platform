@@ -141,7 +141,11 @@ export default function Management({ user }) {
 
   function approvalHref(p) {
     if (p.type === 'cn') return `/credit-notes/${p.id}`;
-    if (p.type === 'reduction') return `/sales-orders/${p.sales_order_id}`;
+    // #openReduction scrolls straight to (and highlights) this specific
+    // Value Change Request's row instead of landing MGT on the main
+    // contract page with no idea what's actually pending (2026-08-01 user
+    // report).
+    if (p.type === 'reduction') return `/sales-orders/${p.sales_order_id}#openReduction=${p.id}`;
     return `/sales-orders/${p.id}`;
   }
 
@@ -191,20 +195,23 @@ export default function Management({ user }) {
           <div style={tileLabel}>Conversion Rate</div>
           <div style={tileValue}>{dashboard.opportunities.conversionRatePct.toFixed(1)}%</div>
         </button>
-        <button style={tile} onClick={() => navigate('/sales-orders')}>
-          <div style={tileLabel}>Total Contract Value</div>
+        <button style={tile} onClick={() => navigate('/sales-orders')} title="Approved contracts only">
+          <div style={tileLabel}>Total Contracted Value</div>
           <div style={tileValue}>{fmtMYR(dashboard.totalContractValue)}</div>
         </button>
         <button style={tile} onClick={() => navigate('/invoices')}>
           <div style={tileLabel}>Total Collected</div>
           <div style={{ ...tileValue, color: '#1A9C5B' }}>{fmtMYR(dashboard.totalCollected)}</div>
         </button>
-        <button style={{ ...tile, background: dashboard.totalOutstanding > 0 ? '#fdecec' : '#fff' }} onClick={() => navigate('/customer-aging')}>
+        <button
+          style={{ ...tile, background: dashboard.totalOutstanding > 0 ? '#fdecec' : '#fff' }} onClick={() => navigate('/customer-aging')}
+          title="Total Contracted Value − Total Collected — includes amounts not yet invoiced or not yet due"
+        >
           <div style={tileLabel}>Total Outstanding (AR)</div>
           <div style={{ ...tileValue, color: dashboard.totalOutstanding > 0 ? '#D13434' : 'inherit' }}>{fmtMYR(dashboard.totalOutstanding)}</div>
         </button>
-        <button style={tile} onClick={() => navigate('/opportunities')} title="Bare Space, Shell Scheme, Enhanced Shell, Walk-On Package and Custom Build only">
-          <div style={tileLabel}>Total Booths (Won)</div>
+        <button style={tile} onClick={() => navigate('/sales-orders')} title="Physical booths on approved contracts only — Bare Space, Shell Scheme, Enhanced Shell, Walk-On Package and Custom Build">
+          <div style={tileLabel}>Total Booth Contracted</div>
           <div style={tileValue}>{dashboard.totalBooths.count}</div>
           <div style={tileLabel}>{dashboard.totalBooths.totalSqm} sqm</div>
         </button>

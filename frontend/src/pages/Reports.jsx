@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import PerfOverview from './reports/PerfOverview';
 import PerfBySalesperson from './reports/PerfBySalesperson';
+import PerfByAgent from './reports/PerfByAgent';
 import PerfByItem from './reports/PerfByItem';
 import PerfByCountry from './reports/PerfByCountry';
 import PerfByMonth from './reports/PerfByMonth';
@@ -8,6 +9,7 @@ import PerfPipeline from './reports/PerfPipeline';
 import PerfComparison from './reports/PerfComparison';
 import AgentCommission from './reports/AgentCommission';
 import CustomerAging from './CustomerAging';
+import ContractAging from './ContractAging';
 
 // One Reports module with a visible sub-menu (no dropdown chains) — the
 // pattern Salesforce/HubSpot converge on: users learn what exists by seeing
@@ -15,6 +17,7 @@ import CustomerAging from './CustomerAging';
 const SECTIONS = [
   { key: 'overview', label: 'Overview', Component: PerfOverview },
   { key: 'salesperson', label: 'By Salesperson', Component: PerfBySalesperson },
+  { key: 'agent', label: 'Agent Analysis', Component: PerfByAgent },
   { key: 'items', label: 'By Item & Type', Component: PerfByItem },
   { key: 'country', label: 'By Country', Component: PerfByCountry },
   { key: 'monthly', label: 'By Month', Component: PerfByMonth },
@@ -22,6 +25,7 @@ const SECTIONS = [
   { key: 'comparison', label: 'Comparison', Component: PerfComparison },
   { key: 'agent-commission', label: 'Agent Commission', Component: AgentCommission },
   { key: 'aging', label: 'Customer Aging', Component: CustomerAging },
+  { key: 'aging-by-contract', label: 'Aging by Contract', Component: ContractAging },
 ];
 
 export default function Reports({ user }) {

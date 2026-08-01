@@ -170,18 +170,34 @@ function fmtTotal(n) {
   return Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function NarrowRow({ code, checked, onToggle, row, onField, priceList, currency, bookingType, taxCodes, basUnitPrice, lodPct }) {
+// qtyLocked rows (Bare Space, Corner, Loading, and every Upgrade row — see
+// UpgradeRow below) are driven entirely by whichever booths/types are picked
+// on the Floor Plan (2026-07-31: the user asked for this after two separate
+// live corruptions where a manual Qty edit silently detached a row from
+// Floor Plan sync forever, via the userEdited flag in applyBoothAllocation —
+// since the checkbox/Qty input can no longer fire onChange when locked,
+// userEdited can never be set true again for these rows, so sync can never
+// silently break). MEP/BAD stay manually toggleable — they're optional
+// add-ons Sales chooses per deal, not tied to any booth's physical type.
+function NarrowRow({ code, checked, onToggle, row, onField, priceList, currency, bookingType, taxCodes, basUnitPrice, lodPct, qtyLocked }) {
   const display = row.included ? row : { ...row, ...computeDefaults(code, priceList, currency, bookingType, basUnitPrice, lodPct) };
   const total = row.included ? calcLineTotal(row, taxCodes) : 0;
+  const lockTitle = 'Controlled by the Floor Plan booth selection — pick booths (and their type) there to change this.';
   return (
     <tr style={{ borderBottom: '1px solid #eee' }}>
-      <td style={{ width: COL.checkbox }}><input type="checkbox" checked={checked} onChange={(e) => onToggle(e.target.checked)} /></td>
+      <td style={{ width: COL.checkbox }}>
+        <input type="checkbox" checked={checked} disabled={qtyLocked} title={qtyLocked ? lockTitle : undefined} onChange={(e) => onToggle(e.target.checked)} />
+      </td>
       <td style={{ width: COL.code, fontWeight: 600 }}>{code}</td>
       <td>
         <input style={smallInput} value={display.description} disabled={!row.included} onChange={(e) => onField('description', e.target.value.toUpperCase())} />
       </td>
       <td style={{ width: COL.qty }}>
-        <input type="number" step="0.01" style={smallInput} value={row.included ? row.qty : ''} disabled={!row.included} onChange={(e) => onField('qty', e.target.value)} />
+        <input
+          type="number" step="0.01" style={{ ...smallInput, ...(qtyLocked ? { background: '#F5F6FA' } : {}) }}
+          value={row.included ? row.qty : ''} disabled={qtyLocked || !row.included}
+          title={qtyLocked ? lockTitle : undefined} onChange={(e) => onField('qty', e.target.value)}
+        />
       </td>
       <td style={{ width: COL.rate }}>
         <input
@@ -196,27 +212,28 @@ function NarrowRow({ code, checked, onToggle, row, onField, priceList, currency,
   );
 }
 
-function UpgradeRow({ upgrade, onSelectUpgrade, onField, onRemove, canRemove, priceList, currency, bookingType, taxCodes, availableCodes }) {
+// Every Upgrade row is Floor-Plan-driven — see the NarrowRow comment above.
+// The code itself (which tier a booth carries) is picked on the Floor Plan's
+// per-booth type dropdown, not here, so it renders as plain text instead of
+// a selectable dropdown, and there's no manual remove — a row disappears on
+// its own (see the parent's upgradeRows.filter) once no booth carries that
+// type anymore.
+function UpgradeRow({ upgrade, priceList, currency, bookingType, taxCodes, onField }) {
   const display = upgrade.included ? upgrade : { ...upgrade, ...computeDefaults(upgrade.code, priceList, currency, bookingType) };
   const total = upgrade.included ? calcLineTotal(upgrade, taxCodes) : 0;
+  const lockTitle = 'Controlled by the Floor Plan booth selection — pick booths (and their type) there to change this.';
   return (
     <tr style={{ borderBottom: '1px solid #eee' }}>
-      <td>
-        {canRemove && (
-          <button type="button" onClick={onRemove} title="Remove this upgrade row" style={{ padding: '2px 6px', fontSize: 12, lineHeight: 1 }}>×</button>
-        )}
-      </td>
-      <td style={{ width: COL.code }}>
-        <select style={smallInput} value={upgrade.code} onChange={(e) => onSelectUpgrade(e.target.value)}>
-          <option value="">— None —</option>
-          {availableCodes.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-      </td>
+      <td></td>
+      <td style={{ width: COL.code, fontWeight: 600 }}>{upgrade.code}</td>
       <td>
         <input style={smallInput} value={display.description} disabled={!upgrade.included} onChange={(e) => onField('description', e.target.value.toUpperCase())} />
       </td>
       <td style={{ width: COL.qty }}>
-        <input type="number" step="0.01" style={smallInput} value={upgrade.included ? upgrade.qty : ''} disabled={!upgrade.included} onChange={(e) => onField('qty', e.target.value)} />
+        <input
+          type="number" step="0.01" style={{ ...smallInput, background: '#F5F6FA' }} value={upgrade.included ? upgrade.qty : ''}
+          disabled title={lockTitle}
+        />
       </td>
       <td style={{ width: COL.rate }}>
         <input
@@ -296,6 +313,16 @@ const BillingTemplate = forwardRef(function BillingTemplate(
     return codes;
   }, [priceList]);
 
+  // Which sales_item_code is "the" base item that drives Total Sqm and
+  // sits first on the sheet — admin-configurable per event (Price List
+  // item editor, is_primary_base) since a company may not call it "Bare
+  // Space"/BAS at all. Falls back to the literal 'BAS' for any event that
+  // hasn't flagged one yet, so nothing changes until an admin opts in.
+  const primaryBaseCode = useMemo(
+    () => priceList.find((p) => p.is_primary_base)?.sales_item_code || 'BAS',
+    [priceList]
+  );
+
   const [bas, setBas] = useState(blankRow('BAS'));
   // An exhibitor can mix several upgrade tiers in one contract (e.g. one
   // booth on Enhanced Shell, another on Walk On Package) — so this is a list
@@ -323,12 +350,12 @@ const BillingTemplate = forwardRef(function BillingTemplate(
 
   useEffect(() => {
     const byCode = {};
-    const allKnownCodes = ['BAS', ...upgradeCodes, ...addonCodes, ...wideRowCodes];
+    const allKnownCodes = [primaryBaseCode, ...upgradeCodes, ...addonCodes, ...wideRowCodes];
     for (const it of items) {
       if (allKnownCodes.includes(it.sales_item_code)) byCode[it.sales_item_code] = it;
     }
 
-    setBas(byCode.BAS ? rowFromItem(byCode.BAS) : blankRow('BAS'));
+    setBas(byCode[primaryBaseCode] ? rowFromItem(byCode[primaryBaseCode]) : blankRow(primaryBaseCode));
 
     const upgradeItems = upgradeCodes.map((c) => byCode[c]).filter(Boolean);
     setUpgradeRows(upgradeItems.length > 0
@@ -337,14 +364,15 @@ const BillingTemplate = forwardRef(function BillingTemplate(
 
     setFixedRows(Object.fromEntries([...addonCodes, ...wideRowCodes].map((c) => [c, byCode[c] ? rowFromItem(byCode[c]) : blankRow(c)])));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items]);
+  }, [items, primaryBaseCode]);
 
-  // BAS's current rate — whatever's shown for it right now, whether it's
-  // been checked and possibly edited, or is still just the Price List
-  // preview. LOD's rate formula (15% of Bare Space) always reads off this.
+  // The primary base item's current rate — whatever's shown for it right
+  // now, whether it's been checked and possibly edited, or is still just
+  // the Price List preview. LOD's rate formula (% of the base) always reads
+  // off this.
   function currentBasRate() {
     if (bas.included) return Number(bas.unit_price) || 0;
-    return Number(computeDefaults('BAS', priceList, currency, bookingType).unit_price) || 0;
+    return Number(computeDefaults(primaryBaseCode, priceList, currency, bookingType).unit_price) || 0;
   }
 
   function applyDefaults(row, code) {
@@ -353,7 +381,7 @@ const BillingTemplate = forwardRef(function BillingTemplate(
   }
 
   function toggleBas(checked) {
-    setBas((r) => (checked ? { ...applyDefaults(r, 'BAS'), userEdited: true } : { ...r, included: false, qty: '', userEdited: true }));
+    setBas((r) => (checked ? { ...applyDefaults(r, primaryBaseCode), userEdited: true } : { ...r, included: false, qty: '', userEdited: true }));
   }
 
   // Typing directly into Qty/Rate marks the row as manually controlled —
@@ -365,40 +393,13 @@ const BillingTemplate = forwardRef(function BillingTemplate(
     setBas((r) => ({ ...r, [field]: value, userEdited: r.userEdited || field === 'qty' || field === 'unit_price' }));
   }
 
-  // Switching a row's upgrade dropdown re-uses the same underlying line item
-  // (update its code in place) rather than deleting and re-adding. Qty
-  // defaults to BAS's own qty (the booth's sqm) when one's already
-  // allocated — an upgrade is priced per sqm same as Bare Space, it's just a
-  // different build tier, not a different size. Rows are otherwise
-  // independent, so an exhibitor can carry several upgrade tiers at once.
-  function selectUpgradeRow(rowKey, code) {
-    setUpgradeRows((rows) => rows.map((r) => {
-      if (r.rowKey !== rowKey) return r;
-      if (!code) return { ...r, code: '', included: false, qty: '' };
-      if (r.code === code) return r;
-      const row = applyDefaults({ ...blankRow(code), id: r.id, rowKey: r.rowKey }, code);
-      return bas.included ? { ...row, qty: bas.qty } : row;
-    }));
-  }
-
+  // Upgrade rows are entirely Floor-Plan-driven now (see applyBoothAllocation
+  // and the NarrowRow/UpgradeRow comments) — the only field Sales can still
+  // touch here is discount/description/tax on an already-populated row.
   function setUpgradeRowField(rowKey, field, value) {
     setUpgradeRows((rows) => rows.map((r) => (
       r.rowKey !== rowKey ? r : { ...r, [field]: value, userEdited: r.userEdited || field === 'qty' || field === 'unit_price' }
     )));
-  }
-
-  function addUpgradeRow() {
-    setUpgradeRows((rows) => [...rows, blankUpgradeRow()]);
-  }
-
-  // Dropping back to zero rows would leave no way to add the first upgrade
-  // back except this same button, which reads oddly once the whole section
-  // is gone — always leave one blank row behind instead.
-  function removeUpgradeRow(rowKey) {
-    setUpgradeRows((rows) => {
-      const next = rows.filter((r) => r.rowKey !== rowKey);
-      return next.length > 0 ? next : [blankUpgradeRow()];
-    });
   }
 
   function toggleFixed(code, checked) {
@@ -445,18 +446,35 @@ const BillingTemplate = forwardRef(function BillingTemplate(
       const basSqm = Number(bas.qty) || 0;
       const upgradeSqm = upgradeRows.filter((r) => r.included && r.code).reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
       if (upgradeSqm > basSqm + 0.01) {
-        throw new Error(`Upgrade sqm (${upgradeSqm}) cannot exceed Bare Space's total sqm (${basSqm}). Adjust the upgrade qty/booth allocation.`);
+        throw new Error(`Upgrade sqm (${upgradeSqm}) cannot exceed ${primaryBaseCode}'s total sqm (${basSqm}). Adjust the upgrade qty/booth allocation.`);
       }
     }
 
-    const ops = [];
+    // Tagged with where each row lives in local state (bas / upgradeRows by
+    // rowKey / fixedRows by code) so a successful ADD's real database id can
+    // be written back afterward. Without this, retrying Save on the same
+    // still-mounted component instance — e.g. because a LATER step in the
+    // parent's save sequence (booth linking) failed and the user tries
+    // again — would call apiAdd a SECOND time for the same logical row,
+    // since its local id would still read as null, creating a genuine
+    // duplicate line item in the database. Confirmed as a real bug via a
+    // live repro (2026-07-31): a contract's Bare Space/upgrade rows ended up
+    // tripled in opportunity_items after a few retried saves.
+    const targets = [
+      { row: bas, bucket: 'bas', key: null },
+      ...upgradeRows.map((r) => ({ row: r, bucket: 'upgrade', key: r.rowKey })),
+      ...Object.entries(fixedRows).map(([code, r]) => ({ row: r, bucket: 'fixed', key: code })),
+    ];
 
-    for (const row of allRows) {
+    const ops = [];
+    const patches = [];
+
+    for (const { row, bucket, key } of targets) {
       if (row.included && row.code) {
         const payload = {
           sales_item_code: row.code,
           description: row.description,
-          category: row.category || (row.code === 'BAS' || upgradeCodes.includes(row.code) ? 'BOOTH' : 'OTHER'),
+          category: row.category || (row.code === primaryBaseCode || upgradeCodes.includes(row.code) ? 'BOOTH' : 'OTHER'),
           // A row can be checked before the Price List has a rate for it
           // (e.g. no USD price set for an item) — never send '' to a
           // NOT NULL numeric column, default to 0 so Finance can fix it up.
@@ -471,13 +489,27 @@ const BillingTemplate = forwardRef(function BillingTemplate(
           // changed — see checkPostApprovalEdit.
           edit_reason: editReason || undefined,
         };
-        ops.push(row.id ? apiUpdate(targetParentId, row.id, payload) : apiAdd(targetParentId, payload));
+        if (row.id) {
+          ops.push(apiUpdate(targetParentId, row.id, payload));
+        } else {
+          ops.push(apiAdd(targetParentId, payload).then(({ item }) => { patches.push({ bucket, key, id: item.id }); }));
+        }
       } else if (row.id) {
         ops.push(apiRemove(targetParentId, row.id));
       }
     }
 
     await Promise.all(ops);
+
+    for (const p of patches) {
+      if (p.bucket === 'bas') {
+        setBas((r) => (r.id ? r : { ...r, id: p.id }));
+      } else if (p.bucket === 'upgrade') {
+        setUpgradeRows((rows) => rows.map((r) => (r.rowKey === p.key && !r.id ? { ...r, id: p.id } : r)));
+      } else if (p.bucket === 'fixed') {
+        setFixedRows((rows) => (rows[p.key] && !rows[p.key].id ? { ...rows, [p.key]: { ...rows[p.key], id: p.id } } : rows));
+      }
+    }
   }
 
   // Populates the sheet from a Floor Plan booth pick. byType is the sqm sum
@@ -501,13 +533,21 @@ const BillingTemplate = forwardRef(function BillingTemplate(
   // booths afterward (adding/removing on a later trip to the Floor Plan)
   // no longer touches that row, so a deliberate "bill for the full 90 sqm
   // even though only 36 is physically picked so far" doesn't get clobbered.
-  function applyBoothAllocation({ byType, isCorner, isLoading }) {
+  function applyBoothAllocation({ byType, isCorner, isLoading, byAddon }) {
     const bt = byType || {};
     const sqmNum = Object.values(bt).reduce((sum, v) => sum + (Number(v) || 0), 0);
-    const basSqm = Number(bt.BAS) || 0;
-    const basDefaults = computeDefaults('BAS', priceList, currency, bookingType);
+    // Bare Space is the base per-sqm charge for the WHOLE footprint being
+    // picked, not just whichever booths happen to be tagged plain Bare
+    // Space — an Upgrade tier is a supplemental charge layered on top for
+    // its own portion, it never replaces the base charge. So this is always
+    // the full total across every selected booth regardless of type mix
+    // (2026-08-01 user report: picking 2 booths that were BOTH tagged as an
+    // upgrade left Bare Space blank at 0 sqm, which is wrong — it should
+    // always show the full 18 sqm here too).
+    const basSqm = sqmNum;
+    const basDefaults = computeDefaults(primaryBaseCode, priceList, currency, bookingType);
     const newBas = bas.userEdited ? bas : {
-      ...bas, code: 'BAS', description: basDefaults.description, unit_price: basDefaults.unit_price,
+      ...bas, code: primaryBaseCode, description: basDefaults.description, unit_price: basDefaults.unit_price,
       tax_code_id: basDefaults.tax_code_id, category: basDefaults.category,
       included: basSqm > 0, qty: basSqm || '',
     };
@@ -537,11 +577,11 @@ const BillingTemplate = forwardRef(function BillingTemplate(
         }
       }
       for (const code of Object.keys(bt)) {
-        if (code === 'BAS' || seenCodes.has(code) || !(Number(bt[code]) > 0)) continue;
+        if (code === primaryBaseCode || seenCodes.has(code) || !(Number(bt[code]) > 0)) continue;
         const row = applyDefaults(blankUpgradeRow(code), code);
         row.qty = Number(bt[code]);
         const blankIdx = next.findIndex((r) => !r.code);
-        if (blankIdx >= 0) next[blankIdx] = { ...next[blankIdx], ...row };
+        if (blankIdx >= 0) next[blankIdx] = { ...next[blankIdx], ...row, id: next[blankIdx].id, rowKey: next[blankIdx].rowKey };
         else next.push(row);
       }
       return next.length > 0 ? next : [blankUpgradeRow()];
@@ -549,19 +589,51 @@ const BillingTemplate = forwardRef(function BillingTemplate(
 
     setFixedRows((rows) => {
       const next = { ...rows };
-      if (isCorner && !rows.COR.userEdited) {
-        const corDefaults = computeDefaults('COR', priceList, currency, bookingType);
-        next.COR = {
-          ...rows.COR, code: 'COR', description: corDefaults.description, unit_price: corDefaults.unit_price,
-          tax_code_id: corDefaults.tax_code_id, category: corDefaults.category, included: true, qty: 1,
-        };
+      // Corner/Loading's Qty is locked in the UI (see NarrowRow's qtyLocked)
+      // so, unlike MEP below, there's no manual escape hatch left for Sales
+      // to correct a stale value by hand — the row must be explicitly
+      // cleared here when the flag goes false (e.g. the corner-tagged booth
+      // was removed), not just left however it was on the last trip.
+      if (!rows.COR.userEdited) {
+        if (isCorner) {
+          const corDefaults = computeDefaults('COR', priceList, currency, bookingType);
+          next.COR = {
+            ...rows.COR, code: 'COR', description: corDefaults.description, unit_price: corDefaults.unit_price,
+            tax_code_id: corDefaults.tax_code_id, category: corDefaults.category, included: true, qty: 1,
+          };
+        } else if (rows.COR.included) {
+          next.COR = { ...rows.COR, included: false, qty: '' };
+        }
       }
-      if (isLoading && !rows.LOD.userEdited) {
-        const lodDefaults = computeDefaults('LOD', priceList, currency, bookingType, Number(newBas.unit_price) || 0, lodPct);
-        next.LOD = {
-          ...rows.LOD, code: 'LOD', description: lodDefaults.description, unit_price: lodDefaults.unit_price,
-          tax_code_id: lodDefaults.tax_code_id, category: lodDefaults.category, included: true, qty: sqmNum || 1,
-        };
+      if (!rows.LOD.userEdited) {
+        if (isLoading) {
+          const lodDefaults = computeDefaults('LOD', priceList, currency, bookingType, Number(newBas.unit_price) || 0, lodPct);
+          next.LOD = {
+            ...rows.LOD, code: 'LOD', description: lodDefaults.description, unit_price: lodDefaults.unit_price,
+            tax_code_id: lodDefaults.tax_code_id, category: lodDefaults.category, included: true, qty: sqmNum || 1,
+          };
+        } else if (rows.LOD.included) {
+          next.LOD = { ...rows.LOD, included: false, qty: '' };
+        }
+      }
+      // Any OTHER admin-flagged is_booth_related item (price_list column,
+      // migration 069) tagged on a booth via the Floor Plan's generic
+      // per-booth addon tagging (floor_plan_booth_addons, migration 070) —
+      // same locked/derived treatment as Corner/Loading above, but scales to
+      // whatever a company adds later with no code change. byAddon is
+      // {itemCode: boothCount}, computed by the caller from linkedBooths.
+      for (const code of Object.keys(byAddon || {})) {
+        if (rows[code]?.userEdited) continue;
+        const count = Number(byAddon[code]) || 0;
+        if (count > 0) {
+          const d = computeDefaults(code, priceList, currency, bookingType, Number(newBas.unit_price) || 0, lodPct);
+          next[code] = {
+            ...(rows[code] || blankRow(code)), code, description: d.description, unit_price: d.unit_price,
+            tax_code_id: d.tax_code_id, category: d.category, included: true, qty: count,
+          };
+        } else if (rows[code]?.included) {
+          next[code] = { ...rows[code], included: false, qty: '' };
+        }
       }
       // MEP goes with any physical booth allocation by default — Sales can
       // still untick it afterward if this particular deal genuinely doesn't
@@ -584,7 +656,7 @@ const BillingTemplate = forwardRef(function BillingTemplate(
   // arguments because the parent calls this in the same tick it updates its
   // own form state — the props this component sees are still the old ones.
   function repriceAll(nextCurrency = currency, nextBookingType = bookingType) {
-    const basDefaults = computeDefaults('BAS', priceList, nextCurrency, nextBookingType);
+    const basDefaults = computeDefaults(primaryBaseCode, priceList, nextCurrency, nextBookingType);
     const basRate = Number(basDefaults.unit_price) || (bas.included ? Number(bas.unit_price) || 0 : 0);
 
     const reprice = (row, code) => {
@@ -594,7 +666,7 @@ const BillingTemplate = forwardRef(function BillingTemplate(
       return { ...row, unit_price: d.unit_price };
     };
 
-    setBas((r) => reprice(r, 'BAS'));
+    setBas((r) => reprice(r, primaryBaseCode));
     setUpgradeRows((rows) => rows.map((r) => reprice(r, r.code)));
     setFixedRows((rows) => Object.fromEntries(Object.entries(rows).map(([c, r]) => [c, reprice(r, c)])));
   }
@@ -646,30 +718,22 @@ const BillingTemplate = forwardRef(function BillingTemplate(
             </tr>
           </thead>
           <tbody>
-            <NarrowRow code="BAS" checked={bas.included} onToggle={toggleBas} row={bas} onField={setBasField}
-              priceList={priceList} currency={currency} bookingType={bookingType} taxCodes={taxCodes} />
-            {upgradeRows.map((r) => {
-              // A code already picked on another row is hidden from this
-              // row's dropdown — one exhibitor can carry several DIFFERENT
-              // upgrade tiers, but the same tier twice would just be a
-              // confusing way to enter a bigger qty on one row.
-              const otherCodes = new Set(upgradeRows.filter((x) => x.rowKey !== r.rowKey).map((x) => x.code).filter(Boolean));
-              const availableCodes = upgradeCodes.filter((c) => !otherCodes.has(c));
-              return (
-                <UpgradeRow
-                  key={r.rowKey} upgrade={r} onSelectUpgrade={(code) => selectUpgradeRow(r.rowKey, code)}
-                  onField={(field, value) => setUpgradeRowField(r.rowKey, field, value)}
-                  onRemove={() => removeUpgradeRow(r.rowKey)} canRemove={upgradeRows.length > 1}
-                  priceList={priceList} currency={currency} bookingType={bookingType} taxCodes={taxCodes} availableCodes={availableCodes}
-                />
-              );
-            })}
-            <tr>
-              <td></td>
-              <td colSpan={7} style={{ paddingBottom: 6 }}>
-                <button type="button" onClick={addUpgradeRow} style={{ padding: '3px 10px', fontSize: 12 }}>+ Add another upgrade option</button>
-              </td>
-            </tr>
+            <NarrowRow code={primaryBaseCode} checked={bas.included} onToggle={toggleBas} row={bas} onField={setBasField}
+              priceList={priceList} currency={currency} bookingType={bookingType} taxCodes={taxCodes} qtyLocked />
+            {upgradeRows.filter((r) => r.code).map((r) => (
+              <UpgradeRow
+                key={r.rowKey} upgrade={r} onField={(field, value) => setUpgradeRowField(r.rowKey, field, value)}
+                priceList={priceList} currency={currency} bookingType={bookingType} taxCodes={taxCodes}
+              />
+            ))}
+            {upgradeRows.filter((r) => r.code).length === 0 && (
+              <tr>
+                <td></td>
+                <td colSpan={7} style={{ paddingBottom: 6, color: '#777', fontStyle: 'italic' }}>
+                  No upgrade booths selected — pick a booth type on the Floor Plan to add an upgrade row here.
+                </td>
+              </tr>
+            )}
             {addonCodes.map((code) => (
               <NarrowRow
                 key={code} code={code} checked={fixedRows[code]?.included} onToggle={(checked) => toggleFixed(code, checked)}
@@ -677,6 +741,7 @@ const BillingTemplate = forwardRef(function BillingTemplate(
                 priceList={priceList} currency={currency} bookingType={bookingType} taxCodes={taxCodes}
                 basUnitPrice={currentBasRate()}
                 lodPct={lodPct}
+                qtyLocked={priceList.some((p) => p.sales_item_code === code && p.is_booth_related)}
               />
             ))}
             {wideRowCodes.map((code) => (

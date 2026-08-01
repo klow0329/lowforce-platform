@@ -1,0 +1,11 @@
+-- The actual approval gate (approveSalesOrder/rejectSalesOrder) always used
+-- to check getRequiredApprover(..., 'REVENUE_ABOVE_THRESHOLD', ...) no
+-- matter WHY a contract became PENDING_APPROVAL — so a "Contract edited
+-- after approval" rule configured to route to Management was silently
+-- ignored at approval time in favor of whatever Revenue-threshold tier (if
+-- any) matched the contract's value, which could let Sales approve their
+-- own post-approval edit (2026-08-01 user report). Recording which trigger
+-- actually flagged the contract lets the approval gate consult THAT
+-- trigger's own configured approver instead of always defaulting to
+-- REVENUE_ABOVE_THRESHOLD.
+ALTER TABLE approval_log ADD COLUMN trigger_type TEXT;

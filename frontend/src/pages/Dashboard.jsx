@@ -53,6 +53,10 @@ export default function Dashboard() {
     api.acknowledgeSalesOrderApproval(soId).then(loadTasks);
   }
 
+  function handleAcknowledgeReductionApproval(crId) {
+    api.acknowledgeReductionApproval(crId).then(loadTasks);
+  }
+
   // Acknowledging doesn't just dismiss the notification — it hands the user
   // straight to the Floor Plan's picker for that record (pre-loaded with
   // whatever booths it still legitimately holds, capped at its own
@@ -184,6 +188,18 @@ export default function Dashboard() {
       href: `/sales-orders/${t.id}`,
       actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgeContractApproval(t.id) }],
     })),
+    // Value Change requests Management has just resolved on your own deals
+    // — mirrors recentApprovedContracts above (2026-08-01 user request:
+    // this notification step didn't exist at all before).
+    ...(tasks.recentResolvedReductions || []).map((t) => ({
+      key: `reduction-resolved-${t.id}`, urgency: t.urgency,
+      label: t.status === 'APPROVED'
+        ? `Value Change approved — ${t.exhibitor_name}`
+        : `Value Change rejected — ${t.exhibitor_name}${t.rejection_notes ? `: ${t.rejection_notes}` : ''}`,
+      meta: `${t.currency} ${Number(t.old_total_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })} → ${Number(t.new_total_foreign).toLocaleString('en-MY', { minimumFractionDigits: 2 })}`,
+      href: `/sales-orders/${t.sales_order_id}#openReduction=${t.id}`,
+      actions: [{ label: 'Acknowledge', onClick: () => handleAcknowledgeReductionApproval(t.id) }],
+    })),
     // Booths this user's own Opportunity/draft Contract was still proposing
     // when a COMPETING contract for the same booth got approved first (Round
     // 6's "several deals can propose the same unsold booth at once" rule) —
@@ -245,8 +261,8 @@ export default function Dashboard() {
           <div style={tileLabel}>Follow-Ups Due</div>
           <div style={{ ...tileValue, color: data.followUpsDue > 0 ? '#F47920' : 'inherit' }}>{data.followUpsDue}</div>
         </button>
-        <button style={tile} onClick={() => navigate('/opportunities')} title="Bare Space, Shell Scheme, Enhanced Shell, Walk-On Package and Custom Build only">
-          <div style={tileLabel}>Total Booths (Won)</div>
+        <button style={tile} onClick={() => navigate('/sales-orders')} title="Physical booths on approved contracts only — Bare Space, Shell Scheme, Enhanced Shell, Walk-On Package and Custom Build">
+          <div style={tileLabel}>Total Booth Contracted</div>
           <div style={tileValue}>{data.totalBooths.count}</div>
           <div style={tileLabel}>{data.totalBooths.totalSqm} sqm</div>
         </button>
@@ -254,8 +270,8 @@ export default function Dashboard() {
 
       <h3 style={{ fontSize: 14, color: '#5c6070', marginTop: 24 }}>Finance</h3>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <button style={tile} onClick={() => navigate('/sales-orders')}>
-          <div style={tileLabel}>Total Contract Value</div>
+        <button style={tile} onClick={() => navigate('/sales-orders')} title="Approved contracts only">
+          <div style={tileLabel}>Total Contracted Value</div>
           <div style={tileValue}>{fmtMYR(data.totalContractValue)}</div>
         </button>
         <button style={tile} onClick={() => navigate('/sales-orders')}>
@@ -271,7 +287,10 @@ export default function Dashboard() {
           <div style={tileLabel}>Total Collected</div>
           <div style={{ ...tileValue, color: '#1A9C5B' }}>{fmtMYR(data.totalCollected)}</div>
         </button>
-        <button style={{ ...tile, background: data.totalOutstanding > 0 ? '#fdecec' : '#fff' }} onClick={() => navigate('/customer-aging')}>
+        <button
+          style={{ ...tile, background: data.totalOutstanding > 0 ? '#fdecec' : '#fff' }} onClick={() => navigate('/customer-aging')}
+          title="Total Contracted Value − Total Collected — includes amounts not yet invoiced or not yet due"
+        >
           <div style={tileLabel}>Total Outstanding</div>
           <div style={{ ...tileValue, color: data.totalOutstanding > 0 ? '#D13434' : 'inherit' }}>{fmtMYR(data.totalOutstanding)}</div>
         </button>

@@ -25,18 +25,31 @@ async function listOpportunities(req, res) {
             st.probability_pct, st.is_won, st.is_lost,
             o.total_sqm, o.booth_type, o.booking_type, o.currency, o.estimated_value_myr, o.next_follow_up_date, o.remarks,
             o.created_at,
-            -- Bare Space if that's the only booth item; otherwise the first
-            -- upgraded booth item's own description (e.g. "Shell Scheme") —
-            -- always derived live from the actual billing lines, never a
-            -- separately-stored value, so it can never drift out of sync.
+            -- The primary base item (e.g. Bare Space — see price_list's
+            -- is_primary_base flag) if that's the only booth item; otherwise
+            -- the first upgraded booth item's own description (e.g. "Shell
+            -- Scheme") — always derived live from the actual billing lines,
+            -- never a separately-stored value, so it can never drift out of
+            -- sync. Falls back to the literal 'BAS' for any event that
+            -- hasn't flagged a primary base item.
             COALESCE(
               (SELECT oi.description FROM opportunity_items oi
-               WHERE oi.opportunity_id = o.id AND oi.category = 'BOOTH' AND oi.sales_item_code != 'BAS'
+               WHERE oi.opportunity_id = o.id AND oi.category = 'BOOTH'
+                 AND oi.sales_item_code != COALESCE((SELECT pl.sales_item_code FROM price_list pl WHERE pl.company_id = o.company_id AND pl.event_id = o.event_id AND pl.is_primary_base = true LIMIT 1), 'BAS')
                ORDER BY oi.sort_order, oi.id LIMIT 1),
-              (SELECT 'Bare Space' WHERE EXISTS (
-                 SELECT 1 FROM opportunity_items oi2 WHERE oi2.opportunity_id = o.id AND oi2.sales_item_code = 'BAS'))
+              (SELECT oi2.description FROM opportunity_items oi2
+               WHERE oi2.opportunity_id = o.id
+                 AND oi2.sales_item_code = COALESCE((SELECT pl.sales_item_code FROM price_list pl WHERE pl.company_id = o.company_id AND pl.event_id = o.event_id AND pl.is_primary_base = true LIMIT 1), 'BAS')
+               LIMIT 1)
             ) AS booth_type_display,
             (SELECT so.id FROM sales_orders so WHERE so.opportunity_id = o.id AND so.status != 'VOID' ORDER BY so.contract_date DESC NULLS LAST LIMIT 1) AS existing_sales_order_id,
+            -- A pending Value Change on the linked Contract (2026-08-01) —
+            -- same live EXISTS signal as the Contract list's own column.
+            EXISTS (
+              SELECT 1 FROM contract_reductions cr
+              JOIN sales_orders so2 ON so2.id = cr.sales_order_id
+              WHERE so2.opportunity_id = o.id AND cr.status = 'PENDING_APPROVAL'
+            ) AS has_pending_value_change,
             -- Latest correspondence log entry — see correspondence.controller.js.
             (SELECT c.note FROM correspondence_entries c
              WHERE c.entity_type = 'opportunity' AND c.entity_id = o.id
@@ -149,9 +162,16 @@ async function getOpportunity(req, res) {
   res.json({ opportunity });
 }
 
+// hall/booth_no/total_sqm are NOT editable here — they're derived from the
+// record's actual Floor Plan booth claims (see floorPlan.controller.js's
+// bulkSetRecordBooths -> recomputeCachedBoothFields, the only legitimate
+// writer). Leaving them client-writable meant a stale browser tab could
+// silently overwrite the server's already-correct value on the next
+// unrelated Save — see the matching comment on salesOrders.controller.js's
+// SALES_ORDER_FIELDS for the live case this caused.
 const OPPORTUNITY_FIELDS = [
   'exhibitor_id', 'event_id', 'salesperson_id', 'stage_id', 'booking_type', 'currency',
-  'booth_sqm', 'booth_type', 'hall', 'booth_no', 'dimension', 'total_sqm', 'credit_terms_id',
+  'booth_sqm', 'booth_type', 'dimension', 'credit_terms_id',
   'estimated_value_myr', 'next_follow_up_date', 'remarks', 'bill_to_type',
 ];
 

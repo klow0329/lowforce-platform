@@ -36,6 +36,60 @@ async function pdfToPng(pdfPath, outputBasePath, dpi = 150) {
 const BOOTH_NUMBER_RE = /^\d{3,5}$/;
 const HEADER_FRACTION = 0.15;
 
+// Greedily chains digit-only words rightward into runs when the next word
+// sits on the same baseline (vertical centres within 40% of glyph height)
+// and the horizontal gap to it is small enough to be inter-character
+// spacing rather than a gap between two unrelated labels (< 35% of glyph
+// height — tighter than mere word-adjacency, since two real adjacent booth
+// numbers like "3003"/"3004" sit further apart than that). Returns one
+// merged {text, xMin, yMin, xMax, yMax} per run.
+function mergeDigitRuns(digitWords) {
+  const sorted = [...digitWords].sort((a, b) => a.yMin - b.yMin || a.xMin - b.xMin);
+  const used = new Array(sorted.length).fill(false);
+  const runs = [];
+
+  for (let i = 0; i < sorted.length; i++) {
+    if (used[i]) continue;
+    const run = [sorted[i]];
+    used[i] = true;
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const last = run[run.length - 1];
+      const lastHeight = last.yMax - last.yMin;
+      const lastCenterY = (last.yMin + last.yMax) / 2;
+      let bestIdx = -1;
+      let bestGap = Infinity;
+      for (let j = 0; j < sorted.length; j++) {
+        if (used[j]) continue;
+        const w = sorted[j];
+        const height = w.yMax - w.yMin;
+        const centerY = (w.yMin + w.yMax) / 2;
+        const sameLine = Math.abs(centerY - lastCenterY) < Math.max(lastHeight, height) * 0.4;
+        const gap = w.xMin - last.xMax;
+        if (sameLine && gap > -Math.max(lastHeight, height) * 0.3 && gap < Math.max(lastHeight, height) * 0.35 && gap < bestGap) {
+          bestIdx = j;
+          bestGap = gap;
+        }
+      }
+      if (bestIdx !== -1) {
+        run.push(sorted[bestIdx]);
+        used[bestIdx] = true;
+        extended = true;
+      }
+    }
+    if (run.length > 1) runs.push(run);
+  }
+
+  return runs.map((run) => ({
+    text: run.map((w) => w.text).join(''),
+    xMin: Math.min(...run.map((w) => w.xMin)),
+    xMax: Math.max(...run.map((w) => w.xMax)),
+    yMin: Math.min(...run.map((w) => w.yMin)),
+    yMax: Math.max(...run.map((w) => w.yMax)),
+  }));
+}
+
 async function extractBoothCandidates(pdfPath) {
   let stdout;
   try {
@@ -43,6 +97,17 @@ async function extractBoothCandidates(pdfPath) {
   } catch (err) {
     if (err.code === 'ENOENT') {
       throw new Error('Booth auto-detection requires poppler-utils (pdftotext) to be installed on the server.');
+    }
+    // A DIFFERENT pdftotext (e.g. the Xpdf build bundled with Git for
+    // Windows) can shadow poppler's on PATH — it doesn't understand -bbox
+    // and just prints its own usage text, which would otherwise surface to
+    // the user as an unreadable wall of CLI help. Distinguish that case
+    // explicitly rather than throwing the raw stderr.
+    if (err.stderr && /www\.xpdfreader\.com/i.test(err.stderr)) {
+      throw new Error(
+        'Booth auto-detection found the wrong pdftotext on PATH (Xpdf, not Poppler) — it doesn\'t support -bbox. '
+        + 'Check that the Poppler install directory comes before any other pdftotext (e.g. Git for Windows\' mingw64\\bin) on the server\'s PATH.'
+      );
     }
     throw err;
   }
@@ -53,17 +118,30 @@ async function extractBoothCandidates(pdfPath) {
   const pageHeight = Number(pageMatch[2]);
   const headerCutoff = pageHeight * HEADER_FRACTION;
 
-  const words = [];
+  // Some Illustrator PDF exports (seen on real MIFB hall plans) don't store
+  // a booth number as one contiguous <word> — the exporter's kerning/
+  // tracking on that particular text run makes poppler's own word-breaking
+  // heuristic split it into separate single/double-digit words instead
+  // (e.g. "3011" export as "3" + "0" + "1" + "1" at near-zero gaps). Below
+  // the header, every digit-only word below the header is a candidate for
+  // this: pass 1 takes whichever words are already whole valid booth
+  // numbers as-is (the common case); pass 2 tries to recover the rest by
+  // re-joining runs of leftover digit-only words that sit on the same text
+  // baseline with tight, character-like (not word-like) gaps between them.
+  const allWords = [];
   const wordRe = /<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([^<]+)<\/word>/g;
   let m;
   while ((m = wordRe.exec(stdout))) {
     const [, xMin, yMin, xMax, yMax, text] = m;
-    if (!BOOTH_NUMBER_RE.test(text)) continue;
     if (Number(yMin) < headerCutoff) continue;
-    words.push({
-      text, xMin: Number(xMin), yMin: Number(yMin), xMax: Number(xMax), yMax: Number(yMax),
-    });
+    allWords.push({ text, xMin: Number(xMin), yMin: Number(yMin), xMax: Number(xMax), yMax: Number(yMax) });
   }
+
+  const words = allWords.filter((w) => BOOTH_NUMBER_RE.test(w.text));
+
+  const consumed = new Set(words);
+  const leftoverDigits = allWords.filter((w) => !consumed.has(w) && /^\d+$/.test(w.text));
+  words.push(...mergeDigitRuns(leftoverDigits).filter((w) => BOOTH_NUMBER_RE.test(w.text)));
 
   if (words.length === 0) return { pageWidth, pageHeight, booths: [] };
 

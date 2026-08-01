@@ -4,10 +4,11 @@ import { api } from '../api/client';
 import { useEventContext } from '../context/EventContext';
 import FloorPlanPresentation from '../components/FloorPlanPresentation';
 import ErrorBoundary from '../components/ErrorBoundary';
+import InfoTooltip from '../components/InfoTooltip';
 import { setUnsavedChanges } from '../utils/unsavedChanges';
 import { FIXED_LABELS } from '../components/BillingTemplate';
 import { toTitleCase } from '../utils/format';
-import { fitBoothName, BOOTH_NUMBER_FS } from '../utils/boothLabelFit';
+import { fitBoothName, fitUniformBoothNumberSize, truncateBoothName } from '../utils/boothLabelFit';
 import { downloadPdf } from '../utils/pdf';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
@@ -18,6 +19,7 @@ const emptyBoothForm = {
   id: null, booth_no: '', x_pct: '', y_pct: '', width_pct: '', height_pct: '', sqm: '',
   is_corner: false, is_loading: false, status: 'AVAILABLE',
   opportunity_id: null, sales_order_id: null, exhibitor_display_name: '', fascia_name: '', notes: '',
+  addon_codes: [],
 };
 
 // Every field starts blank/'unchanged' — bulk edit only overwrites what the
@@ -97,6 +99,17 @@ export default function FloorPlan({ user }) {
   const [error, setError] = useState('');
   const [imgVersion, setImgVersion] = useState(0);
   const [imgHeightPx, setImgHeightPx] = useState(0); // for fitting booth label fonts to box height
+  // One fixed booth-number size for the whole hall, capped at the target
+  // and shrunk only as far as the smallest booth actually needs — see
+  // fitUniformBoothNumberSize.
+  const uniformNumFs = useMemo(() => {
+    if (imgHeightPx <= 0) return 11;
+    return fitUniformBoothNumberSize(booths.map((b) => ({
+      boothNo: b.booth_no,
+      boxW: (Number(b.width_pct) / 100) * 1040,
+      boxH: (Number(b.height_pct) / 100) * imgHeightPx,
+    })));
+  }, [booths, imgHeightPx]);
   const [presenting, setPresenting] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [highlightedBoothId, setHighlightedBoothId] = useState(null);
@@ -132,9 +145,20 @@ export default function FloorPlan({ user }) {
     if (!selectedEventId) return;
     api.listPriceList(selectedEventId).then(({ priceList }) => setPriceList(priceList));
   }, [selectedEventId]);
+  // Which sales_item_code is the event's admin-flagged primary base item
+  // (BillingTemplate.jsx's is_primary_base) — falls back to 'BAS' for an
+  // event that hasn't flagged one, so an untagged booth still defaults the
+  // same way it always has.
+  const primaryBaseCode = priceList.find((p) => p.is_primary_base)?.sales_item_code || 'BAS';
+  // Any admin-flagged is_booth_related item OTHER than Corner/Loading, which
+  // already have their own dedicated checkboxes above — see migration 070.
+  // A company adding a new one here needs no code change, same principle as
+  // the Upgrade/addon lists elsewhere in this app.
+  const boothAddonCodes = [...new Set(
+    priceList.filter((p) => p.is_booth_related && p.sales_item_code !== 'COR' && p.sales_item_code !== 'LOD').map((p) => p.sales_item_code)
+  )];
   function boothTypeLabel(code) {
     if (!code) return '—';
-    if (code === 'BAS') return 'Bare Space';
     const fromPriceList = priceList.find((p) => p.sales_item_code === code)?.description;
     return toTitleCase(fromPriceList || FIXED_LABELS[code] || code);
   }
@@ -173,7 +197,17 @@ export default function FloorPlan({ user }) {
     }
     api.listSalesOrderBooths(pickFor.recordId).then(({ booths: existing }) => {
       const m = new Map();
-      for (const b of existing) m.set(b.id, { id: b.id, booth_no: b.booth_no, sqm: b.sqm, hall_name: b.hall_name });
+      // Seed each booth's REAL current type from its live claim, not just
+      // Bare Space — otherwise the picker's dropdown opens showing every
+      // booth as untyped/Bare Space regardless of what it actually is
+      // (2026-08-01 user report on the Value Change flow's booth adjuster).
+      for (const b of existing) {
+        m.set(b.id, {
+          id: b.id, booth_no: b.booth_no, sqm: b.sqm, hall_name: b.hall_name,
+          is_corner: b.is_corner, is_loading: b.is_loading,
+          allocated_item_code: b.allocated_item_code || primaryBaseCode,
+        });
+      }
       setCapSelected(m);
       setCapLoaded(true);
     });
@@ -243,12 +277,26 @@ export default function FloorPlan({ user }) {
       // size itself. A1's long edge with a much higher scale roughly
       // triples the embedded pixel count (and lands at ~250 DPI, sharp for
       // physical printing too) without an unreasonably large canvas.
-      // longEdge (not a precomputed format) lets downloadPdf size the page
-      // from the actual captured raster's own aspect ratio, not a DOM
-      // measurement taken here ahead of time.
+      //
+      // The page format is computed HERE, upfront, from state that's
+      // already reliably known (the capture target is always exactly 1040px
+      // wide, imgHeightPx is set on the hall image's own onLoad) — not via
+      // html2pdf's post-capture recompute-and-reset-pageSize path (a
+      // longEdge option once threaded through to pdf.js): that path
+      // re-derives the page format from the captured canvas AFTER
+      // toContainer() has already run once using whatever pageSize was
+      // cached from the Worker's construction-time default ('a4'), sizing
+      // the actual html2canvas capture container to A4's width regardless
+      // of what the recomputed format said afterwards — which is what was
+      // leaving the real map rendered small in a corner of an unrelated
+      // page shape. Passing the correct format from the very first call
+      // sidesteps that caching order entirely.
+      const aspect = imgHeightPx > 0 ? 1040 / imgHeightPx : 1;
+      const longEdgeMm = 841;
+      const format = aspect >= 1 ? [longEdgeMm, longEdgeMm / aspect] : [longEdgeMm * aspect, longEdgeMm];
       await downloadPdf(
         'floor-plan-normal-capture', `${selectedHall.name}-${new Date().toISOString().slice(0, 10)}`, 'landscape',
-        { scale: 8, longEdge: 841, margin: 0 }
+        { scale: 8, format, margin: 0, width: 1040, height: imgHeightPx }
       );
     } finally {
       if (priorZoom !== 1) setZoom(priorZoom);
@@ -295,6 +343,7 @@ export default function FloorPlan({ user }) {
       is_corner: b.is_corner, is_loading: b.is_loading, status: b.status,
       opportunity_id: b.opportunity_id, sales_order_id: b.sales_order_id,
       exhibitor_display_name: b.exhibitor_display_name || '', fascia_name: b.fascia_name || '', notes: b.notes || '',
+      addon_codes: b.addon_codes || [],
     });
     setShowBoothForm(true);
   }
@@ -504,17 +553,23 @@ export default function FloorPlan({ user }) {
       const next = new Map(prev);
       next.set(b.id, {
         id: b.id, booth_no: b.booth_no, sqm: b.sqm, hall_name: selectedHall?.name, is_corner: b.is_corner, is_loading: b.is_loading,
-        allocated_item_code: null,
+        // Defaults to the primary base item (e.g. Bare Space) — always a
+        // real, resolved value the moment a booth is picked, so the
+        // dropdown below always has something selected and Save is never
+        // blocked waiting on a "which type?" choice. Sales picks the actual
+        // type (2026-08-01 user request: every booth's type must be
+        // choosable right here, before Save, not only discoverable after
+        // the fact once the system happens to notice a mix).
+        allocated_item_code: primaryBaseCode,
       });
       return next;
     });
   }
 
-  // Which booth is Bare Space vs which upgrade tier — only surfaced as a
-  // per-booth choice when the contract/opportunity is actually mixing more
-  // than one type (see the Bill To banner below); with zero or one type in
-  // play, every picked booth is silently the same type, same as before this
-  // feature existed.
+  // Which booth is Bare Space vs which upgrade tier — shown as a per-booth
+  // dropdown for every selected booth (not just once the record already
+  // happens to be mixing types), so Sales can set the real type up front
+  // instead of it silently defaulting to Bare Space until corrected later.
   function setCapItemCode(boothId, code) {
     setCapSelected((prev) => {
       const b = prev.get(boothId);
@@ -525,28 +580,15 @@ export default function FloorPlan({ user }) {
     });
   }
 
-  // itemTypeTotals (passed by OpportunityDetail/SalesOrderDetail — see their
-  // handlePickBooths) is the contract/opportunity's CURRENT billing
-  // breakdown per booth-item code (e.g. { BAS: 54, SSS: 18 }) at the moment
-  // the picker was opened — used only to decide whether per-booth tagging is
-  // even necessary, not as a hard constraint the picker enforces.
-  const capItemTypeTotals = pickFor?.itemTypeTotals || {};
-  const capActiveTypes = Object.entries(capItemTypeTotals).filter(([, v]) => Number(v) > 0.001);
-  const capIsMixed = capActiveTypes.length > 1;
-  const capSingleType = capActiveTypes.length === 1 ? capActiveTypes[0][0] : (capActiveTypes.length === 0 ? 'BAS' : null);
-
   // Nothing is written to the database here — this just hands the staged
   // selection back to whichever Opportunity/Contract form sent us here (see
   // that page's handlePickBooths); it only actually saves once the user
-  // hits Save on that form, same as 'cn' mode below. Every booth gets a
-  // resolved type before handing back — silently the single type in play
-  // when there's no ambiguity, otherwise whatever was tagged per-booth below
-  // (the OK button stays disabled until that's complete — see the banner).
+  // hits Save on that form, same as 'cn' mode below. Each booth already
+  // carries its own resolved type (defaulted to the primary base item when
+  // added, changeable via the per-booth dropdown below), so nothing needs
+  // resolving here.
   function handleCapCommit() {
-    const resolved = [...capSelected.values()].map((b) => ({
-      ...b, allocated_item_code: capIsMixed ? (b.allocated_item_code || null) : capSingleType,
-    }));
-    navigate(pickFor.returnPath, { state: { pickedBooths: resolved } });
+    navigate(pickFor.returnPath, { state: { pickedBooths: [...capSelected.values()] } });
   }
 
   // 'cn' mode never writes to the database here — a Credit Note isn't real
@@ -557,8 +599,12 @@ export default function FloorPlan({ user }) {
   // derives released_booth_ids as whatever was linked before minus whatever
   // is still selected now.
   function handleCnCommit() {
+    // Full objects (not just ids) so the calling form can also see each
+    // surviving booth's chosen type — previously only the id list came
+    // back, so re-tagging a booth here (Bare Space -> Corner, say) had
+    // nowhere to go and was silently discarded (2026-08-01).
     navigate(pickFor.returnPath, {
-      state: { cnBoothsPicked: true, cnSelectedBoothIds: [...capSelected.keys()] },
+      state: { cnBoothsPicked: true, cnSelectedBooths: [...capSelected.values()] },
     });
   }
 
@@ -670,6 +716,13 @@ export default function FloorPlan({ user }) {
     });
   }
 
+  // Selects every currently-listed booth in one click — the user can then
+  // untick individual ones rather than clicking through a large hall booth
+  // by booth.
+  function toggleSelectAllBulk(checked) {
+    setBulkSelected(checked ? new Set(booths.map((b) => b.id)) : new Set());
+  }
+
   async function handleApplyBulkEdit() {
     setError('');
     const payload = { booth_ids: [...bulkSelected] };
@@ -728,21 +781,16 @@ export default function FloorPlan({ user }) {
         const selected = [...capSelected.values()];
         const total = selected.reduce((sum, b) => sum + (Number(b.sqm) || 0), 0);
         const overCap = pickFor.cap && total > pickFor.cap;
-        const typeOptions = [{ code: 'BAS', label: 'Bare Space' }, ...(pickFor?.upgradeOptions || [])];
+        const typeOptions = [{ code: primaryBaseCode, label: boothTypeLabel(primaryBaseCode) }, ...(pickFor?.upgradeOptions || [])];
         const typeLabel = (code) => typeOptions.find((t) => t.code === code)?.label || code;
-        const untaggedCount = !isCn && capIsMixed ? selected.filter((b) => !b.allocated_item_code).length : 0;
-        // Live per-type sum so Sales can see at a glance whether the tagging
-        // so far still adds up to what the contract's own billing expects —
-        // not a hard block (the booth tags are what actually DRIVE the
-        // billing qty once saved — see BillingTemplate's applyBoothAllocation
-        // — so this is a cross-check against the OLD expected figures, purely
-        // to catch a mis-tag before committing).
+        // Live per-type sum — every selected booth's type is picked right
+        // here via the dropdown below (defaults to the primary base item),
+        // so this is always a complete, resolved breakdown, not just a
+        // cross-check against old figures.
         const typeSums = {};
-        if (!isCn && capIsMixed) {
-          for (const b of selected) {
-            const code = b.allocated_item_code || '—';
-            typeSums[code] = (typeSums[code] || 0) + (Number(b.sqm) || 0);
-          }
+        for (const b of selected) {
+          const code = b.allocated_item_code || primaryBaseCode;
+          typeSums[code] = (typeSums[code] || 0) + (Number(b.sqm) || 0);
         }
         return (
           <div
@@ -753,36 +801,25 @@ export default function FloorPlan({ user }) {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
               <span>
-                {isCn ? (
-                  <>Adjusting booths for <strong>{pickFor.exhibitorName}</strong>'s credit note — deselect a booth to release it. Nothing
-                  is saved to the contract yet; this only takes effect once the credit note is approved.</>
-                ) : (
-                  <>Picking booths for <strong>{pickFor.exhibitorName}</strong> — click available (green) booths to
-                  add, click a selected (blue-bordered) booth again to remove. You can also add a Proposed (yellow)
-                  booth someone else hasn't sold yet — several deals can propose the same booth until one of them gets
-                  its contract approved, which wins it and releases the others. Switch halls freely; your selection
-                  is kept.</>
-                )}
+                Picking booths for <strong>{pickFor.exhibitorName}</strong>
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <strong style={{ color: overCap ? '#c83c3c' : '#1E7B34', whiteSpace: 'nowrap', fontSize: 14 }}>
-                  Total: {total} sqm{pickFor.cap ? ` / ${pickFor.cap} sqm cap` : ' (no cap set)'}
+                  Total: {total} sqm{pickFor.cap ? ` / ${pickFor.cap} sqm cap` : ''}
                 </strong>
+                <InfoTooltip text="Click available (green) booths to add, click a selected (blue-bordered) booth again to remove, and use each booth's own dropdown to set its type. You can also add a Proposed (yellow) booth someone else hasn't sold yet — several deals can propose the same booth until one of them gets its contract approved, which wins it and releases the others. Switch halls freely; your selection is kept. Nothing is saved until you commit this back on the other screen." />
                 <button type="button" onClick={() => navigate(pickFor.returnPath)}>Cancel</button>
                 <button
                   type="button" onClick={isCn ? handleCnCommit : handleCapCommit}
-                  disabled={overCap || untaggedCount > 0} style={{ fontWeight: 600 }}
-                  title={untaggedCount > 0 ? `Tag every booth's type below before saving (${untaggedCount} untagged)` : undefined}
+                  disabled={overCap} style={{ fontWeight: 600 }}
                 >
-                  {isCn ? 'OK — Back to Credit Note' : 'OK — Save Selection'}
+                  OK — Save Selection
                 </button>
               </div>
             </div>
-            {!isCn && capIsMixed && (
+            {selected.length > 0 && (
               <p style={{ margin: '8px 0 0', fontSize: 12, color: '#1B3A6B' }}>
-                This contract mixes booth types — tag each booth below. Expected:{' '}
-                {capActiveTypes.map(([code, qty]) => `${typeLabel(code)} ${qty} sqm`).join(', ')}.{' '}
-                So far: {Object.entries(typeSums).map(([code, sum]) => `${code === '—' ? 'Untagged' : typeLabel(code)} ${sum} sqm`).join(', ') || 'nothing tagged yet'}.
+                {Object.entries(typeSums).map(([code, sum]) => `${typeLabel(code)} ${sum} sqm`).join(', ')}.
               </p>
             )}
             {selected.length > 0 && (
@@ -792,20 +829,17 @@ export default function FloorPlan({ user }) {
                     key={b.id}
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4, background: '#fff',
-                      border: `1px solid ${!isCn && capIsMixed && !b.allocated_item_code ? '#c83c3c' : '#90CAF9'}`,
+                      border: '1px solid #90CAF9',
                       borderRadius: 12, padding: '2px 8px 2px 10px', fontSize: 12,
                     }}
                   >
                     {b.hall_name ? `${b.hall_name} — ` : ''}{b.booth_no} ({b.sqm || 0} sqm)
-                    {!isCn && capIsMixed && (
-                      <select
-                        value={b.allocated_item_code || ''} onChange={(e) => setCapItemCode(b.id, e.target.value || null)}
-                        style={{ fontSize: 11, padding: '1px 2px', border: 'none', background: 'transparent' }}
-                      >
-                        <option value="">— type? —</option>
-                        {typeOptions.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
-                      </select>
-                    )}
+                    <select
+                      value={b.allocated_item_code || primaryBaseCode} onChange={(e) => setCapItemCode(b.id, e.target.value)}
+                      style={{ fontSize: 11, padding: '1px 2px', border: 'none', background: 'transparent' }}
+                    >
+                      {typeOptions.map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
+                    </select>
                   </span>
                 ))}
               </div>
@@ -930,8 +964,10 @@ export default function FloorPlan({ user }) {
                       const boxW = (Number(b.width_pct) / 100) * 1040;
                       const boxH = imgHeightPx > 0 ? (Number(b.height_pct) / 100) * imgHeightPx : boxW;
                       const name = (b.opportunity_id || b.sales_order_id) ? (b.fascia_name || b.exhibitor_display_name || '') : '';
-                      const numFs = BOOTH_NUMBER_FS;
-                      const nameFs = fitBoothName(name, boxW, Math.max(0, boxH - numFs * 1.15 - 2));
+                      const numFs = uniformNumFs;
+                      const nameAvailH = Math.max(0, boxH - numFs * 1.15 - 3);
+                      const nameFs = fitBoothName(name, boxW, nameAvailH);
+                      const displayName = truncateBoothName(name, nameFs, boxW, nameAvailH);
                       const isCapSelected = (pickFor?.mode === 'cap' || pickFor?.mode === 'cn') && capSelected.has(b.id);
                       return (
                       <div
@@ -952,13 +988,20 @@ export default function FloorPlan({ user }) {
                           cursor: (isElevated || pickFor || b.assigned_salesperson_id === user?.id) ? 'pointer' : 'default',
                           lineHeight: 1.05, color: '#1B3A6B', overflow: 'hidden', boxSizing: 'border-box',
                           whiteSpace: 'nowrap',
-                          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 1,
+                          // flex-start (not center) pins the booth number to
+                          // right under the top border on every booth,
+                          // regardless of how many lines the name below it
+                          // wraps to — centering the whole block let the
+                          // number drift toward the middle on boxes with a
+                          // short (or no) name, per the user's explicit
+                          // feedback (2026-07-31).
+                          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', padding: 1,
                         }}
                       >
                         <div style={{ fontWeight: 700, fontSize: numFs }}>{b.booth_no}</div>
-                        {name && (
+                        {displayName && (
                           <div style={{ fontSize: nameFs, fontWeight: 400, whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'break-word', maxWidth: '100%' }}>
-                            {name}
+                            {displayName}
                           </div>
                         )}
                       </div>
@@ -1119,6 +1162,20 @@ export default function FloorPlan({ user }) {
               <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
                 <label><input type="checkbox" checked={boothForm.is_corner} onChange={(e) => setBoothForm({ ...boothForm, is_corner: e.target.checked })} /> Corner charge</label>
                 <label><input type="checkbox" checked={boothForm.is_loading} onChange={(e) => setBoothForm({ ...boothForm, is_loading: e.target.checked })} /> Loading charge</label>
+                {boothAddonCodes.map((code) => (
+                  <label key={code}>
+                    <input
+                      type="checkbox" checked={boothForm.addon_codes.includes(code)}
+                      onChange={(e) => setBoothForm({
+                        ...boothForm,
+                        addon_codes: e.target.checked
+                          ? [...boothForm.addon_codes, code]
+                          : boothForm.addon_codes.filter((c) => c !== code),
+                      })}
+                    />
+                    {' '}{boothTypeLabel(code)}
+                  </label>
+                ))}
               </div>
               {boothForm.opportunity_id || boothForm.sales_order_id ? (
                 <div style={{ marginTop: 12, padding: 10, background: '#f5f5f7', borderRadius: 6 }}>
@@ -1214,8 +1271,19 @@ export default function FloorPlan({ user }) {
           <table width="100%" cellPadding="6">
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-                {bulkMode && <th></th>}
-                <th>Booth No</th><th>Sqm</th><th>Corner</th><th>Loading</th><th>Status</th><th>Booth Type</th><th>Country</th><th>Sales Agent</th><th>Exhibitor</th><th>Fascia Board</th><th>Notes</th><th></th>
+                {bulkMode && (
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={booths.length > 0 && bulkSelected.size === booths.length}
+                      onChange={(e) => toggleSelectAllBulk(e.target.checked)}
+                      title="Select all"
+                    />
+                  </th>
+                )}
+                <th>Booth No</th><th>Sqm</th><th>Corner</th><th>Loading</th>
+                {boothAddonCodes.length > 0 && <th>Booth Items</th>}
+                <th>Status</th><th>Booth Type</th><th>Country</th><th>Sales Agent</th><th>Exhibitor</th><th>Fascia Board</th><th>Notes</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -1230,8 +1298,11 @@ export default function FloorPlan({ user }) {
                   <td>{b.sqm ?? '—'}</td>
                   <td>{b.is_corner ? 'Yes' : ''}</td>
                   <td>{b.is_loading ? 'Yes' : ''}</td>
+                  {boothAddonCodes.length > 0 && (
+                    <td>{(b.addon_codes || []).map((c) => boothTypeLabel(c)).join(', ')}</td>
+                  )}
                   <td>{STATUS_LABELS[b.computed_status] || b.computed_status}</td>
-                  <td>{b.exhibitor_display_name ? boothTypeLabel(b.allocated_item_code || 'BAS') : '—'}</td>
+                  <td>{b.exhibitor_display_name ? boothTypeLabel(b.allocated_item_code || primaryBaseCode) : '—'}</td>
                   <td>{(countryNames[b.booth_country] || b.booth_country) || '—'}</td>
                   <td>{b.agent_name || '—'}</td>
                   <td>{b.exhibitor_display_name || '—'}</td>

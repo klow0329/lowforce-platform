@@ -6,6 +6,7 @@ import { fmtPct, NAVY, tile, tileLabel, tileValue } from './fmt';
 
 const fmtCcy = (n, ccy) =>
   `${ccy} ${Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtMYR2 = (n) => `RM ${Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function AgentCommission() {
   const { selectedEventId } = useEventContext();
@@ -24,9 +25,11 @@ export default function AgentCommission() {
       <h2 style={{ marginTop: 0 }}>Agent Commission</h2>
       <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0, marginBottom: 12 }}>
         Computed against CONFIRMED invoices only, in the same currency the invoice was issued in (never converted).
-        Rates are set per agent, per item category, per repeat/new exhibitor tier under Sales Agents &gt; Commission
-        Rates. Repeat vs new is driven by the exhibitor's "Repeat Exhibitor" flag (Admin &gt; Segments &gt; Repeat
-        Exhibitor Import, or set by hand on the exhibitor's own record).
+        Rates are set per agent, per billing item (or an "ALL REVENUE" catch-all), per repeat/new exhibitor tier
+        under Sales Agents &gt; Commission Rates — plus optional bonus tiers once the agent's total revenue or sqm
+        for the event crosses a threshold (paid in RM, since a threshold needs one comparable number across mixed
+        currencies). Repeat vs new is driven by the exhibitor's "Repeat Exhibitor" flag (Admin &gt; Segments &gt;
+        Repeat Exhibitor Import, or set by hand on the exhibitor's own record).
       </p>
 
       {data.agentSummary.length === 0 ? (
@@ -39,6 +42,16 @@ export default function AgentCommission() {
               {Object.entries(a.byCurrency).map(([ccy, amt]) => (
                 <div key={ccy} style={tileValue}>{fmtCcy(amt, ccy)}</div>
               ))}
+              {a.bonuses && a.bonuses.length > 0 && (
+                <div style={{ marginTop: 6, borderTop: '1px solid #eee', paddingTop: 6 }}>
+                  {a.bonuses.map((b, i) => (
+                    <div key={i} style={{ fontSize: 12, color: '#2a7a2a' }}>
+                      Bonus (crossed {b.threshold_type === 'SQM' ? `${b.threshold_value} sqm` : fmtMYR2(b.threshold_value)}):{' '}
+                      +{fmtPct(b.bonus_pct)} = {fmtMYR2(b.bonus_amount_myr)}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -55,7 +68,7 @@ export default function AgentCommission() {
           {
             key: 'breakdown',
             label: 'Rate Applied',
-            render: (r) => (r.breakdown.length === 0 ? '—' : r.breakdown.map((b) => `${b.category} ${fmtPct(b.rate_pct)}`).join(', ')),
+            render: (r) => (r.breakdown.length === 0 ? '—' : r.breakdown.map((b) => `${b.item_code} ${fmtPct(b.rate_pct)}`).join(', ')),
           },
           { key: 'commission', label: 'Commission', render: (r) => fmtCcy(r.commission, r.currency) },
         ]}

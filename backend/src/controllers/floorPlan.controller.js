@@ -4,7 +4,8 @@ const crypto = require('crypto');
 const multer = require('multer');
 const { pool } = require('../config/db');
 const { pdfToPng, extractBoothCandidates } = require('../utils/pdfFloorPlan');
-const { promotePrimaryClaimants, releaseClaim, recomputeCachedBoothFields } = require('../utils/floorPlanClaims');
+const { promotePrimaryClaimants, releaseClaim } = require('../utils/floorPlanClaims');
+const { syncBoothFieldsAndMirror } = require('../utils/opportunitySync');
 
 // The real scanned floor plan (from the hall contractor, usually exported
 // out of Illustrator as a high-res PDF/image) — stored so booths can be
@@ -69,6 +70,38 @@ async function createHall(req, res) {
 }
 
 async function deleteHall(req, res) {
+  const hallCheck = await pool.query(`SELECT id FROM floor_plan_halls WHERE id = $1 AND company_id = $2`, [req.params.id, req.companyId]);
+  if (!hallCheck.rows[0]) return res.status(404).json({ error: 'Hall not found.' });
+
+  // Same reasoning as deleteBooth — never silently take a whole hall (and
+  // every booth in it) out from under live deals.
+  const occupied = await pool.query(
+    `SELECT b.booth_no, COALESCE(ex_so.company_name, ex_opp.company_name) AS exhibitor_name
+     FROM floor_plan_booths b
+     LEFT JOIN sales_orders so ON so.id = b.sales_order_id
+     LEFT JOIN exhibitors ex_so ON ex_so.id = so.exhibitor_id
+     LEFT JOIN opportunities opp ON opp.id = b.opportunity_id
+     LEFT JOIN exhibitors ex_opp ON ex_opp.id = opp.exhibitor_id
+     WHERE b.hall_id = $1 AND (b.opportunity_id IS NOT NULL OR b.sales_order_id IS NOT NULL)
+     ORDER BY b.booth_no`,
+    [req.params.id]
+  );
+  if (occupied.rows.length > 0) {
+    const list = occupied.rows.map((r) => `${r.booth_no} (${r.exhibitor_name || 'unknown'})`).join(', ');
+    return res.status(409).json({ error: `Cannot delete this hall — ${occupied.rows.length} booth(s) still assigned: ${list}. Release them first.` });
+  }
+  const claimed = await pool.query(
+    `SELECT DISTINCT b.booth_no
+     FROM floor_plan_booths b
+     JOIN floor_plan_booth_claims c ON c.booth_id = b.id
+     WHERE b.hall_id = $1 AND c.released_at IS NULL
+     ORDER BY b.booth_no`,
+    [req.params.id]
+  );
+  if (claimed.rows.length > 0) {
+    return res.status(409).json({ error: `Cannot delete this hall — booth(s) still being proposed by a deal: ${claimed.rows.map((r) => r.booth_no).join(', ')}. Release them first.` });
+  }
+
   const result = await pool.query(
     `DELETE FROM floor_plan_halls WHERE id = $1 AND company_id = $2 RETURNING background_filename, source_pdf_filename`,
     [req.params.id, req.companyId]
@@ -226,7 +259,15 @@ async function listBooths(req, res) {
                WHERE c.booth_id = b.id AND c.record_type = 'sales_order' AND c.record_id = b.sales_order_id AND c.released_at IS NULL),
               (SELECT c.allocated_item_code FROM floor_plan_booth_claims c
                WHERE c.booth_id = b.id AND c.record_type = 'opportunity' AND c.record_id = b.opportunity_id AND c.released_at IS NULL)
-            ) AS allocated_item_code
+            ) AS allocated_item_code,
+            -- Any other admin-flagged is_booth_related item tagged on this
+            -- booth (Corner/Loading stay on their own dedicated columns
+            -- above — see migration 070) — used to lock Qty in Billing the
+            -- same way Corner/Loading already do.
+            COALESCE(
+              (SELECT array_agg(a.item_code) FROM floor_plan_booth_addons a WHERE a.booth_id = b.id),
+              ARRAY[]::text[]
+            ) AS addon_codes
      FROM floor_plan_booths b
      LEFT JOIN sales_orders so ON so.id = b.sales_order_id
      LEFT JOIN exhibitors ex_so ON ex_so.id = so.exhibitor_id
@@ -371,7 +412,8 @@ async function updateBooth(req, res) {
   const fields = {};
   for (const f of BOOTH_FIELDS) if (f in req.body) fields[f] = req.body[f] === '' ? null : req.body[f];
   const columns = Object.keys(fields);
-  if (columns.length === 0) return res.json({ booth: { id: req.params.boothId } });
+  const addonCodes = Array.isArray(req.body.addon_codes) ? req.body.addon_codes : null;
+  if (columns.length === 0 && !addonCodes) return res.json({ booth: { id: req.params.boothId } });
 
   const client = await pool.connect();
   try {
@@ -402,6 +444,7 @@ async function updateBooth(req, res) {
       const isOwner = beforeRow.assigned_salesperson_id && beforeRow.assigned_salesperson_id === req.userId;
       const allowedForOwner = ['fascia_name', 'opportunity_id', 'sales_order_id'];
       const ok = isOwner
+        && !addonCodes
         && columns.every((c) => allowedForOwner.includes(c))
         && (!('opportunity_id' in fields) || fields.opportunity_id === null)
         && (!('sales_order_id' in fields) || fields.sales_order_id === null);
@@ -411,16 +454,28 @@ async function updateBooth(req, res) {
       }
     }
 
-    const setClause = columns.map((c, i) => `${c} = $${i + 2}`).join(', ');
-    try {
-      await client.query(
-        `UPDATE floor_plan_booths SET ${setClause} WHERE id = $1`,
-        [req.params.boothId, ...columns.map((c) => fields[c])]
-      );
-    } catch (err) {
-      await client.query('ROLLBACK');
-      if (err.code === '23505') return res.status(409).json({ error: 'That booth number already exists in this hall.' });
-      throw err;
+    if (columns.length > 0) {
+      const setClause = columns.map((c, i) => `${c} = $${i + 2}`).join(', ');
+      try {
+        await client.query(
+          `UPDATE floor_plan_booths SET ${setClause} WHERE id = $1`,
+          [req.params.boothId, ...columns.map((c) => fields[c])]
+        );
+      } catch (err) {
+        await client.query('ROLLBACK');
+        if (err.code === '23505') return res.status(409).json({ error: 'That booth number already exists in this hall.' });
+        throw err;
+      }
+    }
+
+    if (addonCodes) {
+      await client.query(`DELETE FROM floor_plan_booth_addons WHERE booth_id = $1`, [req.params.boothId]);
+      for (const code of addonCodes) {
+        await client.query(
+          `INSERT INTO floor_plan_booth_addons (company_id, booth_id, item_code) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+          [req.companyId, req.params.boothId, code]
+        );
+      }
     }
 
     await cascadeReleaseIfNeeded(client, req.companyId, req.params.boothId, before.rows[0], fields);
@@ -478,25 +533,55 @@ async function deleteBooth(req, res) {
   try {
     await client.query('BEGIN');
 
-    const result = await client.query(
-      `DELETE FROM floor_plan_booths b
-       USING floor_plan_halls h
-       WHERE b.id = $1 AND b.hall_id = $2 AND b.hall_id = h.id AND h.company_id = $3
-       RETURNING b.opportunity_id, b.sales_order_id`,
+    // Deleting a booth that's still assigned/proposed used to silently blank
+    // out the linked Opportunity/Contract's Hall/Booth No/Dimension with no
+    // warning — a real destructive-data-loss risk (2026-08-01 user request:
+    // block it instead, and say exactly who's holding the booth, so
+    // Operations releases the link first rather than the booth just
+    // vanishing out from under a live deal).
+    const check = await client.query(
+      `SELECT b.booth_no, COALESCE(ex_so.company_name, ex_opp.company_name) AS exhibitor_name
+       FROM floor_plan_booths b
+       JOIN floor_plan_halls h ON h.id = b.hall_id
+       LEFT JOIN sales_orders so ON so.id = b.sales_order_id
+       LEFT JOIN exhibitors ex_so ON ex_so.id = so.exhibitor_id
+       LEFT JOIN opportunities opp ON opp.id = b.opportunity_id
+       LEFT JOIN exhibitors ex_opp ON ex_opp.id = opp.exhibitor_id
+       WHERE b.id = $1 AND b.hall_id = $2 AND h.company_id = $3
+       FOR UPDATE OF b`,
       [req.params.boothId, req.params.id, req.companyId]
     );
-    if (!result.rows[0]) {
+    if (!check.rows[0]) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Booth not found.' });
     }
+    if (check.rows[0].exhibitor_name) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `Cannot delete booth ${check.rows[0].booth_no} — it's currently assigned to ${check.rows[0].exhibitor_name}. Release that link (from the booth editor, or the Opportunity/Contract) first.` });
+    }
+    // A booth can also carry an active claim without being the PRIMARY
+    // claimant column above (competing-claims rule, Round 6 item 4).
+    const claim = await client.query(
+      `SELECT COALESCE(ex_opp.company_name, ex_so.company_name) AS exhibitor_name
+       FROM floor_plan_booth_claims c
+       LEFT JOIN opportunities opp ON opp.id = c.record_id AND c.record_type = 'opportunity'
+       LEFT JOIN exhibitors ex_opp ON ex_opp.id = opp.exhibitor_id
+       LEFT JOIN sales_orders so ON so.id = c.record_id AND c.record_type = 'sales_order'
+       LEFT JOIN exhibitors ex_so ON ex_so.id = so.exhibitor_id
+       WHERE c.booth_id = $1 AND c.released_at IS NULL LIMIT 1`,
+      [req.params.boothId]
+    );
+    if (claim.rows[0]?.exhibitor_name) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `Cannot delete this booth — it's currently being proposed by ${claim.rows[0].exhibitor_name}. Release that link first.` });
+    }
 
-    const { opportunity_id, sales_order_id } = result.rows[0];
-    if (opportunity_id) {
-      await client.query(`UPDATE opportunities SET hall = NULL, booth_no = NULL, dimension = NULL WHERE id = $1 AND company_id = $2`, [opportunity_id, req.companyId]);
-    }
-    if (sales_order_id) {
-      await client.query(`UPDATE sales_orders SET hall = NULL, booth_no = NULL, dimension = NULL WHERE id = $1 AND company_id = $2`, [sales_order_id, req.companyId]);
-    }
+    await client.query(
+      `DELETE FROM floor_plan_booths b
+       USING floor_plan_halls h
+       WHERE b.id = $1 AND b.hall_id = $2 AND b.hall_id = h.id AND h.company_id = $3`,
+      [req.params.boothId, req.params.id, req.companyId]
+    );
 
     await client.query('COMMIT');
     res.json({ success: true });
@@ -523,7 +608,11 @@ async function deleteBooth(req, res) {
 function listRecordBooths(recordType) {
   return async function (req, res) {
     const result = await pool.query(
-      `SELECT b.*, h.name AS hall_name, c.allocated_item_code
+      `SELECT b.*, h.name AS hall_name, c.allocated_item_code,
+              COALESCE(
+                (SELECT array_agg(a.item_code) FROM floor_plan_booth_addons a WHERE a.booth_id = b.id),
+                ARRAY[]::text[]
+              ) AS addon_codes
        FROM floor_plan_booth_claims c
        JOIN floor_plan_booths b ON b.id = c.booth_id
        JOIN floor_plan_halls h ON h.id = b.hall_id
@@ -546,6 +635,34 @@ function listRecordBooths(recordType) {
 // Contract approved first wins it for real (see approveSalesOrder), and
 // every other active claim on it is auto-released with the losing Sales
 // user notified to re-pick.
+// Canonical, order-independent fingerprint of a booth set's billing-relevant
+// "shape" — sqm per allocated item type, corner/loading counts, addon
+// counts. Two sets with the same shape produce identical billing given unit
+// prices are fixed and Qty is 100% booth-driven — used to gate booth
+// reassignment on an already-APPROVED contract without re-deriving the
+// actual dollar totals (2026-08-01, item 3).
+function boothShape(rows) {
+  const itemSqm = {};
+  let cornerCount = 0;
+  let loadingCount = 0;
+  const addonCount = {};
+  for (const r of rows) {
+    const key = r.allocated_item_code || '__DEFAULT__';
+    itemSqm[key] = (itemSqm[key] || 0) + (Number(r.sqm) || 0);
+    if (r.is_corner) cornerCount++;
+    if (r.is_loading) loadingCount++;
+    for (const code of (r.addon_codes || [])) {
+      addonCount[code] = (addonCount[code] || 0) + 1;
+    }
+  }
+  return JSON.stringify({
+    itemSqm: Object.keys(itemSqm).sort().map((k) => `${k}:${itemSqm[k]}`),
+    cornerCount,
+    loadingCount,
+    addonCount: Object.keys(addonCount).sort().map((k) => `${k}:${addonCount[k]}`),
+  });
+}
+
 function bulkSetRecordBooths(recordType, parentTable, linkColumn) {
   return async function (req, res) {
     const ids = Array.isArray(req.body.floor_plan_booth_ids) ? req.body.floor_plan_booth_ids : null;
@@ -562,18 +679,32 @@ function bulkSetRecordBooths(recordType, parentTable, linkColumn) {
       await client.query('BEGIN');
 
       const parent = await client.query(
-        `SELECT total_sqm FROM ${parentTable} WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+        `SELECT id FROM ${parentTable} WHERE id = $1 AND company_id = $2 FOR UPDATE`,
         [req.params.id, req.companyId]
       );
       if (!parent.rows[0]) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'Record not found.' });
       }
-      const cap = parent.rows[0].total_sqm === null ? null : Number(parent.rows[0].total_sqm);
+
+      // Once a Contract is APPROVED, "Reassign Booth" is only for moving the
+      // exhibitor to a same-value spot — any change to sqm/upgrade
+      // tier/corner/loading has to go through Request Value Change instead,
+      // since that's the flow that actually routes for approval (2026-08-01
+      // item 3). Enforced here (not just in the UI) so it can't be bypassed
+      // by calling the picker directly. Compares booth "shape" rather than
+      // re-deriving dollar totals — equivalent given unit prices are fixed
+      // and Qty is 100% booth-driven, and avoids duplicating billing logic.
+      let approvedContractGate = false;
+      if (parentTable === 'sales_orders') {
+        const soStatus = await client.query(`SELECT status FROM sales_orders WHERE id = $1`, [req.params.id]);
+        approvedContractGate = soStatus.rows[0]?.status === 'APPROVED';
+      }
 
       if (ids.length > 0) {
         const target = await client.query(
-          `SELECT b.id, b.sqm, b.status, so.status AS sales_order_status
+          `SELECT b.id, b.sqm, b.status, b.is_corner, b.is_loading, so.status AS sales_order_status,
+                  COALESCE((SELECT array_agg(a.item_code ORDER BY a.item_code) FROM floor_plan_booth_addons a WHERE a.booth_id = b.id), ARRAY[]::text[]) AS addon_codes
            FROM floor_plan_booths b
            JOIN floor_plan_halls h ON h.id = b.hall_id
            LEFT JOIN sales_orders so ON so.id = b.sales_order_id
@@ -595,10 +726,55 @@ function bulkSetRecordBooths(recordType, parentTable, linkColumn) {
           await client.query('ROLLBACK');
           return res.status(409).json({ error: 'One or more selected booths are Reserved — please review your selection.' });
         }
-        const totalSqm = target.rows.reduce((sum, b) => sum + (Number(b.sqm) || 0), 0);
-        if (cap !== null && totalSqm > cap) {
+        // No sqm-cap check here on purpose: Total Sqm is DERIVED from
+        // whichever booths get linked (see recomputeCachedBoothFields
+        // below), not an independent target this call has to respect. A
+        // prior version compared the newly-proposed booth set's sqm against
+        // the record's own CURRENT total_sqm — which this same call is
+        // about to overwrite — making it structurally impossible to ever
+        // grow a booth selection (adding any booth always "exceeded" the
+        // not-yet-updated old total). Confirmed as a real bug via a live
+        // repro (2026-07-31): trying to add a 3rd booth to an
+        // already-2-booth opportunity was unconditionally rejected. The
+        // picker's own client-side cap (FloorPlan.jsx's handleCapToggle)
+        // already never fires here since callers pass cap: null for this
+        // derived-total flow — this server-side check was the last
+        // leftover from the pre-#133/#156 "manually-typed target sqm"
+        // architecture and is now purely obsolete.
+
+        if (approvedContractGate) {
+          const newRows = target.rows.map((r) => ({ ...r, allocated_item_code: itemCodes[r.id] || null }));
+          const oldRows = (await client.query(
+            `SELECT b.sqm, b.is_corner, b.is_loading, c.allocated_item_code,
+                    COALESCE((SELECT array_agg(a.item_code ORDER BY a.item_code) FROM floor_plan_booth_addons a WHERE a.booth_id = b.id), ARRAY[]::text[]) AS addon_codes
+             FROM floor_plan_booth_claims c
+             JOIN floor_plan_booths b ON b.id = c.booth_id
+             WHERE c.record_type = $1 AND c.record_id = $2 AND c.released_at IS NULL`,
+            [recordType, req.params.id]
+          )).rows;
+          if (boothShape(oldRows) !== boothShape(newRows)) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+              error: 'This booth selection would change the contract value — an approved contract can only be reassigned to a same-value booth (same sqm, upgrade tier, and corner/loading). Use "Request Value Change" instead if the value itself needs to change.',
+            });
+          }
+        }
+      } else if (approvedContractGate) {
+        // Deselecting every booth on an approved contract is itself a value
+        // change (down to zero) — same gate, just with an empty new set.
+        const oldRows = (await client.query(
+          `SELECT b.sqm, b.is_corner, b.is_loading, c.allocated_item_code,
+                  COALESCE((SELECT array_agg(a.item_code ORDER BY a.item_code) FROM floor_plan_booth_addons a WHERE a.booth_id = b.id), ARRAY[]::text[]) AS addon_codes
+           FROM floor_plan_booth_claims c
+           JOIN floor_plan_booths b ON b.id = c.booth_id
+           WHERE c.record_type = $1 AND c.record_id = $2 AND c.released_at IS NULL`,
+          [recordType, req.params.id]
+        )).rows;
+        if (oldRows.length > 0) {
           await client.query('ROLLBACK');
-          return res.status(400).json({ error: `Selected booths total ${totalSqm} sqm, which exceeds the Total Sqm cap of ${cap}.` });
+          return res.status(409).json({
+            error: 'This booth selection would change the contract value — an approved contract can only be reassigned to a same-value booth. Use "Request Value Change" instead if the value itself needs to change.',
+          });
         }
       }
 
@@ -663,7 +839,12 @@ function bulkSetRecordBooths(recordType, parentTable, linkColumn) {
          ORDER BY h.name, b.booth_no`,
         [recordType, req.params.id, req.companyId]
       );
-      await recomputeCachedBoothFields(client, recordType, req.params.id);
+      // For a Contract, this also mirrors the refreshed Hall/Booth No/Total
+      // Sqm (and booth-driven billing rows) onto its linked Opportunity in
+      // the same transaction — Change Booth used to skip this entirely,
+      // leaving the Opportunity showing the pre-change booth set/sqm even
+      // though the Contract itself was correct (2026-08-01 user report).
+      await syncBoothFieldsAndMirror(client, req.companyId, recordType, req.params.id);
 
       await client.query('COMMIT');
       res.json({ booths: final.rows });

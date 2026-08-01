@@ -30,6 +30,7 @@ async function listAttachments(req, res) {
      FROM credit_note_attachments a
      JOIN credit_notes cn ON cn.id = a.credit_note_id
      JOIN sales_orders so ON so.id = cn.sales_order_id
+     LEFT JOIN users u ON u.id = a.uploaded_by
      WHERE a.credit_note_id = $1 AND cn.company_id = $2 AND ${vis.sql}
      ORDER BY a.uploaded_at DESC`,
     [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
@@ -65,7 +66,7 @@ async function uploadAttachment(req, res) {
 async function downloadAttachment(req, res) {
   const vis = financeVisibilityClause(req, 'so.salesperson_id', 3);
   const result = await pool.query(
-    `SELECT a.original_filename, a.stored_filename, a.mime_type
+    `SELECT a.original_filename, a.stored_filename, a.mime_type, cn.cn_no
      FROM credit_note_attachments a
      JOIN credit_notes cn ON cn.id = a.credit_note_id
      JOIN sales_orders so ON so.id = cn.sales_order_id
@@ -83,7 +84,14 @@ async function downloadAttachment(req, res) {
     return res.status(404).json({ error: 'File is missing from storage.' });
   }
 
-  res.download(filePath, attachment.original_filename);
+  // Prefixed with the CN number so a downloaded file is unambiguously
+  // identifiable as belonging to this credit note (not an invoice or
+  // contract) once it's sitting in someone's Downloads folder — per the
+  // user's explicit request (2026-07-31): "not sure where is CN" when
+  // browsing attachments outside the app.
+  const downloadName = `${attachment.cn_no} - ${attachment.original_filename}`;
+
+  res.download(filePath, downloadName);
 }
 
 async function deleteAttachment(req, res) {

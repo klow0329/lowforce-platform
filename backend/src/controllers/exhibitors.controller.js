@@ -38,7 +38,7 @@ const EXHIBITOR_FIELDS = [
   'reg_no', 'tin_no', 'sst_no', 'website', 'fax', 'halal_certified',
   'contact1_name', 'contact1_job_title', 'contact1_phone', 'contact1_email',
   'contact2_name', 'contact2_job_title', 'contact2_phone', 'contact2_email',
-  'billing_same_as_company', 'billing_name', 'billing_address',
+  'billing_same_as_company', 'billing_exhibitor_id', 'billing_name', 'billing_address',
   'billing_postcode', 'billing_city', 'billing_country_code',
   'billing_reg_no', 'billing_tin_no', 'billing_sst_no', 'billing_contact_no',
   'billing_email', 'is_repeat_exhibitor',
@@ -52,12 +52,45 @@ function pickExhibitorFields(body) {
   return out;
 }
 
+// When Billing is set to "select from Exhibitor list" (billing_exhibitor_id),
+// the linked exhibitor's own company info is copied into the billing_* text
+// columns — the same materialize-at-save pattern "Same as Exhibitor Info"
+// already uses, just sourced from a different exhibitor's row instead of the
+// exhibitor's own fields. Keeps every existing reader of billing_* (invoices,
+// print pages, statements) working unchanged instead of needing a join.
+async function applyBillingExhibitorLink(fields, companyId) {
+  if (!fields.billing_exhibitor_id) return fields;
+  const linked = await pool.query(
+    `SELECT company_name, address, postcode, city, country_code, reg_no, tin_no, sst_no,
+            contact1_phone, contact1_email
+     FROM exhibitors WHERE id = $1 AND company_id = $2`,
+    [fields.billing_exhibitor_id, companyId]
+  );
+  if (!linked.rows[0]) return null;
+  const l = linked.rows[0];
+  return {
+    ...fields,
+    billing_same_as_company: false,
+    billing_name: l.company_name,
+    billing_address: l.address,
+    billing_postcode: l.postcode,
+    billing_city: l.city,
+    billing_country_code: l.country_code,
+    billing_reg_no: l.reg_no,
+    billing_tin_no: l.tin_no,
+    billing_sst_no: l.sst_no,
+    billing_contact_no: l.contact1_phone,
+    billing_email: l.contact1_email,
+  };
+}
+
 async function getExhibitor(req, res) {
   const vis = visibilityClause(req, 'ex.salesperson_id', 3);
   const exhibitorResult = await pool.query(
-    `SELECT ex.*, ag.name AS agent_name
+    `SELECT ex.*, ag.name AS agent_name, be.company_name AS billing_exhibitor_name
      FROM exhibitors ex
      LEFT JOIN agents ag ON ag.id = ex.agent_id
+     LEFT JOIN exhibitors be ON be.id = ex.billing_exhibitor_id
      WHERE ex.id = $1 AND ex.company_id = $2 AND ${vis.sql}`,
     [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
   );
@@ -86,10 +119,14 @@ async function getExhibitor(req, res) {
 }
 
 async function createExhibitor(req, res) {
-  const fields = pickExhibitorFields(req.body);
+  let fields = pickExhibitorFields(req.body);
 
   if (!fields.company_name) {
     return res.status(400).json({ error: 'company_name is required.' });
+  }
+  if (fields.billing_exhibitor_id) {
+    fields = await applyBillingExhibitorLink(fields, req.companyId);
+    if (!fields) return res.status(400).json({ error: 'Selected billing company not found.' });
   }
 
   const columns = Object.keys(fields);
@@ -112,7 +149,11 @@ async function createExhibitor(req, res) {
 }
 
 async function updateExhibitor(req, res) {
-  const fields = pickExhibitorFields(req.body);
+  let fields = pickExhibitorFields(req.body);
+  if (fields.billing_exhibitor_id) {
+    fields = await applyBillingExhibitorLink(fields, req.companyId);
+    if (!fields) return res.status(400).json({ error: 'Selected billing company not found.' });
+  }
   const columns = Object.keys(fields);
 
   if (columns.length > 0) {
@@ -225,4 +266,93 @@ async function importRepeatExhibitors(req, res) {
   });
 }
 
-module.exports = { listExhibitors, getExhibitor, createExhibitor, updateExhibitor, importRepeatExhibitors };
+// Bulk add/update potential exhibitors from a directory/lead list (e.g. a
+// batch of companies scraped or exported from an industry directory) — a
+// full record creation, not just the repeat-flag import above. Matched by
+// UPPER(TRIM(company_name)) within this company; an existing exhibitor gets
+// its other fields updated (never deleted/overwritten to blank — a column
+// missing from a given row is left untouched), a new name gets created.
+// Every field here is optional except Company Name — a directory import
+// often only has a name and country at first, with the rest filled in
+// later once the lead is actually contacted (matches how the individual
+// New Exhibitor form only hard-requires company_name server-side; the
+// other "required" markers there are a data-entry nudge, not a DB rule).
+const IMPORT_EXHIBITOR_FIELDS = [
+  'company_name_alt', 'country_code', 'address', 'postcode', 'city', 'state',
+  'reg_no', 'tin_no', 'sst_no', 'website', 'fax',
+  'contact1_name', 'contact1_job_title', 'contact1_phone', 'contact1_email',
+  'contact2_name', 'contact2_job_title', 'contact2_phone', 'contact2_email',
+];
+
+async function importExhibitors(req, res) {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No rows to import.' });
+
+  let created = 0;
+  let updated = 0;
+  const skipped = [];
+
+  for (const row of rows) {
+    const companyName = (row.company_name || '').toString().trim().toUpperCase();
+    if (!companyName) continue;
+
+    let salespersonId = null;
+    const salespersonEmail = (row.salesperson_email || '').toString().trim();
+    if (salespersonEmail) {
+      const u = await pool.query(
+        `SELECT id FROM users WHERE company_id = $1 AND LOWER(email) = LOWER($2)`,
+        [req.companyId, salespersonEmail]
+      );
+      if (u.rows[0]) salespersonId = u.rows[0].id;
+      else skipped.push(`${companyName}: salesperson email "${salespersonEmail}" not found (exhibitor still saved, unassigned)`);
+    }
+
+    let agentId = null;
+    const agentName = (row.agent_name || '').toString().trim();
+    if (agentName) {
+      const a = await pool.query(
+        `SELECT id FROM agents WHERE company_id = $1 AND UPPER(TRIM(name)) = $2`,
+        [req.companyId, agentName.toUpperCase()]
+      );
+      if (a.rows[0]) agentId = a.rows[0].id;
+      else skipped.push(`${companyName}: agent "${agentName}" not found (exhibitor still saved, unassigned)`);
+    }
+
+    const fields = {};
+    for (const f of IMPORT_EXHIBITOR_FIELDS) {
+      if (row[f]) fields[f] = row[f];
+    }
+    if (salespersonId) fields.salesperson_id = salespersonId;
+    if (agentId) fields.agent_id = agentId;
+
+    const existing = await pool.query(
+      `SELECT id FROM exhibitors WHERE company_id = $1 AND UPPER(TRIM(company_name)) = $2`,
+      [req.companyId, companyName]
+    );
+    const cols = Object.keys(fields);
+    if (existing.rows[0]) {
+      if (cols.length > 0) {
+        const setClause = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
+        await pool.query(
+          `UPDATE exhibitors SET ${setClause} WHERE id = $1 AND company_id = $2`,
+          [existing.rows[0].id, req.companyId, ...cols.map((c) => fields[c])]
+        );
+      }
+      updated += 1;
+    } else {
+      const insertCols = ['company_id', 'company_name', ...cols];
+      const placeholders = insertCols.map((_, i) => `$${i + 1}`);
+      await pool.query(
+        `INSERT INTO exhibitors (${insertCols.join(', ')}) VALUES (${placeholders.join(', ')})`,
+        [req.companyId, companyName, ...cols.map((c) => fields[c])]
+      );
+      created += 1;
+    }
+  }
+
+  res.json({ success: true, created, updated, rowsProcessed: rows.length, skipped });
+}
+
+module.exports = {
+  listExhibitors, getExhibitor, createExhibitor, updateExhibitor, importRepeatExhibitors, importExhibitors,
+};

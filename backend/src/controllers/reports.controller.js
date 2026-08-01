@@ -1,10 +1,6 @@
 const { pool } = require('../config/db');
 const { visibilityClause, financeVisibilityClause } = require('../utils/visibility');
 
-// The Excel LIST tab classifies sales items as BOOTH or OTHER — only the
-// BOOTH-category codes count toward the "total booths" management KPI.
-const BOOTH_TYPE_CODES = ['BAS', 'SSS', 'ESS', 'WOP', 'CUB'];
-
 // Customer Aging / AR report — every unpaid or partially-paid invoice,
 // bucketed by days overdue using the company's own aging_buckets (not a
 // fixed 30/60/90/120, per the plan's "nothing hardcoded per company" rule).
@@ -20,7 +16,7 @@ async function getCustomerAging(req, res) {
 
   const invoicesResult = await pool.query(
     `WITH invoice_balances AS (
-       SELECT inv.id, inv.invoice_no, inv.invoice_date, inv.amount_myr,
+       SELECT inv.id, inv.sales_order_id, inv.invoice_no, inv.invoice_date, inv.amount_myr,
               COALESCE(inv.due_date, inv.invoice_date) AS due_date,
               inv.expected_payment_date, inv.aging_notes, inv.aging_updated_at,
               ex.company_name AS exhibitor_name, ex.billing_name,
@@ -53,6 +49,7 @@ async function getCustomerAging(req, res) {
        WHERE inv.company_id = $1
          AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
          AND inv.status = 'CONFIRMED'
+         AND inv.is_active = TRUE
          AND ${vis.sql}
      )
      SELECT ib.*, ab.label AS bucket_label, ab.sort_order AS bucket_sort_order
@@ -90,6 +87,114 @@ async function getCustomerAging(req, res) {
   res.json({ invoices: invoicesResult.rows, summary, totalOutstanding });
 }
 
+// Customer Aging by Contract — the same balances as getCustomerAging above,
+// but rolled up to one row per Contract instead of one row per Invoice, per
+// the user's explicit request (2026-07-31): Sales/Finance often think in
+// terms of "what does this contract still owe" rather than chasing
+// individual milestone invoices one at a time. Deliberately kept alongside
+// (not replacing) the invoice-level report — that one stays the tool for
+// per-invoice detail and correspondence follow-up; this one is a
+// contract-level summary that drills down into it (see sales_order_id on
+// each invoice row above, used by the frontend to filter that report to a
+// single contract on click).
+//
+// due_amount only counts invoiced milestones whose own due_date has already
+// passed. The remainder of the contract's balance splits into two visibly
+// distinct pieces — per the user's own follow-up correction (2026-07-31):
+// lumping them together made an approved contract with ZERO invoices ever
+// generated look identical to one that's fully invoiced and genuinely not
+// due yet, both showing RM0 due / 0 days overdue. not_invoiced_amount is
+// the portion with no invoice row at all yet (any status — DRAFT/SCHEDULED/
+// CONFIRMED all count as "invoiced" for this purpose, since a draft still
+// means Sales has at least billed for it); not_due_yet is now only the
+// remaining invoiced-but-not-yet-due portion. balance_total_due still
+// equals total contracted value − collected, matching the Total Outstanding
+// formula fixed in the Dashboard/Management KPI work.
+async function getCustomerAgingByContract(req, res) {
+  const { event_id } = req.query;
+  if (!event_id) {
+    return res.status(400).json({ error: 'event_id is required.' });
+  }
+
+  const vis = financeVisibilityClause(req, 'so.salesperson_id', 3);
+
+  const result = await pool.query(
+    `WITH invoice_calc AS (
+       SELECT inv.id, inv.sales_order_id, inv.amount_myr,
+              COALESCE(inv.due_date, inv.invoice_date) AS due_date,
+              inv.expected_payment_date,
+              inv.amount_myr
+                - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0)
+                - COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED'), 0)
+                AS balance_due,
+              COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS paid
+       FROM invoices inv
+       WHERE inv.company_id = $1 AND inv.status = 'CONFIRMED' AND inv.is_active = TRUE
+     ),
+     contract_agg AS (
+       SELECT sales_order_id,
+              SUM(paid) AS collected,
+              SUM(balance_due) FILTER (WHERE due_date <= CURRENT_DATE AND balance_due > 0.01) AS due_amount,
+              MAX(GREATEST(0, CURRENT_DATE - due_date)) FILTER (WHERE balance_due > 0.01) AS days_overdue,
+              MIN(COALESCE(expected_payment_date, due_date)) FILTER (WHERE balance_due > 0.01) AS expected_payment
+       FROM invoice_calc
+       GROUP BY sales_order_id
+     ),
+     invoiced_agg AS (
+       -- Every invoice row regardless of status (DRAFT/SCHEDULED/CONFIRMED)
+       -- counts as "invoiced" here — this is purely "has Sales issued
+       -- something for this yet", distinct from contract_agg's CONFIRMED-
+       -- only balances above. Archived (is_active = FALSE) invoices don't
+       -- count — same as everywhere else archiving is honored.
+       SELECT sales_order_id, SUM(amount_myr) AS invoiced_total
+       FROM invoices
+       WHERE company_id = $1 AND is_active = TRUE
+       GROUP BY sales_order_id
+     )
+     SELECT so.id, so.contract_date, so.total_myr AS total_contracted_value,
+            ex.company_name AS exhibitor_name, ex.billing_name,
+            u.full_name AS salesperson_name, ag.name AS agent_name,
+            COALESCE(ca.collected, 0) AS collected_value,
+            (so.total_myr - COALESCE(ca.collected, 0)) AS balance_total_due,
+            -- Capped at the contract's own current balance — a Contract
+            -- Reduction recomputes so.total_myr the moment it's approved,
+            -- but the shortfall Credit Note against an already-CONFIRMED
+            -- invoice isn't auto-created (Sales issues it afterward, and it
+            -- only actually reduces that invoice's balance once Finance
+            -- confirms it) — so due_amount could otherwise still reflect
+            -- the invoice's PRE-reduction balance and read as "more overdue
+            -- than the contract is even worth" in the gap before that CN is
+            -- confirmed (2026-08-01 audit finding).
+            LEAST(COALESCE(ca.due_amount, 0), GREATEST(0, so.total_myr - COALESCE(ca.collected, 0))) AS due_amount,
+            GREATEST(0, so.total_myr - COALESCE(ia.invoiced_total, 0)) AS not_invoiced_amount,
+            GREATEST(0,
+              (so.total_myr - COALESCE(ca.collected, 0))
+              - LEAST(COALESCE(ca.due_amount, 0), GREATEST(0, so.total_myr - COALESCE(ca.collected, 0)))
+              - GREATEST(0, so.total_myr - COALESCE(ia.invoiced_total, 0))
+            ) AS not_due_yet,
+            COALESCE(ca.days_overdue, 0) AS days_overdue,
+            ca.expected_payment
+     FROM sales_orders so
+     JOIN exhibitors ex ON ex.id = so.exhibitor_id
+     LEFT JOIN users u ON u.id = so.salesperson_id
+     LEFT JOIN agents ag ON ag.id = ex.agent_id
+     LEFT JOIN contract_agg ca ON ca.sales_order_id = so.id
+     LEFT JOIN invoiced_agg ia ON ia.sales_order_id = so.id
+     WHERE so.company_id = $1
+       AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+       AND so.status = 'APPROVED'
+       AND so.is_active = TRUE
+       AND ${vis.sql}
+       AND (so.total_myr - COALESCE(ca.collected, 0)) > 0.01
+     ORDER BY days_overdue DESC`,
+    [req.companyId, event_id, ...(vis.param !== undefined ? [vis.param] : [])]
+  );
+
+  const totalOutstanding = result.rows.reduce((sum, r) => sum + Number(r.balance_total_due), 0);
+
+  res.json({ contracts: result.rows, totalOutstanding });
+}
+
 // Sales Dashboard — replaces the Excel DASHBOARD tab, which today is just a
 // navigation hub. Pulls together pipeline KPIs (matching the old
 // scrSalesDashboard: Total/Active/Won/Lost) with the financial KPIs already
@@ -101,7 +206,7 @@ async function getDashboard(req, res) {
     return res.status(400).json({ error: 'event_id is required.' });
   }
 
-  const [oppResult, contractedNotInvoicedResult, contractValueResult, invoicedResult, collectedResult, creditedResult, followUpsResult, boothsResult] =
+  const [oppResult, contractedNotInvoicedResult, contractValueResult, invoicedResult, collectedResult, followUpsResult, boothsResult] =
     await Promise.all([
       pool.query(
         `SELECT
@@ -114,16 +219,30 @@ async function getDashboard(req, res) {
          WHERE o.company_id = $1 AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND o.is_active = TRUE`,
         [req.companyId, event_id]
       ),
+      // "Contracted, Not Yet Invoiced" — same APPROVED-only meaning as
+      // Total Contracted Value right below (a Draft/Pending/Void contract
+      // trivially has no invoice yet without being a real un-invoiced
+      // obligation) — this was missing the status filter that query has
+      // always had (2026-08-01 audit finding).
       pool.query(
         `SELECT COUNT(*) AS count, COALESCE(SUM(so.total_myr), 0) AS total_value
          FROM sales_orders so
-         WHERE so.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND so.is_active = TRUE
-           AND NOT EXISTS (SELECT 1 FROM invoices inv WHERE inv.sales_order_id = so.id)`,
+         WHERE so.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+           AND so.is_active = TRUE AND so.status = 'APPROVED'
+           AND NOT EXISTS (SELECT 1 FROM invoices inv WHERE inv.sales_order_id = so.id AND inv.is_active = TRUE)`,
         [req.companyId, event_id]
       ),
+      // "Total Contracted Value" — approved contracts only (not
+      // Draft/Pending Approval/Void), so it means what it says: value the
+      // company has actually contracted, not everything sitting in the
+      // pipeline. total_myr is already net of any approved Credit Note
+      // reduction (CN v3 mutates the contract's own total on approval — see
+      // creditNotes.controller.js), so this figure needs no separate CN
+      // subtraction to be the true current contracted value.
       pool.query(
         `SELECT COALESCE(SUM(total_myr), 0) AS total FROM sales_orders
-         WHERE company_id = $1 AND event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND is_active = TRUE`,
+         WHERE company_id = $1 AND event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+           AND is_active = TRUE AND status = 'APPROVED'`,
         [req.companyId, event_id]
       ),
       pool.query(
@@ -142,16 +261,6 @@ async function getDashboard(req, res) {
            AND inv.status = 'CONFIRMED'`,
         [req.companyId, event_id]
       ),
-      // Confirmed credit notes for this event's invoices — reduces
-      // outstanding only, never "Invoiced"/contracted revenue figures
-      // above, per the Credit Note design (see creditNotes.controller.js).
-      pool.query(
-        `SELECT COALESCE(SUM(cn.amount_myr), 0) AS total
-         FROM credit_notes cn
-         WHERE cn.company_id = $1 AND cn.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
-           AND cn.status = 'CONFIRMED'`,
-        [req.companyId, event_id]
-      ),
       pool.query(
         `SELECT COUNT(*) AS count
          FROM opportunities o JOIN sales_stages st ON st.id = o.stage_id
@@ -160,16 +269,23 @@ async function getDashboard(req, res) {
            AND o.next_follow_up_date IS NOT NULL AND o.next_follow_up_date <= CURRENT_DATE`,
         [req.companyId, event_id]
       ),
-      // "Total Booths" counts physical booths on Won/approved contracts.
-      // Since the booth-selection-first redesign (picking booths from the
-      // Floor Plan drives Total Sqm directly), opportunities.booth_type is
-      // no longer populated for newer deals — it's a stale single-value
-      // field left over from before multi-booth support, and a contract can
-      // now carry several booths of different types at once. So the real
-      // count comes from floor_plan_booths linked to the approved contract
-      // (one row per physical booth), falling back to the legacy
-      // opportunities.booth_type field (one contract = one booth) only for
-      // older Won deals that predate Floor Plan linkage entirely.
+      // "Total Booths" counts physical booths on approved contracts —
+      // sourced from sales_orders directly, the SAME base table Overview's
+      // Total Sqm and By Item & Type both use, so this tile is guaranteed to
+      // reconcile with them by construction. Deriving it from
+      // opportunities.booth_type instead (the old approach) was a straight
+      // count/sqm mismatch: that field is a stale single-value leftover from
+      // before multi-booth support (never populated by the booth-selection-
+      // first flow), and "Won" opportunities aren't 1:1 with approved
+      // contracts (a company can have Won opportunities with no contract at
+      // all, e.g. historical bulk-imported rows) — verified live this was
+      // both dropping real contracts entirely for events where booth_type
+      // was never set, AND overcounting for events where stale Won
+      // opportunities outnumbered their actual approved contracts. Every
+      // approved contract either sums its own linked physical booths (one
+      // row per booth, real sqm each) or, if it predates Floor Plan linkage
+      // entirely, counts as one booth at its own total_sqm — the same
+      // legacy convention getByItem already uses.
       pool.query(
         `SELECT COUNT(*) AS count, COALESCE(SUM(sqm), 0) AS total_sqm FROM (
            SELECT fpb.sqm AS sqm
@@ -180,25 +296,20 @@ async function getDashboard(req, res) {
 
            UNION ALL
 
-           SELECT o.total_sqm AS sqm
-           FROM opportunities o
-           JOIN sales_stages st ON st.id = o.stage_id
-           WHERE o.company_id = $1 AND o.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
-             AND o.is_active = TRUE AND st.is_won AND o.booth_type = ANY($3)
-             AND NOT EXISTS (
-               SELECT 1 FROM sales_orders so2
-               JOIN floor_plan_booths fpb2 ON fpb2.sales_order_id = so2.id
-               WHERE so2.opportunity_id = o.id
-             )
+           SELECT so.total_sqm AS sqm
+           FROM sales_orders so
+           WHERE so.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+             AND so.status = 'APPROVED' AND so.is_active = TRUE
+             AND NOT EXISTS (SELECT 1 FROM floor_plan_booths fpb2 WHERE fpb2.sales_order_id = so.id)
          ) sub`,
-        [req.companyId, event_id, BOOTH_TYPE_CODES]
+        [req.companyId, event_id]
       ),
     ]);
 
   const opp = oppResult.rows[0];
   const totalInvoiced = Number(invoicedResult.rows[0].total);
   const totalCollected = Number(collectedResult.rows[0].total);
-  const totalCredited = Number(creditedResult.rows[0].total);
+  const totalContractValue = Number(contractValueResult.rows[0].total);
 
   res.json({
     opportunities: {
@@ -214,10 +325,15 @@ async function getDashboard(req, res) {
       count: Number(contractedNotInvoicedResult.rows[0].count),
       totalValue: Number(contractedNotInvoicedResult.rows[0].total_value),
     },
-    totalContractValue: Number(contractValueResult.rows[0].total),
+    totalContractValue,
     totalInvoiced,
     totalCollected,
-    totalOutstanding: totalInvoiced - totalCollected - totalCredited,
+    // Total Contracted Value - Total Collected — covers the full approved
+    // obligation, including anything contracted but not yet invoiced (or
+    // invoiced but not yet due), not just invoiced-minus-collected. This
+    // needs no separate Credit Note subtraction: totalContractValue already
+    // nets out any approved CN reduction (see the query above).
+    totalOutstanding: totalContractValue - totalCollected,
     followUpsDue: Number(followUpsResult.rows[0].count),
     totalBooths: {
       count: Number(boothsResult.rows[0].count),
@@ -269,7 +385,7 @@ async function getTasks(req, res) {
   const [
     followUpsResult, approvalsResult, invoicesResult, draftInvoicesResult, recentPaymentsResult, recentConfirmedInvoicesResult, scheduledMilestonesResult,
     pendingCnApprovalsResult, draftCnsResult, recentConfirmedCnsResult, recentApprovedContractsResult, lostBoothClaimsResult, paymentProofAttachmentsResult,
-    pendingReductionApprovalsResult,
+    pendingReductionApprovalsResult, recentResolvedReductionsResult,
   ] = await Promise.all([
     financeOnly ? skip : pool.query(
       `SELECT o.id, ex.company_name AS exhibitor_name, o.next_follow_up_date, o.remarks
@@ -300,7 +416,7 @@ async function getTasks(req, res) {
        JOIN exhibitors ex ON ex.id = so.exhibitor_id
        LEFT JOIN users u ON u.id = so.salesperson_id
        WHERE so.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
-         AND so.is_active = TRUE AND so.status = 'PENDING_APPROVAL'
+         AND so.is_active = TRUE AND so.status IN ('PENDING_APPROVAL', 'PENDING_APPROVAL_STEP2')
          AND ${soVis.sql}
        ORDER BY so.contract_date NULLS LAST`,
       [req.companyId, event_id, ...(soVis.param !== undefined ? [soVis.param] : [])]
@@ -309,14 +425,16 @@ async function getTasks(req, res) {
       `SELECT inv.id, inv.invoice_no, inv.expected_payment_date,
               ex.company_name AS exhibitor_name,
               inv.amount_myr
-                - COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0)
-                - COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED'), 0)
+                - COALESCE((SELECT SUM(pa.amount_myr) FROM payment_allocations pa
+                            JOIN payments p ON p.id = pa.payment_id
+                            WHERE pa.invoice_id = inv.id AND p.is_active = TRUE), 0)
+                - COALESCE((SELECT SUM(amount_myr) FROM credit_notes WHERE invoice_id = inv.id AND status = 'CONFIRMED' AND is_active = TRUE), 0)
                 AS balance_due
        FROM invoices inv
        JOIN exhibitors ex ON ex.id = inv.exhibitor_id
        JOIN sales_orders so ON so.id = inv.sales_order_id
        WHERE inv.company_id = $1 AND inv.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
-         AND inv.status = 'CONFIRMED'
+         AND inv.status = 'CONFIRMED' AND inv.is_active = TRUE
          AND inv.expected_payment_date IS NOT NULL AND inv.expected_payment_date <= CURRENT_DATE + INTERVAL '7 days'
          AND ${financeVis.sql}
        ORDER BY inv.expected_payment_date`,
@@ -455,6 +573,7 @@ async function getTasks(req, res) {
          AND COALESCE(so.salesperson_id, ex.salesperson_id) = $3
          AND (so.status = 'APPROVED' OR (so.status = 'DRAFT' AND so.rejected_at IS NOT NULL))
          AND so.approval_acknowledged_at IS NULL
+         AND so.is_active = TRUE
        ORDER BY so.contract_date DESC NULLS LAST`,
       [req.companyId, event_id, req.userId]
     ),
@@ -474,6 +593,7 @@ async function getTasks(req, res) {
          JOIN exhibitors ex ON ex.id = opp.exhibitor_id
          WHERE c.record_type = 'opportunity' AND c.release_reason = 'LOST_TO_APPROVAL' AND c.acknowledged_at IS NULL
            AND h.company_id = $1 AND opp.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND opp.salesperson_id = $3
+           AND opp.is_active = TRUE
          UNION ALL
          SELECT c.record_type, c.record_id, ex.company_name AS exhibitor_name, so.salesperson_id, b.booth_no, c.released_at
          FROM floor_plan_booth_claims c
@@ -483,6 +603,7 @@ async function getTasks(req, res) {
          JOIN exhibitors ex ON ex.id = so.exhibitor_id
          WHERE c.record_type = 'sales_order' AND c.release_reason = 'LOST_TO_APPROVAL' AND c.acknowledged_at IS NULL
            AND h.company_id = $1 AND so.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2) AND so.salesperson_id = $3
+           AND so.is_active = TRUE
        ) x
        GROUP BY record_type, record_id, exhibitor_name, salesperson_id
        ORDER BY MAX(released_at) DESC`,
@@ -522,6 +643,26 @@ async function getTasks(req, res) {
        ORDER BY cr.created_at`,
       [req.companyId, event_id, ...(soVis.param !== undefined ? [soVis.param] : [])]
     ),
+    // Value Change requests Management has just approved or rejected on
+    // THIS user's own deals — mirrors recentApprovedContracts above. A
+    // genuine gap before this: the request deliberately leaves
+    // sales_orders.status untouched while resolving (same reasoning as the
+    // pending-approval query above), so it could never trigger that query's
+    // so.status-based notification either (2026-08-01 user request: full
+    // notification chain for the Value Change flow).
+    financeOnly ? skip : pool.query(
+      `SELECT cr.id, cr.sales_order_id, cr.status, cr.old_total_foreign, cr.new_total_foreign, so.currency,
+              ex.company_name AS exhibitor_name, cr.rejection_notes
+       FROM contract_reductions cr
+       JOIN exhibitors ex ON ex.id = cr.exhibitor_id
+       JOIN sales_orders so ON so.id = cr.sales_order_id
+       WHERE cr.company_id = $1 AND cr.event_id IN (SELECT id FROM events WHERE id = $2 OR parent_event_id = $2)
+         AND cr.status IN ('APPROVED', 'REJECTED')
+         AND COALESCE(so.salesperson_id, ex.salesperson_id) = $3
+         AND cr.approval_acknowledged_at IS NULL
+       ORDER BY cr.created_at DESC`,
+      [req.companyId, event_id, req.userId]
+    ),
   ]);
 
   const opportunityFollowUps = followUpsResult.rows
@@ -548,11 +689,12 @@ async function getTasks(req, res) {
   const lostBoothClaims = lostBoothClaimsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
   const paymentProofAttachments = paymentProofAttachmentsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
   const pendingReductionApprovals = pendingReductionApprovalsResult.rows.map((r) => ({ ...r, urgency: 'urgent' }));
+  const recentResolvedReductions = recentResolvedReductionsResult.rows.map((r) => ({ ...r, urgency: 'info' }));
 
   res.json({
     opportunityFollowUps, pendingApprovals, outstandingInvoices, draftInvoices, recentPayments, recentConfirmedInvoices, scheduledMilestones,
     pendingCnApprovals, draftCns, recentConfirmedCns, recentApprovedContracts, lostBoothClaims, paymentProofAttachments,
-    pendingReductionApprovals,
+    pendingReductionApprovals, recentResolvedReductions,
   });
 }
 
@@ -581,19 +723,19 @@ async function getStatementOfAccount(req, res) {
   const [invoicesResult, paymentsResult, creditNotesResult, creditResult] = await Promise.all([
     pool.query(
       `SELECT id, invoice_no, invoice_date, amount_myr FROM invoices
-       WHERE company_id = $1 AND exhibitor_id = $2 AND status = 'CONFIRMED'
+       WHERE company_id = $1 AND exhibitor_id = $2 AND status = 'CONFIRMED' AND is_active = TRUE
        ORDER BY invoice_date`,
       [req.companyId, exhibitor_id]
     ),
     pool.query(
       `SELECT id, payment_date, amount_myr, receipt_no FROM payments
-       WHERE company_id = $1 AND exhibitor_id = $2
+       WHERE company_id = $1 AND exhibitor_id = $2 AND is_active = TRUE
        ORDER BY payment_date`,
       [req.companyId, exhibitor_id]
     ),
     pool.query(
       `SELECT id, cn_no, cn_date, amount_myr FROM credit_notes
-       WHERE company_id = $1 AND exhibitor_id = $2 AND status = 'CONFIRMED'
+       WHERE company_id = $1 AND exhibitor_id = $2 AND status = 'CONFIRMED' AND is_active = TRUE
        ORDER BY cn_date`,
       [req.companyId, exhibitor_id]
     ),
@@ -601,8 +743,8 @@ async function getStatementOfAccount(req, res) {
       `SELECT COALESCE(SUM(p.amount_myr), 0)
                 - COALESCE((SELECT SUM(pa.amount_myr) FROM payment_allocations pa
                             JOIN payments p2 ON p2.id = pa.payment_id
-                            WHERE p2.company_id = $1 AND p2.exhibitor_id = $2), 0) AS credit
-       FROM payments p WHERE p.company_id = $1 AND p.exhibitor_id = $2`,
+                            WHERE p2.company_id = $1 AND p2.exhibitor_id = $2 AND p2.is_active = TRUE), 0) AS credit
+       FROM payments p WHERE p.company_id = $1 AND p.exhibitor_id = $2 AND p.is_active = TRUE`,
       [req.companyId, exhibitor_id]
     ),
   ]);
@@ -636,4 +778,4 @@ async function getStatementOfAccount(req, res) {
   });
 }
 
-module.exports = { getCustomerAging, getDashboard, getTasks, getStatementOfAccount };
+module.exports = { getCustomerAging, getCustomerAgingByContract, getDashboard, getTasks, getStatementOfAccount };

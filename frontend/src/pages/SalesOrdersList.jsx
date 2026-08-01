@@ -8,8 +8,11 @@ import { toTitleCase } from '../utils/format';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const STATUS_LABELS = { DRAFT: 'Draft', PENDING_APPROVAL: 'Pending Approval', APPROVED: 'Approved', VOID: 'Void' };
-const STATUS_TILE_BG = { DRAFT: '#fff', PENDING_APPROVAL: '#FFF3BF', APPROVED: '#eafaf1', VOID: '#FBE3E3' };
+const STATUS_LABELS = {
+  DRAFT: 'Draft', PENDING_APPROVAL: 'Pending Approval', PENDING_APPROVAL_STEP2: 'Pending 2nd Approval',
+  APPROVED: 'Approved', VOID: 'Void',
+};
+const STATUS_TILE_BG = { DRAFT: '#fff', PENDING_APPROVAL: '#FFF3BF', PENDING_APPROVAL_STEP2: '#FFF3BF', APPROVED: '#eafaf1', VOID: '#FBE3E3' };
 
 // Booth Allocation (picked-vs-total sqm) dropped per the sales team — booths
 // are now fully allocated before an Opportunity can even become a Contract
@@ -22,7 +25,18 @@ function buildColumns(countryNames) {
     { key: 'booth_no', label: 'Booth No', default: true, value: (r) => (r.booth_no ? `${r.hall ? `${r.hall} / ` : ''}${r.booth_no}` : '—') },
     { key: 'total_sqm', label: 'Total Sqm', default: true, value: (r) => (r.total_sqm ?? '—') },
     { key: 'contract_date', label: 'Contract Date', default: true },
-    { key: 'status', label: 'Status', default: true, value: (r) => STATUS_LABELS[r.status] || r.status },
+    {
+      key: 'status', label: 'Status', default: true,
+      // A pending Value Change doesn't touch the Contract's own status —
+      // it stays exactly as-approved until the request resolves — but the
+      // list should say so's under review rather than plain "Approved"
+      // (2026-08-01 user request). Reverts on its own once the request
+      // clears, since has_pending_value_change is a live check, not a
+      // stored flag.
+      value: (r) => (r.status === 'APPROVED' && r.has_pending_value_change
+        ? 'Approved — Value Change Pending'
+        : (STATUS_LABELS[r.status] || r.status)),
+    },
     { key: 'total_myr', label: 'Total', default: true, value: (r) => fmtMYR(r.total_myr) },
     { key: 'salesperson_name', label: 'Salesperson', default: true },
     { key: 'agent_name', label: 'Sales Agent', default: false, value: (r) => (r.agent_name || '—') },
@@ -60,8 +74,15 @@ export default function SalesOrdersList() {
     return <p style={{ maxWidth: 800, margin: '40px auto' }}>No events set up yet — create one in Admin first.</p>;
   }
 
+  // The Pending Approval tile/filter covers both approval steps — a
+  // contract awaiting its 2nd sign-off is still "pending", just further
+  // along, not a separate bucket the sales team needs to track apart.
+  const statusMatches = (so, status) => (
+    status === 'PENDING_APPROVAL' ? ['PENDING_APPROVAL', 'PENDING_APPROVAL_STEP2'].includes(so.status) : so.status === status
+  );
+
   const kpis = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].map((status) => {
-    const matching = salesOrders.filter((so) => so.status === status);
+    const matching = salesOrders.filter((so) => statusMatches(so, status));
     return {
       status,
       label: STATUS_LABELS[status],
@@ -70,7 +91,7 @@ export default function SalesOrdersList() {
     };
   });
 
-  const visibleOrders = statusFilter ? salesOrders.filter((so) => so.status === statusFilter) : salesOrders;
+  const visibleOrders = statusFilter ? salesOrders.filter((so) => statusMatches(so, statusFilter)) : salesOrders;
 
   return (
     <div className="page" style={{ maxWidth: 900, margin: '40px auto' }}>

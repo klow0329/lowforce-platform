@@ -8,7 +8,8 @@ const fmt = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleSt
 
 const emptyForm = {
   id: null, booth_type: '', new_tier_name: '', sales_item_code: '', description: '', category: 'OTHER', default_tax_code_id: '', unit_price_myr: '', unit_price_usd: '',
-  is_upgrade_option: false, is_addon_item: false, pricing_mode: 'FIXED', pricing_pct: '', is_wide_row: false,
+  is_upgrade_option: false, is_addon_item: false, pricing_mode: 'FIXED', pricing_pct: '', is_wide_row: false, is_primary_base: false,
+  is_booth_related: false,
 };
 
 export default function PriceList({ user }) {
@@ -49,6 +50,8 @@ export default function PriceList({ user }) {
       pricing_mode: item.pricing_mode || 'FIXED',
       pricing_pct: item.pricing_pct ?? '',
       is_wide_row: !!item.is_wide_row,
+      is_primary_base: !!item.is_primary_base,
+      is_booth_related: !!item.is_booth_related,
     });
     setShowForm(true);
   }
@@ -204,6 +207,19 @@ export default function PriceList({ user }) {
               Show as a wide text box in Billing (like Sponsorship, Other...)
             </label>
           </div>
+          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, marginTop: 12 }}>
+            <input type="checkbox" checked={form.is_primary_base} onChange={(e) => set('is_primary_base', e.target.checked)} />
+            This is the Primary Booth Base item (like Bare Space) — drives Total Sqm system-wide, only one per event
+          </label>
+          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
+            <input type="checkbox" checked={form.is_booth_related} onChange={(e) => set('is_booth_related', e.target.checked)} />
+            Booth-related item (like Corner Charge, Loading...) — its Qty in Billing is locked and comes only from marking booths with it on the Floor Plan, not typed manually
+          </label>
+          {form.is_primary_base && (
+            <p style={{ fontSize: 11, color: '#5c6070', marginTop: 4 }}>
+              Only one item code can be the Primary Base for this event. Saving this will unset it from any other item and apply it to <strong>{form.sales_item_code || 'this code'}</strong> across every rate tier.
+            </p>
+          )}
           <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>
             {form.id ? 'Save Changes' : 'Add Item'}
           </button>
@@ -228,6 +244,9 @@ export default function PriceList({ user }) {
                 <tr key={item.id} style={{ borderBottom: '1px solid #eee' }}>
                   <td>
                     {item.sales_item_code}
+                    {item.is_primary_base && (
+                      <span style={{ marginLeft: 6, fontSize: 11, color: '#1E7B34', fontWeight: 600 }}>[Primary Base]</span>
+                    )}
                     {item.category === 'BOOTH' && (
                       <span style={{ marginLeft: 6, fontSize: 11, color: '#5c6070' }}>[Booth]</span>
                     )}
@@ -241,6 +260,9 @@ export default function PriceList({ user }) {
                     )}
                     {item.is_wide_row && (
                       <span style={{ marginLeft: 6, fontSize: 11, color: '#5c6070' }}>[Wide box]</span>
+                    )}
+                    {item.is_booth_related && (
+                      <span style={{ marginLeft: 6, fontSize: 11, color: '#5c6070' }}>[Booth-related — Qty locked]</span>
                     )}
                   </td>
                   <td>{item.description || '—'}{item.default_tax_code ? ` · ${item.default_tax_code}` : ''}</td>
@@ -271,15 +293,24 @@ const BASIS_LABELS = {
   DAYS_AFTER_SIGNING: 'Days after signing',
   WEEKS_AFTER_SIGNING: 'Weeks after signing',
   MONTHS_AFTER_SIGNING: 'Months after signing',
+  DAYS_BEFORE_EVENT: 'Days before event',
+  WEEKS_BEFORE_EVENT: 'Weeks before event',
+  MONTHS_BEFORE_EVENT: 'Months before event',
 };
 const emptyLine = { pct: '', basis_type: 'DAYS_AFTER_SIGNING', basis_date: '', basis_value: '', description: '' };
 const emptyTermForm = { id: null, code: '', name: '', default_for_tier: '', is_active: true, lines: [{ ...emptyLine }] };
 
+const BASIS_UNIT = {
+  DAYS_AFTER_SIGNING: 'day(s)', WEEKS_AFTER_SIGNING: 'week(s)', MONTHS_AFTER_SIGNING: 'month(s)',
+  DAYS_BEFORE_EVENT: 'day(s)', WEEKS_BEFORE_EVENT: 'week(s)', MONTHS_BEFORE_EVENT: 'month(s)',
+};
+
 function describeLine(l) {
   const pct = `${l.pct}%`;
   if (l.basis_type === 'FIXED_DATE') return `${pct} due ${l.basis_date || '(no date set)'}`;
-  const unit = l.basis_type === 'DAYS_AFTER_SIGNING' ? 'day(s)' : l.basis_type === 'WEEKS_AFTER_SIGNING' ? 'week(s)' : 'month(s)';
-  return `${pct} due ${l.basis_value || 0} ${unit} after signing`;
+  const unit = BASIS_UNIT[l.basis_type] || 'unit(s)';
+  const relativeTo = l.basis_type.endsWith('_BEFORE_EVENT') ? 'before event' : 'after signing';
+  return `${pct} due ${l.basis_value || 0} ${unit} ${relativeTo}`;
 }
 
 // Credit Terms — named, reusable installment schedules (e.g. "20/30/50",

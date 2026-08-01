@@ -17,6 +17,10 @@ function attachTenant(req, res, next) {
   req.companyId = req.session.user.company_id;
   req.userId = req.session.user.id;
   req.roleCode = req.session.user.role_code;
+  // Per-user override of the Department module matrix — see
+  // modulePermission.js. null/undefined means "Default": no override,
+  // fall back to the Department matrix exactly as before this feature.
+  req.accessLevelOverride = req.session.user.access_level_override || null;
   next();
 }
 

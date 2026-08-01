@@ -18,7 +18,17 @@ function buildColumns(countryNames) {
     },
     {
       key: 'stage_name', label: 'Stage', default: true,
-      render: (r) => <span style={{ color: r.is_won ? '#1A9C5B' : r.is_lost ? '#D13434' : 'inherit' }}>{r.stage_name}</span>,
+      // A pending Value Change on the linked Contract doesn't move this
+      // Opportunity's own stage — flagged alongside it instead of replacing
+      // it (2026-08-01 user request).
+      render: (r) => (
+        <span style={{ color: r.is_won ? '#1A9C5B' : r.is_lost ? '#D13434' : 'inherit' }}>
+          {r.stage_name}
+          {r.has_pending_value_change && (
+            <span style={{ color: '#B8860B', fontSize: 12, fontWeight: 600 }}> · Value Change Pending</span>
+          )}
+        </span>
+      ),
     },
     { key: 'total_sqm', label: 'Sqm', default: true, value: (r) => (r.total_sqm ?? '—') },
     { key: 'exhibitor_country', label: 'Country', default: false, value: (r) => (countryNames[r.exhibitor_country] || r.exhibitor_country || '—') },

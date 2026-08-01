@@ -1,7 +1,17 @@
 const { pool } = require('../config/db');
 const { visibilityClause } = require('../utils/visibility');
 const { syncFloorPlanBooth, releaseFloorPlanBooth } = require('../utils/floorPlanSync');
-const { getRequiredApprover, canActOnTier } = require('../utils/approverMatrix');
+const { getRequiredApprover, canActOnTier, hasStep2, canActOnStep2 } = require('../utils/approverMatrix');
+
+// Mirrors approvals.controller.js's own copy — kept local since this is a
+// read-only display helper, not the enforcement path.
+async function getPendingSince(salesOrderId) {
+  const result = await pool.query(
+    `SELECT MAX(created_at) AS since FROM approval_log WHERE sales_order_id = $1 AND action IN ('SUBMITTED', 'FLAGGED')`,
+    [salesOrderId]
+  );
+  return result.rows[0]?.since || null;
+}
 
 async function listSalesOrders(req, res) {
   const { event_id, search } = req.query;
@@ -17,14 +27,27 @@ async function listSalesOrders(req, res) {
             so.total_sqm,
             ex.company_name AS exhibitor_name, ex.country_code AS exhibitor_country, u.full_name AS salesperson_name,
             ag.name AS agent_name,
+            -- A pending Value Change (contract_reductions) doesn't touch
+            -- so.status itself — the contract stays exactly as-approved
+            -- until the request resolves — but the list should still say so
+            -- is under review rather than just "Approved" (2026-08-01 user
+            -- request). Reverts to plain Approved automatically once the
+            -- request is approved/rejected/withdrawn, since this is a live
+            -- EXISTS check, not a stored flag.
+            EXISTS (
+              SELECT 1 FROM contract_reductions cr WHERE cr.sales_order_id = so.id AND cr.status = 'PENDING_APPROVAL'
+            ) AS has_pending_value_change,
             -- Same derivation as the Opportunity list — see that query's
             -- comment.
             COALESCE(
               (SELECT soi.description FROM sales_order_items soi
-               WHERE soi.sales_order_id = so.id AND soi.category = 'BOOTH' AND soi.sales_item_code != 'BAS'
+               WHERE soi.sales_order_id = so.id AND soi.category = 'BOOTH'
+                 AND soi.sales_item_code != COALESCE((SELECT pl.sales_item_code FROM price_list pl WHERE pl.company_id = so.company_id AND pl.event_id = so.event_id AND pl.is_primary_base = true LIMIT 1), 'BAS')
                ORDER BY soi.sort_order, soi.id LIMIT 1),
-              (SELECT 'Bare Space' WHERE EXISTS (
-                 SELECT 1 FROM sales_order_items soi2 WHERE soi2.sales_order_id = so.id AND soi2.sales_item_code = 'BAS'))
+              (SELECT soi2.description FROM sales_order_items soi2
+               WHERE soi2.sales_order_id = so.id
+                 AND soi2.sales_item_code = COALESCE((SELECT pl.sales_item_code FROM price_list pl WHERE pl.company_id = so.company_id AND pl.event_id = so.event_id AND pl.is_primary_base = true LIMIT 1), 'BAS')
+               LIMIT 1)
             ) AS booth_type_display
      FROM sales_orders so
      JOIN exhibitors ex ON ex.id = so.exhibitor_id
@@ -65,7 +88,10 @@ async function getSalesOrder(req, res) {
               SELECT 1 FROM floor_plan_booth_claims c
               WHERE c.record_type = 'sales_order' AND c.record_id = so.id
                 AND c.release_reason = 'LOST_TO_APPROVAL' AND c.reallocated_at IS NULL
-            ) AS needs_booth_reallocation
+            ) AS needs_booth_reallocation,
+            EXISTS (
+              SELECT 1 FROM contract_reductions cr WHERE cr.sales_order_id = so.id AND cr.status = 'PENDING_APPROVAL'
+            ) AS has_pending_value_change
      FROM sales_orders so
      JOIN exhibitors ex ON ex.id = so.exhibitor_id
      JOIN events ev ON ev.id = so.event_id
@@ -87,15 +113,23 @@ async function getSalesOrder(req, res) {
   // the right person instead of only ever showing for isElevated.
   let requiredApprover = null;
   let canApprove = false;
-  if (salesOrder.status === 'PENDING_APPROVAL') {
-    const tier = await getRequiredApprover(req.companyId, Number(salesOrder.total_myr) || 0);
-    requiredApprover = tier
-      ? { role_code: tier.approver_role_code, user_name: tier.approver_user_name }
-      : { role_code: null, user_name: null }; // null/null = default Admin/Management gate
-    canApprove = canActOnTier(req, tier);
+  let approvalStep = null; // 1 (awaiting 1st sign-off) or 2 (1st given, awaiting 2nd) — only set when the tier has a step-2 approver
+  if (salesOrder.status === 'PENDING_APPROVAL' || salesOrder.status === 'PENDING_APPROVAL_STEP2') {
+    const tier = await getRequiredApprover(req.companyId, Number(salesOrder.total_myr) || 0, 'REVENUE_ABOVE_THRESHOLD', salesOrder.event_id);
+    if (salesOrder.status === 'PENDING_APPROVAL_STEP2') {
+      approvalStep = 2;
+      requiredApprover = { role_code: tier?.step2_approver_role_code || null, user_name: tier?.step2_approver_user_name || null };
+      canApprove = canActOnStep2(req, tier);
+    } else {
+      approvalStep = hasStep2(tier) ? 1 : null;
+      requiredApprover = tier
+        ? { role_code: tier.approver_role_code, user_name: tier.approver_user_name }
+        : { role_code: null, user_name: null }; // null/null = default Admin/Management gate
+      canApprove = canActOnTier(req, tier, await getPendingSince(req.params.id));
+    }
   }
 
-  res.json({ salesOrder, requiredApprover, canApprove });
+  res.json({ salesOrder, requiredApprover, canApprove, approvalStep });
 }
 
 async function createSalesOrder(req, res) {
@@ -212,8 +246,18 @@ async function createSalesOrder(req, res) {
 // total_myr/total_foreign are NOT editable here — they're derived from line
 // items (see salesOrderItems.controller.js recomputeTotals). currency and
 // exchange_rate remain editable so the contract's estimate rate can be
-// corrected before it's invoiced.
-const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'currency', 'exchange_rate', 'hall', 'booth_no', 'dimension', 'total_sqm', 'booking_type', 'remarks', 'credit_terms_id', 'bill_to_type'];
+// corrected before it's invoiced. hall/booth_no/total_sqm are likewise NOT
+// editable here — they're derived from the record's actual Floor Plan booth
+// claims (see floorPlan.controller.js's bulkSetRecordBooths ->
+// recomputeCachedBoothFields, the only legitimate writer). They used to be
+// in this whitelist, which meant a stale browser tab — one that loaded
+// before a booth claim was won/lost/deselected out from under it — could
+// silently overwrite the server's already-correct value back to the old one
+// on the next unrelated Save (e.g. editing a remark), re-diverging Total Sqm
+// from what the exhibitor's billing and other reports actually reconciled
+// to. Found live: this is what happened to two MIFB27 contracts after a
+// booth was lost/removed post-approval.
+const SALES_ORDER_FIELDS = ['contract_type', 'contract_date', 'currency', 'exchange_rate', 'dimension', 'booking_type', 'remarks', 'credit_terms_id', 'bill_to_type'];
 
 async function updateSalesOrder(req, res) {
   const fields = {};

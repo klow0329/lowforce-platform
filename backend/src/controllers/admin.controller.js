@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { pool } = require('../config/db');
 const { hashPassword } = require('../utils/password');
 
@@ -6,7 +7,7 @@ const { hashPassword } = require('../utils/password');
 // ---------------------------------------------------------------------------
 async function listUsers(req, res) {
   const result = await pool.query(
-    `SELECT u.id, u.email, u.full_name, u.is_active, u.role_id, r.code AS role_code, r.name AS role_name,
+    `SELECT u.id, u.email, u.full_name, u.is_active, u.role_id, u.access_level_override, r.code AS role_code, r.name AS role_name,
             COALESCE(
               (SELECT array_agg(uea.event_id) FROM user_event_access uea
                WHERE uea.user_id = u.id AND uea.is_active = TRUE),
@@ -150,6 +151,11 @@ async function updateUser(req, res) {
   for (const field of ['full_name', 'role_id', 'is_active']) {
     if (field in req.body) fields[field] = req.body[field];
   }
+  // '' from the "Default" option means "no override" — store as NULL so it
+  // falls back to the Department matrix, not an empty-string CHECK violation.
+  if ('access_level_override' in req.body) {
+    fields.access_level_override = req.body.access_level_override || null;
+  }
   const columns = Object.keys(fields);
 
   if (columns.length === 0) {
@@ -208,12 +214,163 @@ async function resetPassword(req, res) {
   res.json({ success: true });
 }
 
+// Bulk-create users from Admin > Data Import > Users. Add-only by design —
+// an email that already exists is skipped, never silently reset (a wrong
+// bulk-uploaded row could otherwise lock someone out of their own account).
+// Every created user gets a freshly generated temp password (no third-party
+// invite-link auth exists — standing rule #4, custom-built auth only); the
+// response returns each one in plain text so the Admin doing the import can
+// either hand it out directly ("temp_password" mode) or copy the drafted
+// USER_INVITE email template with it filled in ("email_invite" mode) — both
+// modes create the account identically, the mode only changes what the
+// frontend shows the Admin afterwards.
+function generateTempPassword() {
+  return crypto.randomBytes(6).toString('base64').replace(/[+/=]/g, '').slice(0, 10) + '!1';
+}
+
+async function importUsers(req, res) {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No rows to import.' });
+
+  const roleResult = await pool.query(`SELECT id, code FROM roles WHERE company_id = $1`, [req.companyId]);
+  const roleIdByCode = new Map(roleResult.rows.map((r) => [r.code.toUpperCase(), r.id]));
+
+  const createdUsers = [];
+  const skipped = [];
+
+  for (const row of rows) {
+    const email = (row.email || '').toString().trim().toLowerCase();
+    const fullName = (row.full_name || '').toString().trim();
+    const roleCode = (row.role_code || '').toString().trim().toUpperCase();
+    if (!email || !fullName || !roleCode) {
+      skipped.push({ email: email || '(blank)', reason: 'Missing email, full name, or role code.' });
+      continue;
+    }
+    const roleId = roleIdByCode.get(roleCode);
+    if (!roleId) {
+      skipped.push({ email, reason: `Unknown role code "${roleCode}".` });
+      continue;
+    }
+    const existing = await pool.query(
+      `SELECT 1 FROM users WHERE company_id = $1 AND LOWER(email) = LOWER($2)`,
+      [req.companyId, email]
+    );
+    if (existing.rows[0]) {
+      skipped.push({ email, reason: 'A user with that email already exists — not overwritten.' });
+      continue;
+    }
+
+    const tempPassword = generateTempPassword();
+    const passwordHash = await hashPassword(tempPassword);
+    const result = await pool.query(
+      `INSERT INTO users (company_id, role_id, email, password_hash, full_name)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [req.companyId, roleId, email, passwordHash, fullName]
+    );
+    await pool.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, [result.rows[0].id, roleId]);
+    createdUsers.push({ id: result.rows[0].id, email, full_name: fullName, role_code: roleCode, temp_password: tempPassword });
+  }
+
+  res.json({ success: true, created: createdUsers.length, createdUsers, skipped, rowsProcessed: rows.length });
+}
+
 async function listRoles(req, res) {
   const result = await pool.query(
-    `SELECT id, code, name FROM roles WHERE company_id = $1 ORDER BY sort_order`,
+    `SELECT id, code, name, permissions FROM roles WHERE company_id = $1 ORDER BY sort_order`,
     [req.companyId]
   );
   res.json({ roles: result.rows });
+}
+
+// Company-defined departments/roles (standing rule #2 — not a fixed list).
+// A brand-new role starts with NO module permissions set at all
+// ({}), which the requireModulePermission middleware treats as
+// "not managed by the new system" and falls through to whatever a route's
+// own existing checks decide — same baseline access as any other
+// non-elevated role until the admin explicitly grants module permissions
+// below. code is a short stable identifier (matches req.roleCode from the
+// session) and can't collide with an existing role in this company.
+const MODULE_NAMES = ['exhibitors', 'opportunities', 'contracts', 'invoices'];
+const PERMISSION_LEVELS = ['view', 'add', 'edit'];
+
+function validatePermissions(permissions) {
+  if (permissions == null) return {};
+  if (typeof permissions !== 'object' || Array.isArray(permissions)) {
+    throw Object.assign(new Error('permissions must be an object.'), { status: 400 });
+  }
+  const out = {};
+  for (const [key, value] of Object.entries(permissions)) {
+    if (!MODULE_NAMES.includes(key)) {
+      throw Object.assign(new Error(`Unknown module "${key}".`), { status: 400 });
+    }
+    if (value !== null && !PERMISSION_LEVELS.includes(value)) {
+      throw Object.assign(new Error(`Invalid permission level "${value}" for ${key}.`), { status: 400 });
+    }
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
+async function createRole(req, res) {
+  const { code, name, permissions } = req.body;
+  if (!code || !name) return res.status(400).json({ error: 'code and name are required.' });
+  const normalizedCode = code.trim().toUpperCase().replace(/\s+/g, '_');
+
+  let validatedPermissions;
+  try {
+    validatedPermissions = validatePermissions(permissions);
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message });
+  }
+
+  const existing = await pool.query(`SELECT 1 FROM roles WHERE company_id = $1 AND code = $2`, [req.companyId, normalizedCode]);
+  if (existing.rows[0]) return res.status(409).json({ error: `A role with code "${normalizedCode}" already exists.` });
+
+  const sortResult = await pool.query(`SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM roles WHERE company_id = $1`, [req.companyId]);
+  const result = await pool.query(
+    `INSERT INTO roles (company_id, code, name, permissions, sort_order) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [req.companyId, normalizedCode, name.trim(), JSON.stringify(validatedPermissions), sortResult.rows[0].next]
+  );
+  res.status(201).json({ role: { id: result.rows[0].id } });
+}
+
+async function updateRole(req, res) {
+  const fields = {};
+  if ('name' in req.body) fields.name = req.body.name;
+  if ('permissions' in req.body) {
+    try {
+      fields.permissions = JSON.stringify(validatePermissions(req.body.permissions));
+    } catch (err) {
+      return res.status(err.status || 400).json({ error: err.message });
+    }
+  }
+  const cols = Object.keys(fields);
+  if (cols.length === 0) return res.json({ role: { id: req.params.id } });
+
+  const setClause = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
+  const result = await pool.query(
+    `UPDATE roles SET ${setClause} WHERE id = $1 AND company_id = $2 RETURNING id`,
+    [req.params.id, req.companyId, ...cols.map((c) => fields[c])]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: 'Role not found.' });
+  res.json({ role: { id: req.params.id } });
+}
+
+// Roles in active use (any user currently assigned it, via either the
+// primary role_id or the switchable user_roles set) can't be deleted out
+// from under them — reassign those users first.
+async function deleteRole(req, res) {
+  const inUse = await pool.query(
+    `SELECT 1 FROM users WHERE company_id = $1 AND role_id = $2
+     UNION SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE r.company_id = $1 AND ur.role_id = $2`,
+    [req.companyId, req.params.id]
+  );
+  if (inUse.rows[0]) {
+    return res.status(400).json({ error: 'This role is still assigned to at least one user — reassign them first.' });
+  }
+  const result = await pool.query(`DELETE FROM roles WHERE id = $1 AND company_id = $2 RETURNING id`, [req.params.id, req.companyId]);
+  if (!result.rows[0]) return res.status(404).json({ error: 'Role not found.' });
+  res.json({ success: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +447,7 @@ async function updateEvent(req, res) {
 }
 
 module.exports = {
-  listUsers, createUser, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
+  listUsers, createUser, importUsers, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
+  createRole, updateRole, deleteRole, MODULE_NAMES, PERMISSION_LEVELS,
   listEvents, createEvent, updateEvent,
 };

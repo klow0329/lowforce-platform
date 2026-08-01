@@ -94,7 +94,7 @@ async function acknowledgePaymentProof(req, res) {
 async function downloadAttachment(req, res) {
   const vis = financeVisibilityClause(req, 'so.salesperson_id', 3);
   const result = await pool.query(
-    `SELECT a.original_filename, a.stored_filename, a.mime_type
+    `SELECT a.original_filename, a.stored_filename, a.mime_type, inv.invoice_no
      FROM invoice_attachments a
      JOIN invoices inv ON inv.id = a.invoice_id
      JOIN sales_orders so ON so.id = inv.sales_order_id
@@ -112,7 +112,11 @@ async function downloadAttachment(req, res) {
     return res.status(404).json({ error: 'File is missing from storage.' });
   }
 
-  res.download(filePath, attachment.original_filename);
+  // Prefixed with the invoice number for the same reason as
+  // creditNoteAttachments.controller.js's downloadAttachment — a downloaded
+  // file should be identifiable on its own once it's outside the app.
+  const downloadName = attachment.invoice_no ? `${attachment.invoice_no} - ${attachment.original_filename}` : attachment.original_filename;
+  res.download(filePath, downloadName);
 }
 
 async function deleteAttachment(req, res) {

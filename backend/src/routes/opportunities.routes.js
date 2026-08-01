@@ -3,6 +3,7 @@ const router = express.Router();
 const { attachTenant } = require('../middleware/tenant');
 const { requireEventAccess } = require('../middleware/eventAccess');
 const { blockManagementWrites } = require('../middleware/blockManagementWrites');
+const { requireModulePermission } = require('../middleware/modulePermission');
 const { asyncHandler } = require('../utils/asyncHandler');
 const {
   listOpportunities,
@@ -24,9 +25,9 @@ router.use(requireEventAccess); // and can't touch an event the user hasn't been
 
 router.get('/summary', asyncHandler(getOpportunitySummary)); // before /:id so "summary" isn't read as an id
 router.get('/', asyncHandler(listOpportunities));
-router.post('/', blockManagementWrites, asyncHandler(createOpportunity));
+router.post('/', blockManagementWrites, requireModulePermission('opportunities', 'add'), asyncHandler(createOpportunity));
 router.get('/:id', asyncHandler(getOpportunity));
-router.put('/:id', blockManagementWrites, asyncHandler(updateOpportunity));
+router.put('/:id', blockManagementWrites, requireModulePermission('opportunities', 'edit'), asyncHandler(updateOpportunity));
 
 router.get('/:id/items', asyncHandler(listItems));
 router.post('/:id/items', blockManagementWrites, asyncHandler(addItem));

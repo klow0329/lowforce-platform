@@ -39,7 +39,9 @@ export default function CreditNoteDetail({ user }) {
       setCn(creditNote);
       setLoading(false);
     });
-    api.listCreditNoteAttachments(id).then(({ attachments }) => setAttachments(attachments));
+    api.listCreditNoteAttachments(id)
+      .then(({ attachments }) => setAttachments(attachments))
+      .catch((err) => setError(err.message));
   }
 
   useEffect(() => {

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { attachTenant } = require('../middleware/tenant');
 const { requireEventAccess } = require('../middleware/eventAccess');
+const { requireModulePermission } = require('../middleware/modulePermission');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { listInvoices, getInvoice, generateDraftInvoices, issueScheduledInvoice, updateInvoice, withdrawInvoice, acknowledgeConfirm } = require('../controllers/invoices.controller');
 const {
@@ -12,12 +13,12 @@ router.use(attachTenant);
 router.use(requireEventAccess);
 
 router.get('/', asyncHandler(listInvoices));
-router.post('/generate-draft', asyncHandler(generateDraftInvoices));
+router.post('/generate-draft', requireModulePermission('invoices', 'add'), asyncHandler(generateDraftInvoices));
 router.get('/:id', asyncHandler(getInvoice));
-router.put('/:id', asyncHandler(updateInvoice));
+router.put('/:id', requireModulePermission('invoices', 'edit'), asyncHandler(updateInvoice));
 router.delete('/:id', asyncHandler(withdrawInvoice));
 router.post('/:id/acknowledge', asyncHandler(acknowledgeConfirm));
-router.post('/:id/issue', asyncHandler(issueScheduledInvoice));
+router.post('/:id/issue', requireModulePermission('invoices', 'add'), asyncHandler(issueScheduledInvoice));
 
 router.get('/:id/attachments', asyncHandler(listAttachments));
 router.post('/:id/attachments', upload.single('file'), asyncHandler(uploadAttachment));

@@ -1,13 +1,26 @@
 const { pool } = require('../config/db');
 
-// Resolves one credit_term_line into an actual calendar date for a specific
-// contract's signing date — shared by the scheduled-invoice pre-fill and
-// (in principle) anything else that needs "when is this installment due".
-function resolveLineDueDate(line, signingDate) {
+// Resolves one credit_term_line into an actual calendar date — shared by the
+// scheduled-invoice pre-fill and (in principle) anything else that needs
+// "when is this installment due". *_AFTER_SIGNING resolves against the
+// contract's own contract_date; *_BEFORE_EVENT resolves against the event's
+// start_date instead, so the same named Credit Term (e.g. "50% due 3 months
+// before event") carries over correctly from one event cycle to the next
+// without Sales having to re-type a fixed date each time (2026-08-01 user
+// request).
+function resolveLineDueDate(line, signingDate, eventStartDate) {
   if (line.basis_type === 'FIXED_DATE') return line.basis_date;
+  const n = Number(line.basis_value) || 0;
+  if (line.basis_type.endsWith('_BEFORE_EVENT')) {
+    if (!eventStartDate) return null;
+    const d = new Date(eventStartDate);
+    if (line.basis_type === 'DAYS_BEFORE_EVENT') d.setDate(d.getDate() - n);
+    else if (line.basis_type === 'WEEKS_BEFORE_EVENT') d.setDate(d.getDate() - n * 7);
+    else if (line.basis_type === 'MONTHS_BEFORE_EVENT') d.setMonth(d.getMonth() - n);
+    return d.toISOString().slice(0, 10);
+  }
   if (!signingDate) return null;
   const d = new Date(signingDate);
-  const n = Number(line.basis_value) || 0;
   if (line.basis_type === 'DAYS_AFTER_SIGNING') d.setDate(d.getDate() + n);
   else if (line.basis_type === 'WEEKS_AFTER_SIGNING') d.setDate(d.getDate() + n * 7);
   else if (line.basis_type === 'MONTHS_AFTER_SIGNING') d.setMonth(d.getMonth() + n);
@@ -145,8 +158,9 @@ async function deleteCreditTerm(req, res) {
 // contract_date as the "signing date" anchor.
 async function resolveCreditTermForContract(req, res) {
   const so = await pool.query(
-    `SELECT so.credit_terms_id, so.contract_date
-     FROM sales_orders so WHERE so.id = $1 AND so.company_id = $2`,
+    `SELECT so.credit_terms_id, so.contract_date, ev.start_date AS event_start_date
+     FROM sales_orders so JOIN events ev ON ev.id = so.event_id
+     WHERE so.id = $1 AND so.company_id = $2`,
     [req.params.salesOrderId, req.companyId]
   );
   if (!so.rows[0]) return res.status(404).json({ error: 'Contract not found.' });
@@ -159,7 +173,7 @@ async function resolveCreditTermForContract(req, res) {
   );
   const splits = lines.rows.map((l) => ({
     pct: Number(l.pct),
-    expected_billing_date: resolveLineDueDate(l, so.rows[0].contract_date) || '',
+    expected_billing_date: resolveLineDueDate(l, so.rows[0].contract_date, so.rows[0].event_start_date) || '',
   }));
   res.json({ splits });
 }

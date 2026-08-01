@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadPdf } from '../utils/pdf';
-import { fitBoothName, BOOTH_NUMBER_FS } from '../utils/boothLabelFit';
+import { fitBoothName, fitUniformBoothNumberSize, truncateBoothName } from '../utils/boothLabelFit';
 
 // Fully opaque — see FloorPlan.jsx's STATUS_COLORS comment: any transparency
 // here lets the hall background image's own printed booth number (common on
@@ -63,6 +63,17 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
   // below) — used to size booth labels and the eraser hit radius in real
   // pixels regardless of the image's resolution.
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+
+  // One fixed booth-number size for the whole hall — see FloorPlan.jsx's
+  // identical comment on fitUniformBoothNumberSize.
+  const uniformNumFs = useMemo(() => {
+    if (imgSize.w <= 0) return 9;
+    return fitUniformBoothNumberSize(booths.map((b) => ({
+      boothNo: b.booth_no,
+      boxW: safe((Number(b.width_pct) / 100) * imgSize.w, 40),
+      boxH: safe((Number(b.height_pct) / 100) * imgSize.h, 40),
+    })));
+  }, [booths, imgSize]);
 
   useEffect(() => {
     const el = imgRef.current;
@@ -250,22 +261,33 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
       // empty margin whenever the hall's own proportions didn't match A1)
       // so the exported floor plan fills the sheet and can be zoomed into
       // for audit purposes without the booth labels turning to mush.
-      // longEdge (not a precomputed format) lets downloadPdf size the page
-      // from the actual captured raster's own aspect ratio — measuring
-      // offsetWidth/offsetHeight here ahead of time was timing-sensitive
-      // (could read 0 before layout/paint caught up) and silently fell back
-      // to a generic near-square page shape unrelated to the real content,
-      // which is what was leaving the map stranded in a corner.
+      //
+      // The page format is computed HERE, upfront, from imgSize (already
+      // reliably tracked via the map image's own onLoad/ResizeObserver) —
+      // not via html2pdf's post-capture recompute-and-reset-pageSize path (a
+      // longEdge option once threaded through to pdf.js): that path
+      // re-derives the page format from the captured canvas AFTER
+      // toContainer() has already run once using whatever pageSize was
+      // cached from the Worker's construction-time default ('a4'), sizing
+      // the actual html2canvas capture container to A4's width regardless
+      // of what the recomputed format said afterwards — which is what was
+      // leaving the real map rendered small in a corner of an unrelated
+      // page shape. Passing the correct format from the very first call
+      // sidesteps that caching order entirely — see FloorPlan.jsx's
+      // matching export.
       // A0 at scale 4 only rasterized at ~89 DPI — a PDF viewer's "zoom in"
       // just magnifies whatever pixels are actually embedded, so a huge
       // physical page with a modest pixel count is what was making zoomed-in
       // text/labels look soft, not the mm page size itself. A1's long edge
       // with a much higher scale roughly triples the embedded pixel count
       // (and lands at ~250 DPI, sharp for physical printing too) without an
-      // unreasonably large canvas — see FloorPlan.jsx's matching export.
+      // unreasonably large canvas.
+      const aspect = imgSize.w > 0 && imgSize.h > 0 ? imgSize.w / imgSize.h : 1;
+      const longEdgeMm = 841;
+      const format = aspect >= 1 ? [longEdgeMm, longEdgeMm / aspect] : [longEdgeMm * aspect, longEdgeMm];
       await downloadPdf(
         'floor-plan-presentation-capture', `${hallName}-presentation-${new Date().toISOString().slice(0, 10)}`, 'landscape',
-        { scale: 8, longEdge: 841, margin: 0 }
+        { scale: 8, format, margin: 0, width: imgSize.w, height: imgSize.h }
       );
     } finally {
       if (priorZoom !== 1) setZoom(priorZoom);
@@ -386,11 +408,33 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
               the moment it's bigger — the same reason this is the standard
               fix for "centered flex item with overflow". */}
           <div style={{ margin: 'auto', width: imgSize.w ? imgSize.w * zoom : undefined, height: imgSize.h ? imgSize.h * zoom : undefined }}>
+          {/* transform lives on its OWN wrapper, sized to fit-content — not
+              on the capture div itself. A plain block element with no
+              declared width stretches to 100% of its containing block (the
+              zoomed spacer above), so if the transform and the capture div
+              were the same element, its own box would already be
+              imgSize.w * zoom wide BEFORE the CSS transform ran, and
+              transform: scale(zoom) would then scale that already-zoomed
+              box again — a zoom^2 growth for the box (and everything
+              percentage-positioned against it, i.e. every booth) while the
+              <img> itself (fixed intrinsic size, unaffected by the block
+              stretch) only ever grows by zoom^1. That mismatch is exactly
+              what showed up as booths drifting right/down further the
+              higher the zoom went. width: 'fit-content' here keeps this
+              wrapper sized to its own (unscaled) content no matter how wide
+              its parent is, so scale(zoom) is the only place zoom is ever
+              applied — matching FloorPlan.jsx's (bug-free) normal-view
+              structure, which already keeps its transform wrapper and
+              capture div separate for the same reason. */}
+          <div style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: 'fit-content' }}>
           {/* This inner div — not the outer scrollable viewport — is what
               gets captured for PDF export, so the raster is tightly cropped
               to the actual map content instead of the whole (much larger,
-              mostly empty) scroll container. */}
-          <div id="floor-plan-presentation-capture" style={{ position: 'relative', transform: `scale(${zoom})`, transformOrigin: '0 0' }}>
+              mostly empty) scroll container. display: inline-block for the
+              same reason as the wrapper above — must not stretch to its
+              parent's width, since the booth/text/SVG overlays are all
+              percentage-positioned against THIS box. */}
+          <div id="floor-plan-presentation-capture" style={{ position: 'relative', display: 'inline-block' }}>
             <img
               ref={imgRef}
               src={imageUrl}
@@ -403,8 +447,10 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
               const name = (b.opportunity_id || b.sales_order_id) ? (b.fascia_name || b.exhibitor_display_name || '') : '';
               const boxW = safe((Number(b.width_pct) / 100) * imgSize.w, 40);
               const boxH = safe((Number(b.height_pct) / 100) * imgSize.h, boxW);
-              const numFs = BOOTH_NUMBER_FS;
-              const nameFs = safe(fitBoothName(name, boxW, Math.max(0, boxH - numFs * 1.15 - 2)), 6);
+              const numFs = uniformNumFs;
+              const nameAvailH = Math.max(0, boxH - numFs * 1.15 - 3);
+              const nameFs = safe(fitBoothName(name, boxW, nameAvailH), 6);
+              const displayName = truncateBoothName(name, nameFs, boxW, nameAvailH);
               return (
                 <div
                   key={b.id}
@@ -414,12 +460,14 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
                     background: STATUS_COLORS[b.computed_status] || STATUS_COLORS.AVAILABLE,
                     border: `1px solid ${STATUS_BORDER[b.computed_status] || STATUS_BORDER.AVAILABLE}`,
                     boxSizing: 'border-box', overflow: 'hidden',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    // flex-start pins the booth number to the top of every
+                    // box — see FloorPlan.jsx's identical change for why.
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
                     textAlign: 'center', pointerEvents: 'none', lineHeight: 1.05, color: '#1B3A6B',
                   }}
                 >
                   <div style={{ fontWeight: 700, fontSize: numFs }}>{b.booth_no}</div>
-                  {name && <div style={{ fontSize: nameFs, whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'break-word', maxWidth: '100%' }}>{name}</div>}
+                  {displayName && <div style={{ fontSize: nameFs, whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'break-word', maxWidth: '100%' }}>{displayName}</div>}
                 </div>
               );
             })}
@@ -485,6 +533,7 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
                 </div>
               ))}
             </div>
+          </div>
           </div>
           </div>
         </div>

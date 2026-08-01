@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
-import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
+import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmtMYR = (n) => `RM ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -54,7 +54,12 @@ export default function ContractPrint() {
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <button type="button" onClick={() => navigate(`/sales-orders/${id}`)}>Back</button>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => downloadPdf('pdf-doc', `contract-${salesOrder.legacy_order_no || id.slice(0, 8)}`)}>
+          <button
+            type="button"
+            onClick={() => downloadPdf('pdf-doc', `contract-${salesOrder.legacy_order_no || id.slice(0, 8)}`, 'portrait', {
+              appendPdfUrl: company.has_contract_terms_pdf ? api.brandingImageUrl('contract_terms_pdf') : undefined,
+            })}
+          >
             Download PDF
           </button>
           <button type="button" onClick={() => window.print()}>Print</button>
@@ -64,9 +69,10 @@ export default function ContractPrint() {
       <div id="pdf-doc">
       <LetterheadBand company={company} />
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
+        <EventBrandLogo company={company} height={48} style={{ margin: '0 auto 8px' }} />
         <BrandLogo company={company} height={48} style={{ margin: '0 auto 8px' }} />
         <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
-        <div style={{ fontSize: 14, color: '#5c6070' }}>{salesOrder.event_name}</div>
+        <div style={{ fontSize: 14, color: '#5c6070' }}>{company.event_name || salesOrder.event_name}</div>
         <h2 style={{ marginTop: 16, marginBottom: 0 }}>{docTitle}</h2>
         {isCoex && (
           <p style={{ fontSize: 12, color: '#5c6070' }}>
@@ -133,7 +139,7 @@ export default function ContractPrint() {
         </div>
       </div>
 
-      {company.contract_terms && (
+      {company.contract_terms && !company.has_contract_terms_pdf && (
         <div style={{ pageBreakBefore: 'always', marginTop: 32 }}>
           <h4>Terms &amp; Conditions</h4>
           <div style={{ fontSize: 12, whiteSpace: 'pre-line', color: '#333' }}>{company.contract_terms}</div>

@@ -13,8 +13,16 @@ const { pool } = require('../config/db');
 // original name never trusted as a path, gitignored uploads dir.
 const BRANDING_DIR = path.join(__dirname, '..', '..', 'uploads', 'branding');
 fs.mkdirSync(BRANDING_DIR, { recursive: true });
-const BRANDING_TYPES = ['logo', 'letterhead', 'footer'];
-const BRANDING_COLUMN = { logo: 'logo_filename', letterhead: 'letterhead_filename', footer: 'footer_filename' };
+const BRANDING_TYPES = ['logo', 'letterhead', 'footer', 'event_logo', 'contract_terms_pdf'];
+const BRANDING_COLUMN = {
+  logo: 'logo_filename', letterhead: 'letterhead_filename', footer: 'footer_filename', event_logo: 'event_logo_filename',
+  // Not an image — the company's own formatted Terms & Conditions PDF,
+  // auto-appended as trailing pages onto the generated Contract PDF (see
+  // frontend/src/utils/pdf.js's appendPdf) instead of re-typing it into the
+  // plain-text contract_terms field every time.
+  contract_terms_pdf: 'contract_terms_pdf_filename',
+};
+const PDF_BRANDING_TYPES = ['contract_terms_pdf'];
 
 const brandingStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, BRANDING_DIR),
@@ -22,9 +30,14 @@ const brandingStorage = multer.diskStorage({
 });
 const uploadBranding = multer({
   storage: brandingStorage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (!/^image\//.test(file.mimetype)) return cb(new Error('Only image files (PNG/JPG) are accepted.'));
+    const isPdfType = PDF_BRANDING_TYPES.includes(req.params.type);
+    if (isPdfType) {
+      if (file.mimetype !== 'application/pdf') return cb(new Error('Only a PDF file is accepted here.'));
+    } else if (!/^image\//.test(file.mimetype)) {
+      return cb(new Error('Only image files (PNG/JPG) are accepted.'));
+    }
     cb(null, true);
   },
 });
@@ -134,9 +147,14 @@ async function updateTaxCode(req, res) {
 // read-only, active-only feed used by that dropdown — this is the Admin
 // management side, which also needs to see deactivated agents)
 // ---------------------------------------------------------------------------
+// comm_rate is NOT editable here — the old single flat rate has been
+// superseded entirely by the open per-item-code/tier rate table below
+// (agent_commission_rates) plus threshold bonus tiers
+// (agent_commission_bonus_tiers), so a company isn't stuck with one number
+// for every kind of revenue.
 const AGENT_FIELDS = [
   'name', 'name_alt', 'country_code', 'address', 'postcode', 'city', 'state',
-  'salesperson_id', 'reg_no', 'tin_no', 'sst_no', 'website', 'fax', 'comm_rate', 'is_active',
+  'salesperson_id', 'reg_no', 'tin_no', 'sst_no', 'website', 'fax', 'is_active',
 ];
 
 async function listAgentsAdmin(req, res) {
@@ -199,29 +217,95 @@ async function updateAgent(req, res) {
   res.json({ agent: { id: req.params.id } });
 }
 
+// Bulk add/update — matched by UPPER(TRIM(name)) since agents has no unique
+// code column (unlike Expense Codes/Segments). Never deletes; a name that
+// already exists gets its other fields updated, a new name gets created.
+// See Admin > Data Import > Agents.
+async function importAgents(req, res) {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No rows to import.' });
+
+  let created = 0;
+  let updated = 0;
+  const skipped = [];
+
+  for (const row of rows) {
+    const name = (row.name || '').toString().trim().toUpperCase();
+    if (!name) continue;
+
+    let salespersonId = null;
+    const salespersonEmail = (row.salesperson_email || '').toString().trim();
+    if (salespersonEmail) {
+      const u = await pool.query(
+        `SELECT id FROM users WHERE company_id = $1 AND LOWER(email) = LOWER($2)`,
+        [req.companyId, salespersonEmail]
+      );
+      if (u.rows[0]) salespersonId = u.rows[0].id;
+      else skipped.push(`${name}: salesperson email "${salespersonEmail}" not found (agent still saved, unassigned)`);
+    }
+
+    const fields = {
+      name_alt: row.name_alt || null, country_code: row.country_code || null,
+      address: row.address || null, postcode: row.postcode || null, city: row.city || null, state: row.state || null,
+      reg_no: row.reg_no || null, tin_no: row.tin_no || null, sst_no: row.sst_no || null,
+      website: row.website || null, fax: row.fax || null,
+    };
+    if (salespersonId) fields.salesperson_id = salespersonId;
+
+    const existing = await pool.query(
+      `SELECT id FROM agents WHERE company_id = $1 AND UPPER(TRIM(name)) = $2`,
+      [req.companyId, name]
+    );
+    const cols = Object.keys(fields);
+    if (existing.rows[0]) {
+      if (cols.length > 0) {
+        const setClause = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
+        await pool.query(
+          `UPDATE agents SET ${setClause} WHERE id = $1 AND company_id = $2`,
+          [existing.rows[0].id, req.companyId, ...cols.map((c) => fields[c])]
+        );
+      }
+      updated += 1;
+    } else {
+      await pool.query(
+        `INSERT INTO agents (company_id, name, ${cols.join(', ')}) VALUES ($1, $2, ${cols.map((_, i) => `$${i + 3}`).join(', ')})`,
+        [req.companyId, name, ...cols.map((c) => fields[c])]
+      );
+      created += 1;
+    }
+  }
+
+  res.json({ success: true, created, updated, rowsProcessed: rows.length, skipped });
+}
+
 // ---------------------------------------------------------------------------
-// Agent commission rates — an open table per agent (category x exhibitor
-// tier -> rate %) rather than a couple of fixed columns, per the user's own
-// requirement that a company can add more rows later (a different rate on
-// non-booth items, or a further tier beyond repeat/new). category matches
-// sales_order_items.category ('BOOTH'/'OTHER'); exhibitor_tier is
-// 'REPEAT'/'NEW' today but stored as free text so a future tier doesn't
-// need a schema change. See performance.controller.js's getAgentCommission
-// for how these are actually applied against real invoiced amounts.
+// Agent commission rates — an open table per agent (item code x exhibitor
+// tier -> rate %) rather than a fixed grid, per the user's own requirement
+// that any Price List item (not just a broad Booth/Non-Booth split) can
+// carry its own rate, plus a company-wide 'ALL' catch-all for anything not
+// explicitly set. item_code is one of the standing template codes
+// (BAS/SSS/ESS/WOP/CUB/COR/LOD/MEP/SPO/BAD/OTH, see BillingTemplate.jsx's
+// FIXED_LABELS) or 'ALL'; exhibitor_tier is 'REPEAT'/'NEW' today but stored
+// as free text so a future tier doesn't need a schema change. See
+// performance.controller.js's getAgentCommission for how these are actually
+// applied against real invoiced amounts, and agent_commission_bonus_tiers
+// below for revenue/sqm threshold bonuses on top.
 // ---------------------------------------------------------------------------
+const COMMISSION_ITEM_CODES = ['ALL', 'BAS', 'SSS', 'ESS', 'WOP', 'CUB', 'COR', 'LOD', 'MEP', 'SPO', 'BAD', 'OTH'];
+
 async function listAgentCommissionRates(req, res) {
   const result = await pool.query(
-    `SELECT id, agent_id, category, exhibitor_tier, rate_pct
+    `SELECT id, agent_id, item_code, exhibitor_tier, rate_pct
      FROM agent_commission_rates WHERE company_id = $1 AND agent_id = $2
-     ORDER BY category, exhibitor_tier`,
+     ORDER BY item_code, exhibitor_tier`,
     [req.companyId, req.params.agentId]
   );
   res.json({ commissionRates: result.rows });
 }
 
 // Upserts the whole set for one agent in one go — the editor UI is a small
-// fixed grid (category x tier), so replacing it wholesale each save is
-// simpler and safer than diffing individual row edits.
+// free-form list, so replacing it wholesale each save is simpler and safer
+// than diffing individual row edits.
 async function saveAgentCommissionRates(req, res) {
   const rows = Array.isArray(req.body.rates) ? req.body.rates : [];
   const client = await pool.connect();
@@ -243,14 +327,74 @@ async function saveAgentCommissionRates(req, res) {
     }
     await client.query(`DELETE FROM agent_commission_rates WHERE agent_id = $1 AND company_id = $2`, [req.params.agentId, req.companyId]);
     for (const r of rows) {
-      const category = (r.category || '').toString().trim().toUpperCase();
+      const itemCode = (r.item_code || '').toString().trim().toUpperCase();
       const tier = (r.exhibitor_tier || '').toString().trim().toUpperCase();
       const rate = Number(r.rate_pct) || 0;
-      if (!category || !tier || rate <= 0) continue; // a blank/zero row just means "no rate set" — nothing to store
+      if (!itemCode || !tier || rate <= 0) continue; // a blank/zero row just means "no rate set" — nothing to store
+      if (!COMMISSION_ITEM_CODES.includes(itemCode)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Unknown item code "${itemCode}".` });
+      }
       await client.query(
-        `INSERT INTO agent_commission_rates (company_id, agent_id, category, exhibitor_tier, rate_pct)
+        `INSERT INTO agent_commission_rates (company_id, agent_id, item_code, exhibitor_tier, rate_pct)
          VALUES ($1, $2, $3, $4, $5)`,
-        [req.companyId, req.params.agentId, category, tier, rate]
+        [req.companyId, req.params.agentId, itemCode, tier, rate]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Threshold bonus tiers — an ADDITIONAL bonus % on top of the base rate
+// table above once an agent's total commission-eligible business for the
+// event crosses a revenue or sqm threshold, per the user's own request.
+// Compared/paid in MYR (see getAgentCommission) since a threshold has to be
+// a single comparable number even when the agent's underlying invoices are
+// in mixed currencies — unlike the base commission, which stays in each
+// invoice's own currency.
+async function listAgentCommissionBonusTiers(req, res) {
+  const result = await pool.query(
+    `SELECT id, agent_id, threshold_type, threshold_value, bonus_pct
+     FROM agent_commission_bonus_tiers WHERE company_id = $1 AND agent_id = $2
+     ORDER BY threshold_type, threshold_value`,
+    [req.companyId, req.params.agentId]
+  );
+  res.json({ bonusTiers: result.rows });
+}
+
+async function saveAgentCommissionBonusTiers(req, res) {
+  const rows = Array.isArray(req.body.bonusTiers) ? req.body.bonusTiers : [];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const agentCheck = await client.query(
+      `SELECT id, salesperson_id FROM agents WHERE id = $1 AND company_id = $2`,
+      [req.params.agentId, req.companyId]
+    );
+    if (!agentCheck.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Agent not found.' });
+    }
+    if (req.roleCode !== 'ADM' && agentCheck.rows[0].salesperson_id !== req.userId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: "Only Admin or this agent's assigned salesperson can edit its bonus tiers." });
+    }
+    await client.query(`DELETE FROM agent_commission_bonus_tiers WHERE agent_id = $1 AND company_id = $2`, [req.params.agentId, req.companyId]);
+    for (const r of rows) {
+      const thresholdType = (r.threshold_type || '').toString().trim().toUpperCase();
+      const thresholdValue = Number(r.threshold_value) || 0;
+      const bonusPct = Number(r.bonus_pct) || 0;
+      if (!['REVENUE_MYR', 'SQM'].includes(thresholdType) || thresholdValue <= 0 || bonusPct <= 0) continue;
+      await client.query(
+        `INSERT INTO agent_commission_bonus_tiers (company_id, agent_id, threshold_type, threshold_value, bonus_pct)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.companyId, req.params.agentId, thresholdType, thresholdValue, bonusPct]
       );
     }
     await client.query('COMMIT');
@@ -313,6 +457,36 @@ async function updateExpenseCode(req, res) {
   );
   if (!result.rows[0]) return res.status(404).json({ error: 'Expense code not found.' });
   res.json({ expenseCode: { id: req.params.id } });
+}
+
+// Bulk add/update by code (unique per company) — see Admin > Data Import > Expense Codes.
+async function importExpenseCodes(req, res) {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No rows to import.' });
+
+  let created = 0;
+  let updated = 0;
+  const errors = [];
+
+  for (const row of rows) {
+    const code = (row.code || '').toString().trim().toUpperCase();
+    const description = (row.description || '').toString().trim();
+    const type = (row.type || 'EXPENSE').toString().trim().toUpperCase();
+    if (!code || !description) continue;
+    if (!['EXPENSE', 'REVENUE'].includes(type)) {
+      errors.push(`${code}: type must be EXPENSE or REVENUE, got "${type}"`);
+      continue;
+    }
+    const result = await pool.query(
+      `INSERT INTO expense_codes (company_id, code, description, type) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (company_id, code) DO UPDATE SET description = EXCLUDED.description, type = EXCLUDED.type
+       RETURNING (xmax = 0) AS inserted`,
+      [req.companyId, code, description, type]
+    );
+    if (result.rows[0].inserted) created += 1; else updated += 1;
+  }
+
+  res.json({ success: true, created, updated, rowsProcessed: rows.length, errors });
 }
 
 // ---------------------------------------------------------------------------
@@ -473,26 +647,28 @@ async function importSegments(req, res) {
 const PROFILE_FIELDS = [
   'reg_no', 'tin_no', 'sst_no', 'address', 'phone', 'email',
   'bank_name', 'bank_account_no', 'bank_swift', 'payment_instructions',
-  'budget_preparer_user_id', 'budget_approver_user_id', 'lod_pct_of_bas', 'contract_terms',
+  'budget_preparer_user_id', 'budget_approver_user_id', 'contract_terms', 'event_name',
 ];
 
 async function getSettings(req, res) {
   const result = await pool.query(
     `SELECT cs.usd_to_myr_rate, cs.reg_no, cs.tin_no, cs.sst_no, cs.address, cs.phone, cs.email,
             cs.bank_name, cs.bank_account_no, cs.bank_swift, cs.payment_instructions,
-            cs.lod_pct_of_bas, cs.contract_terms,
+            cs.contract_terms, cs.event_name,
             cs.budget_preparer_user_id, cs.budget_approver_user_id,
             up.full_name AS budget_preparer_name, ua.full_name AS budget_approver_name,
             (cs.logo_filename IS NOT NULL) AS has_logo,
             (cs.letterhead_filename IS NOT NULL) AS has_letterhead,
-            (cs.footer_filename IS NOT NULL) AS has_footer
+            (cs.footer_filename IS NOT NULL) AS has_footer,
+            (cs.event_logo_filename IS NOT NULL) AS has_event_logo,
+            (cs.contract_terms_pdf_filename IS NOT NULL) AS has_contract_terms_pdf
      FROM company_settings cs
      LEFT JOIN users up ON up.id = cs.budget_preparer_user_id
      LEFT JOIN users ua ON ua.id = cs.budget_approver_user_id
      WHERE cs.company_id = $1`,
     [req.companyId]
   );
-  res.json({ settings: result.rows[0] || { usd_to_myr_rate: 4, lod_pct_of_bas: 15 } });
+  res.json({ settings: result.rows[0] || { usd_to_myr_rate: 4 } });
 }
 
 // usd_to_myr_rate is required (it's NOT NULL and always has a value); the
@@ -502,17 +678,11 @@ async function updateSettings(req, res) {
   if (usd_to_myr_rate !== undefined && Number(usd_to_myr_rate) <= 0) {
     return res.status(400).json({ error: 'usd_to_myr_rate must be a positive number.' });
   }
-  if (req.body.lod_pct_of_bas !== undefined && req.body.lod_pct_of_bas !== '' && Number(req.body.lod_pct_of_bas) < 0) {
-    return res.status(400).json({ error: 'lod_pct_of_bas cannot be negative.' });
-  }
 
   const profileFields = {};
   for (const f of PROFILE_FIELDS) {
     if (f in req.body) profileFields[f] = req.body[f] === '' ? null : req.body[f];
   }
-  // lod_pct_of_bas is NOT NULL (unlike the free-text profile fields above) —
-  // an empty field just means "use the default", not "clear it to null".
-  if (profileFields.lod_pct_of_bas === null) profileFields.lod_pct_of_bas = 15;
 
   const existing = await pool.query(`SELECT 1 FROM company_settings WHERE company_id = $1`, [req.companyId]);
   if (existing.rows.length === 0) {
@@ -538,9 +708,10 @@ async function updateSettings(req, res) {
 
 module.exports = {
   listTaxCodes, createTaxCode, updateTaxCode,
-  listExpenseCodes, createExpenseCode, updateExpenseCode,
-  listAgentsAdmin, createAgent, updateAgent,
+  listExpenseCodes, createExpenseCode, updateExpenseCode, importExpenseCodes,
+  listAgentsAdmin, createAgent, updateAgent, importAgents,
   listAgentCommissionRates, saveAgentCommissionRates,
+  listAgentCommissionBonusTiers, saveAgentCommissionBonusTiers,
   createSegmentMain, updateSegmentMain, deleteSegmentMain,
   createSegmentSub, updateSegmentSub, deleteSegmentSub, importSegments,
   getSettings, updateSettings,

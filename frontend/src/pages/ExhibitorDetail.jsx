@@ -36,6 +36,7 @@ const emptyForm = {
   contact2_phone: '',
   contact2_email: '',
   billing_same_as_company: true,
+  billing_exhibitor_id: '',
   billing_name: '',
   billing_address: '',
   billing_postcode: '',
@@ -101,6 +102,9 @@ export default function ExhibitorDetail({ user }) {
   const [taxLinkVars, setTaxLinkVars] = useState(null);
   const [opportunities, setOpportunities] = useState([]);
   const [statement, setStatement] = useState(null);
+  const [billingExhibitorName, setBillingExhibitorName] = useState('');
+  const [billingSearch, setBillingSearch] = useState('');
+  const [billingResults, setBillingResults] = useState([]);
 
   useEffect(() => {
     Promise.all([api.listCountries(), api.listAgents(), api.listSalespeople(), api.listSegments()]).then(
@@ -122,11 +126,31 @@ export default function ExhibitorDetail({ user }) {
       }
       setForm(loaded);
       setOriginal(loaded);
+      setBillingExhibitorName(exhibitor.billing_exhibitor_name || '');
       setLoading(false);
     });
     api.listOpportunities({ exhibitor_id: id }).then(({ opportunities }) => setOpportunities(opportunities));
     loadStatement();
   }, [id, isNew]);
+
+  // Debounced search against the same exhibitor-lookup endpoint the
+  // duplicate-detection typeahead uses elsewhere — lets Admin pick another
+  // exhibitor as the bill-to party instead of retyping its details, with no
+  // separate "Billing Company" table (per the user's own instruction).
+  useEffect(() => {
+    if (!billingSearch) { setBillingResults([]); return; }
+    const t = setTimeout(() => {
+      api.listExhibitors(billingSearch).then(({ exhibitors }) => setBillingResults(exhibitors.filter((e) => e.id !== id)));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [billingSearch, id]);
+
+  function selectBillingExhibitor(ex) {
+    set('billing_exhibitor_id', ex.id);
+    setBillingExhibitorName(ex.company_name);
+    setBillingSearch('');
+    setBillingResults([]);
+  }
 
   function loadStatement() {
     if (isNew) return;
@@ -212,6 +236,12 @@ export default function ExhibitorDetail({ user }) {
       billing_email: same ? form.contact1_email : form.billing_email,
       segments: form.segments.filter((s) => s.segment_main_id),
     };
+
+    if (!same && !form.billing_exhibitor_id && !form.billing_name) {
+      setError('Search and select a Billing Company under Billing before saving — or switch it to "Same as Exhibitor Info".');
+      setSaving(false);
+      return;
+    }
 
     const normalized = normalizeExhibitorPayload(payload);
     for (const field of EMAIL_FIELDS) {
@@ -374,18 +404,6 @@ export default function ExhibitorDetail({ user }) {
             {' '}<strong>Halal Certified</strong>
           </label>
 
-          <label style={{ ...label, fontWeight: 400 }}>
-            <input
-              type="checkbox"
-              checked={form.is_repeat_exhibitor}
-              onChange={(e) => set('is_repeat_exhibitor', e.target.checked)}
-            />
-            {' '}<strong>Repeat Exhibitor (exhibited last year)</strong>
-            <span style={{ display: 'block', fontSize: 12, color: '#5c6070', fontWeight: 400, marginLeft: 20 }}>
-              Set automatically by importing last year's exhibitor list (Admin) — correct it here if the match missed
-              a renamed company. Drives this exhibitor's Agent Commission rate.
-            </span>
-          </label>
         </div>
 
         <div style={section}>
@@ -411,62 +429,83 @@ export default function ExhibitorDetail({ user }) {
 
         <div style={section}>
           <h3>Billing</h3>
-          <label>
-            <input
-              type="checkbox"
-              checked={form.billing_same_as_company}
-              onChange={(e) => set('billing_same_as_company', e.target.checked)}
-            />
-            {' '}Same as Exhibitor Info
-          </label>
+          {(() => {
+            // Only two real modes now — billing_same_as_company alone tells
+            // them apart cleanly. Manual free-text billing entry is
+            // discontinued (per the standing rule that billing info always
+            // lives on a real Exhibitor record, never a one-off text blob):
+            // when this used to be a 3-way choice inferred from 2 fields
+            // (billing_same_as_company + billing_exhibitor_id), "Select
+            // Billing Company" and "Enter Manually" were indistinguishable
+            // the moment same=false and no exhibitor had been picked yet —
+            // billing_exhibitor_id is '' in BOTH cases before a selection is
+            // made, so the derived mode silently fell back to "Enter
+            // Manually" every time, making the exhibitor-picker unreachable.
+            const billingMode = form.billing_same_as_company ? 'SAME' : 'EXHIBITOR';
+            function chooseMode(mode) {
+              if (mode === 'SAME') {
+                setForm((f) => ({ ...f, billing_same_as_company: true, billing_exhibitor_id: '' }));
+              } else {
+                setForm((f) => ({ ...f, billing_same_as_company: false }));
+              }
+            }
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+                <label>
+                  <input type="radio" checked={billingMode === 'SAME'} onChange={() => chooseMode('SAME')} />
+                  {' '}Same as Exhibitor Info
+                </label>
+                <label>
+                  <input type="radio" checked={billingMode === 'EXHIBITOR'} onChange={() => chooseMode('EXHIBITOR')} />
+                  {' '}Select Billing Company from Exhibitor List
+                </label>
 
-          {!form.billing_same_as_company && (
-            <>
-              <label style={label}>Billing Name</label>
-              <input style={inputStyle} value={form.billing_name} onChange={(e) => set('billing_name', e.target.value)} />
-              <label style={label}>Billing Address *</label>
-              <textarea
-                style={{ ...inputStyle, minHeight: 60 }}
-                value={form.billing_address}
-                onChange={(e) => set('billing_address', e.target.value)}
-                required
-              />
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Billing Postcode *</label>
-                  <input style={inputStyle} value={form.billing_postcode} onChange={(e) => setDigitsOnly('billing_postcode', e.target.value)} inputMode="numeric" required />
-                </div>
-                <div style={{ flex: 2 }}>
-                  <label style={label}>Billing City</label>
-                  <input style={inputStyle} value={form.billing_city} onChange={(e) => set('billing_city', e.target.value)} />
-                </div>
+                {billingMode === 'EXHIBITOR' && (
+                  <div style={{ marginTop: 8, maxWidth: 400 }}>
+                    {form.billing_exhibitor_id ? (
+                      <p style={{ fontSize: 13 }}>
+                        Billed to: <strong>{billingExhibitorName || '—'}</strong>{' '}
+                        <button type="button" onClick={() => { set('billing_exhibitor_id', ''); setBillingExhibitorName(''); }}>Change</button>
+                      </p>
+                    ) : (
+                      <>
+                        <input
+                          style={inputStyle} placeholder="Search exhibitor company name..."
+                          value={billingSearch} onChange={(e) => setBillingSearch(e.target.value)}
+                        />
+                        {billingResults.length > 0 && (
+                          <div style={{ border: '1px solid #ddd', borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: 'auto' }}>
+                            {billingResults.map((ex) => (
+                              <div
+                                key={ex.id} onClick={() => selectBillingExhibitor(ex)}
+                                style={{ padding: 8, borderBottom: '1px solid #eee', cursor: 'pointer' }}
+                              >
+                                {ex.company_name}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-              <label style={label}>Billing Country *</label>
-              <select style={inputStyle} value={form.billing_country_code} onChange={(e) => set('billing_country_code', e.target.value)} required>
-                <option value="">— Select —</option>
-                {countries.map((c) => (
-                  <option key={c.code} value={c.code}>{c.name}</option>
-                ))}
-              </select>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Billing Co. Reg No.</label>
-                  <input style={inputStyle} value={form.billing_reg_no} onChange={(e) => set('billing_reg_no', e.target.value)} placeholder="Can be added later" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Billing TIN No.</label>
-                  <input style={inputStyle} value={form.billing_tin_no} onChange={(e) => set('billing_tin_no', e.target.value)} placeholder="Can be added later" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={label}>Billing SST No.</label>
-                  <input style={inputStyle} value={form.billing_sst_no} onChange={(e) => set('billing_sst_no', e.target.value)} placeholder="Can be added later" />
-                </div>
-              </div>
-              <label style={label}>Billing Contact No. *</label>
-              <input style={inputStyle} value={form.billing_contact_no} onChange={(e) => setDigitsOnly('billing_contact_no', e.target.value)} inputMode="numeric" placeholder="Country code first, e.g. 60123456789" required />
-              <label style={label}>Billing Email *</label>
-              <input type="email" style={inputStyle} value={form.billing_email} onChange={(e) => set('billing_email', e.target.value)} required />
-            </>
+            );
+          })()}
+
+          {/* Legacy records saved before Manual entry was discontinued still
+              carry their typed-in billing_name/address/etc — shown here
+              read-only so that data stays visible (not silently hidden)
+              instead of being editable free text again. Search above to
+              link it to a real Exhibitor record instead. */}
+          {form.billing_same_as_company === false && !form.billing_exhibitor_id && form.billing_name && (
+            <p style={{ fontSize: 13, color: '#5c6070', background: '#F5F6FA', padding: 10, borderRadius: 6 }}>
+              Currently billed to (entered manually before this was a required Exhibitor link):<br />
+              <strong>{form.billing_name}</strong>
+              {form.billing_address && <>, {form.billing_address}</>}
+              {form.billing_city && <>, {form.billing_city}</>}
+              <br />Search above to link it to a real Exhibitor record instead.
+            </p>
           )}
         </div>
 

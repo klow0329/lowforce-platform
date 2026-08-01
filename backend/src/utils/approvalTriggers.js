@@ -22,10 +22,14 @@ async function flagForApproval(client, companyId, salesOrderId, triggerType, act
     `UPDATE sales_orders SET status = 'PENDING_APPROVAL' WHERE id = $1 AND company_id = $2 AND status != 'PENDING_APPROVAL'`,
     [salesOrderId, companyId]
   );
+  // trigger_type lets the actual approval gate (approveSalesOrder/
+  // rejectSalesOrder) consult THIS trigger's own configured approver
+  // instead of always falling back to REVENUE_ABOVE_THRESHOLD — see that
+  // function's getPendingTriggerType (2026-08-01).
   await client.query(
-    `INSERT INTO approval_log (sales_order_id, action, actor_user_id, notes, flagged_tax_change)
-     VALUES ($1, 'FLAGGED', $2, $3, $4)`,
-    [salesOrderId, actorUserId || null, notes, triggerType === 'TAX_CHANGE']
+    `INSERT INTO approval_log (sales_order_id, action, actor_user_id, notes, flagged_tax_change, trigger_type)
+     VALUES ($1, 'FLAGGED', $2, $3, $4, $5)`,
+    [salesOrderId, actorUserId || null, notes, triggerType === 'TAX_CHANGE', triggerType]
   );
 }
 
@@ -56,12 +60,28 @@ async function checkDiscount(client, companyId, salesOrderId, discountType, disc
   return false;
 }
 
-async function checkPostApprovalEdit(client, companyId, salesOrderId, wasApproved, actorUserId, customNotes) {
+// totalMyr: same "contract's current total_myr" the caller already
+// recomputed before this runs (see checkRevenueThreshold) — threshold is
+// keyed off the CONTRACT's value, not the edit's own size, so a bigger deal
+// getting edited after approval requires a correspondingly higher tier of
+// sign-off (2026-08-01: this used to fire on ANY edit with no threshold at
+// all whenever a rule existed, which also meant the eventual approval step
+// ignored this rule's configured approver entirely — see
+// approvals.controller.js's getPendingTriggerType for the other half of
+// that fix).
+async function checkPostApprovalEdit(client, companyId, salesOrderId, wasApproved, totalMyr, actorUserId, customNotes) {
   if (!wasApproved) return false;
   const rules = await getActiveRules(client, companyId, 'POST_APPROVAL_EDIT');
-  if (rules.length === 0) return false;
-  await flagForApproval(client, companyId, salesOrderId, 'POST_APPROVAL_EDIT', actorUserId, customNotes || 'Contract edited after approval.');
-  return true;
+  for (const rule of rules) {
+    if (ruleTriggered(rule, totalMyr)) {
+      await flagForApproval(
+        client, companyId, salesOrderId, 'POST_APPROVAL_EDIT', actorUserId,
+        customNotes || `Contract edited after approval (RM${Number(totalMyr).toLocaleString('en-MY', { minimumFractionDigits: 2 })}) requires approval.`
+      );
+      return true;
+    }
+  }
+  return false;
 }
 
 // totalMyr: the contract's current total_myr, already recomputed by the

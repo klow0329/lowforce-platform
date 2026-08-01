@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { releaseFloorPlanBooth } = require('../utils/floorPlanSync');
 
 // Admin-only reversible archive/delete (item 1 of a round of feedback) —
 // data created by user or system error can sit around confusing other
@@ -26,13 +27,29 @@ const ENTITIES = {
     dependencies: [
       { label: 'contract', sql: `SELECT COUNT(*) FROM sales_orders WHERE opportunity_id = $1 AND status != 'VOID' AND is_active = TRUE` },
     ],
+    // Any booth this record still holds must be released the moment it's
+    // archived — otherwise the Floor Plan keeps showing it assigned and the
+    // exhibitor's old billing keeps counting in reports even though the
+    // record itself is hidden everywhere else (2026-07-31 bug report:
+    // deleted EATS365 opportunity, booths 6004/6008 stayed shown as taken).
+    // Mirrors the same release used by Void/Lost/Credit Note.
+    boothLinkColumn: 'opportunity_id',
   },
   contract: {
     table: 'sales_orders',
     label: (r) => r.id,
     dependencies: [
       { label: 'invoice', sql: `SELECT COUNT(*) FROM invoices WHERE sales_order_id = $1 AND is_active = TRUE` },
+      // Archiving out from under a still-pending Credit Note/Contract
+      // Reduction request would leave it permanently un-actionable — nobody
+      // could approve or reject it since the contract it's against no
+      // longer exists anywhere the approver can see (2026-07-31 user
+      // request: deleting a record should never leave orphaned linked data
+      // behind, including in-flight approval workflows).
+      { label: 'pending credit note', sql: `SELECT COUNT(*) FROM credit_notes WHERE sales_order_id = $1 AND status = 'PENDING_APPROVAL'` },
+      { label: 'pending contract reduction', sql: `SELECT COUNT(*) FROM contract_reductions WHERE sales_order_id = $1 AND status = 'PENDING_APPROVAL'` },
     ],
+    boothLinkColumn: 'sales_order_id',
   },
   invoice: {
     table: 'invoices',
@@ -93,10 +110,28 @@ async function archiveRecord(req, res) {
     }
   }
 
-  await pool.query(
-    `UPDATE ${entity.table} SET is_active = FALSE, deleted_by = $1, deleted_at = now(), delete_reason = $2 WHERE id = $3`,
-    [req.userId, reason, id]
-  );
+  if (entity.boothLinkColumn) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE ${entity.table} SET is_active = FALSE, deleted_by = $1, deleted_at = now(), delete_reason = $2 WHERE id = $3`,
+        [req.userId, reason, id]
+      );
+      await releaseFloorPlanBooth(client, req.companyId, entity.boothLinkColumn, id);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } else {
+    await pool.query(
+      `UPDATE ${entity.table} SET is_active = FALSE, deleted_by = $1, deleted_at = now(), delete_reason = $2 WHERE id = $3`,
+      [req.userId, reason, id]
+    );
+  }
   res.json({ success: true });
 }
 

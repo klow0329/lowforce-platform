@@ -42,12 +42,15 @@ async function getOverview(req, res) {
     ),
     pool.query(
       `SELECT COALESCE(SUM(amount_myr),0) AS myr FROM invoices
-       WHERE company_id = $1 AND event_id ${EVENT_SCOPE} AND status = 'CONFIRMED'`, params
+       WHERE company_id = $1 AND event_id ${EVENT_SCOPE} AND status = 'CONFIRMED' AND is_active = TRUE`, params
     ),
     pool.query(
       `SELECT COALESCE(SUM(pa.amount_myr),0) AS myr
-       FROM payment_allocations pa JOIN invoices inv ON inv.id = pa.invoice_id
-       WHERE inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE} AND inv.status = 'CONFIRMED'`, params
+       FROM payment_allocations pa
+       JOIN payments p ON p.id = pa.payment_id
+       JOIN invoices inv ON inv.id = pa.invoice_id
+       WHERE inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE} AND inv.status = 'CONFIRMED' AND inv.is_active = TRUE
+         AND p.is_active = TRUE`, params
     ),
     pool.query(`SELECT start_date FROM events WHERE company_id = $1 AND id = $2`, params),
     // Monthly contracted + collected — frontend renders the cumulative curve.
@@ -65,6 +68,7 @@ async function getOverview(req, res) {
          JOIN payments p ON p.id = pa.payment_id
          JOIN invoices inv ON inv.id = pa.invoice_id
          WHERE inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE} AND inv.status = 'CONFIRMED'
+           AND inv.is_active = TRUE AND p.is_active = TRUE
        ) t GROUP BY month ORDER BY month`, params
     ),
     pool.query(
@@ -172,10 +176,12 @@ async function getBySalesperson(req, res) {
      ) c ON TRUE
      LEFT JOIN LATERAL (
        SELECT SUM(inv.amount_myr) AS invoiced_myr,
-              SUM((SELECT COALESCE(SUM(pa.amount_myr),0) FROM payment_allocations pa WHERE pa.invoice_id = inv.id)) AS collected_myr
+              SUM((SELECT COALESCE(SUM(pa.amount_myr),0) FROM payment_allocations pa
+                   JOIN payments p ON p.id = pa.payment_id
+                   WHERE pa.invoice_id = inv.id AND p.is_active = TRUE)) AS collected_myr
        FROM invoices inv JOIN sales_orders so ON so.id = inv.sales_order_id
        WHERE so.salesperson_id = u.id AND inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE}
-         AND inv.status = 'CONFIRMED'
+         AND inv.status = 'CONFIRMED' AND inv.is_active = TRUE
      ) f ON TRUE
      LEFT JOIN LATERAL (
        SELECT SUM(o.estimated_value_myr) AS pipeline_myr, COUNT(*) AS open_opps
@@ -205,6 +211,69 @@ async function getBySalesperson(req, res) {
       pipeline_myr: Number(r.pipeline_myr),
       open_opps: Number(r.open_opps),
       achieved_pct: Number(r.target_myr) > 0 ? (Number(r.contracted_myr) / Number(r.target_myr)) * 100 : null,
+    })),
+  });
+}
+
+// Agent Analysis — the same shape as By Salesperson, but rolled up by
+// agent (via exhibitors.agent_id) instead of by the internal salesperson.
+// No target row (targets are a salesperson concept, not an agent one).
+async function getByAgent(req, res) {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id is required.' });
+
+  const result = await pool.query(
+    `SELECT ag.id, ag.name,
+            COALESCE(c.contracted_myr, 0) AS contracted_myr,
+            COALESCE(c.contracts, 0)      AS contracts,
+            COALESCE(c.sqm, 0)            AS sqm,
+            COALESCE(c.exhibitors, 0)     AS exhibitors,
+            COALESCE(f.invoiced_myr, 0)   AS invoiced_myr,
+            COALESCE(f.collected_myr, 0)  AS collected_myr,
+            COALESCE(pl.pipeline_myr, 0)  AS pipeline_myr,
+            COALESCE(pl.open_opps, 0)     AS open_opps
+     FROM agents ag
+     LEFT JOIN LATERAL (
+       SELECT SUM(so.total_myr) AS contracted_myr, COUNT(*) AS contracts, SUM(so.total_sqm) AS sqm,
+              COUNT(DISTINCT so.exhibitor_id) AS exhibitors
+       FROM sales_orders so JOIN exhibitors ex ON ex.id = so.exhibitor_id
+       WHERE ex.agent_id = ag.id AND so.company_id = $1 AND so.event_id ${EVENT_SCOPE}
+         AND so.is_active = TRUE AND so.status = 'APPROVED'
+     ) c ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT SUM(inv.amount_myr) AS invoiced_myr,
+              SUM((SELECT COALESCE(SUM(pa.amount_myr),0) FROM payment_allocations pa
+                   JOIN payments p ON p.id = pa.payment_id
+                   WHERE pa.invoice_id = inv.id AND p.is_active = TRUE)) AS collected_myr
+       FROM invoices inv JOIN exhibitors ex ON ex.id = inv.exhibitor_id
+       WHERE ex.agent_id = ag.id AND inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE}
+         AND inv.status = 'CONFIRMED' AND inv.is_active = TRUE
+     ) f ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT SUM(o.estimated_value_myr) AS pipeline_myr, COUNT(*) AS open_opps
+       FROM opportunities o JOIN sales_stages st ON st.id = o.stage_id JOIN exhibitors ex ON ex.id = o.exhibitor_id
+       WHERE ex.agent_id = ag.id AND o.company_id = $1 AND o.event_id ${EVENT_SCOPE}
+         AND o.is_active = TRUE AND NOT st.is_won AND NOT st.is_lost
+     ) pl ON TRUE
+     WHERE ag.company_id = $1 AND ag.is_active = TRUE
+       AND (c.contracted_myr IS NOT NULL OR pl.pipeline_myr IS NOT NULL)
+     ORDER BY contracted_myr DESC NULLS LAST, ag.name`,
+    [req.companyId, event_id]
+  );
+
+  res.json({
+    rows: result.rows.map((r) => ({
+      agent_id: r.id,
+      name: r.name,
+      contracted_myr: Number(r.contracted_myr),
+      contracts: Number(r.contracts),
+      sqm: Number(r.sqm),
+      exhibitors: Number(r.exhibitors),
+      invoiced_myr: Number(r.invoiced_myr),
+      collected_myr: Number(r.collected_myr),
+      outstanding_myr: Number(r.invoiced_myr) - Number(r.collected_myr),
+      pipeline_myr: Number(r.pipeline_myr),
+      open_opps: Number(r.open_opps),
     })),
   });
 }
@@ -370,6 +439,7 @@ async function getComparison(req, res) {
          JOIN payments p ON p.id = pa.payment_id
          JOIN invoices inv ON inv.id = pa.invoice_id
          WHERE inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE} AND inv.status = 'CONFIRMED'
+           AND inv.is_active = TRUE AND p.is_active = TRUE
        ) t GROUP BY month ORDER BY month`,
       [req.companyId, evId]
     );
@@ -446,13 +516,14 @@ async function getByMonth(req, res) {
        UNION ALL
        SELECT date_trunc('month', invoice_date), NULL, amount_myr, NULL
        FROM invoices
-       WHERE company_id = $1 AND event_id ${EVENT_SCOPE} AND status = 'CONFIRMED'
+       WHERE company_id = $1 AND event_id ${EVENT_SCOPE} AND status = 'CONFIRMED' AND is_active = TRUE
        UNION ALL
        SELECT date_trunc('month', p.payment_date), NULL, NULL, pa.amount_myr
        FROM payment_allocations pa
        JOIN payments p ON p.id = pa.payment_id
        JOIN invoices inv ON inv.id = pa.invoice_id
        WHERE inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE} AND inv.status = 'CONFIRMED'
+         AND inv.is_active = TRUE AND p.is_active = TRUE
      ) t GROUP BY month ORDER BY month`,
     [req.companyId, event_id]
   );
@@ -517,21 +588,27 @@ async function saveTargets(req, res) {
 // Agent commission — computed against actually CONFIRMED invoices (real
 // billed revenue in the invoice's own currency, not the contract's paper
 // estimate), per the user's own requirement. Each invoice is prorated
-// across booth vs non-booth (see EVENT_SCOPE-scoped item totals below)
-// using the contract's own item mix, since a milestone invoice is a
-// proportional slice of the whole contract rather than tied to specific
-// line items; the agent's own rate table (agent_commission_rates) is then
-// applied per category using whether the exhibitor is flagged repeat or
-// new. A contract with no line items at all (see getByItem's identical
-// note — a legacy/bulk-imported contract predating itemized billing) is
-// treated as 100% Bare Space, the one thing known for certain about it.
+// across the contract's own ITEM CODES (not a broad Booth/Non-Booth split —
+// the rate table now keys on the specific code, e.g. a different % for BAS
+// vs SSS vs MEP), since a milestone invoice is a proportional slice of the
+// whole contract rather than tied to specific line items. A rate lookup
+// falls back to the agent's 'ALL' rate (a catch-all) when no rate is set
+// for that specific code, then to 0. The agent's own rate table
+// (agent_commission_rates) is applied using whether the exhibitor is
+// flagged repeat or new. A contract with no line items at all (see
+// getByItem's identical note — a legacy/bulk-imported contract predating
+// itemized billing) is treated as 100% Bare Space (BAS), the one thing
+// known for certain about it. On top of the base commission, an agent's
+// threshold bonus tiers (agent_commission_bonus_tiers) are checked once per
+// agent against their TOTAL revenue (MYR) and sqm across every
+// commission-eligible invoice for this event — see the summary block below.
 async function getAgentCommission(req, res) {
   const { event_id } = req.query;
   if (!event_id) return res.status(400).json({ error: 'event_id is required.' });
 
   const invoicesResult = await pool.query(
     `SELECT inv.id AS invoice_id, inv.invoice_no, inv.amount_foreign, inv.currency, inv.amount_myr,
-            so.id AS sales_order_id, so.total_foreign AS contract_total_foreign,
+            so.id AS sales_order_id, so.total_foreign AS contract_total_foreign, so.total_sqm AS contract_total_sqm,
             ex.id AS exhibitor_id, ex.company_name AS exhibitor_name, ex.is_repeat_exhibitor,
             ex.agent_id, ag.name AS agent_name
      FROM invoices inv
@@ -539,7 +616,7 @@ async function getAgentCommission(req, res) {
      JOIN exhibitors ex ON ex.id = inv.exhibitor_id
      JOIN agents ag ON ag.id = ex.agent_id
      WHERE inv.company_id = $1 AND inv.event_id ${EVENT_SCOPE}
-       AND inv.status = 'CONFIRMED' AND ex.agent_id IS NOT NULL
+       AND inv.status = 'CONFIRMED' AND inv.is_active = TRUE AND ex.agent_id IS NOT NULL
      ORDER BY ag.name, ex.company_name, inv.invoice_date`,
     [req.companyId, event_id]
   );
@@ -547,77 +624,116 @@ async function getAgentCommission(req, res) {
   const soIds = [...new Set(invoicesResult.rows.map((r) => r.sales_order_id))];
   const itemsResult = soIds.length > 0
     ? await pool.query(
-        `SELECT sales_order_id, category, SUM(line_total) AS total
+        `SELECT sales_order_id, sales_item_code AS code, SUM(line_total) AS total
          FROM sales_order_items WHERE sales_order_id = ANY($1::uuid[])
-         GROUP BY sales_order_id, category`,
+         GROUP BY sales_order_id, sales_item_code`,
         [soIds]
       )
     : { rows: [] };
   const ratesResult = await pool.query(
-    `SELECT agent_id, category, exhibitor_tier, rate_pct FROM agent_commission_rates WHERE company_id = $1`,
+    `SELECT agent_id, item_code, exhibitor_tier, rate_pct FROM agent_commission_rates WHERE company_id = $1`,
+    [req.companyId]
+  );
+  const bonusResult = await pool.query(
+    `SELECT agent_id, threshold_type, threshold_value, bonus_pct
+     FROM agent_commission_bonus_tiers WHERE company_id = $1 ORDER BY threshold_value`,
     [req.companyId]
   );
 
-  const categoryTotalsBySo = {};
+  const itemTotalsBySo = {};
   for (const row of itemsResult.rows) {
-    categoryTotalsBySo[row.sales_order_id] = categoryTotalsBySo[row.sales_order_id] || {};
-    categoryTotalsBySo[row.sales_order_id][row.category] = Number(row.total);
+    itemTotalsBySo[row.sales_order_id] = itemTotalsBySo[row.sales_order_id] || {};
+    itemTotalsBySo[row.sales_order_id][row.code] = Number(row.total);
   }
   const rateMap = {};
   for (const r of ratesResult.rows) {
     rateMap[r.agent_id] = rateMap[r.agent_id] || {};
-    rateMap[r.agent_id][r.category] = rateMap[r.agent_id][r.category] || {};
-    rateMap[r.agent_id][r.category][r.exhibitor_tier] = Number(r.rate_pct);
+    rateMap[r.agent_id][r.item_code] = rateMap[r.agent_id][r.item_code] || {};
+    rateMap[r.agent_id][r.item_code][r.exhibitor_tier] = Number(r.rate_pct);
+  }
+  function lookupRate(agentId, code, tier) {
+    return rateMap[agentId]?.[code]?.[tier] ?? rateMap[agentId]?.ALL?.[tier] ?? 0;
   }
 
   const rows = [];
   for (const inv of invoicesResult.rows) {
-    let categoryTotals = categoryTotalsBySo[inv.sales_order_id];
+    let itemTotals = itemTotalsBySo[inv.sales_order_id];
     let contractTotal;
-    if (!categoryTotals || Object.keys(categoryTotals).length === 0) {
+    if (!itemTotals || Object.keys(itemTotals).length === 0) {
       contractTotal = Number(inv.contract_total_foreign) || 0;
-      categoryTotals = { BOOTH: contractTotal };
+      itemTotals = { BAS: contractTotal };
     } else {
-      contractTotal = Object.values(categoryTotals).reduce((s, v) => s + v, 0);
+      contractTotal = Object.values(itemTotals).reduce((s, v) => s + v, 0);
     }
     if (!(contractTotal > 0)) continue;
 
     const tier = inv.is_repeat_exhibitor ? 'REPEAT' : 'NEW';
     const invoiceAmount = Number(inv.amount_foreign);
+    const proration = invoiceAmount / contractTotal;
     let commissionForeign = 0;
     const breakdown = [];
-    for (const [category, catTotal] of Object.entries(categoryTotals)) {
-      const proportion = catTotal / contractTotal;
-      const catInvoiceAmount = invoiceAmount * proportion;
-      const rate = rateMap[inv.agent_id]?.[category]?.[tier] || 0;
-      const catCommission = catInvoiceAmount * (rate / 100);
-      if (rate > 0) breakdown.push({ category, amount_foreign: catInvoiceAmount, rate_pct: rate, commission_foreign: catCommission });
-      commissionForeign += catCommission;
+    for (const [code, codeTotal] of Object.entries(itemTotals)) {
+      const proportion = codeTotal / contractTotal;
+      const codeInvoiceAmount = invoiceAmount * proportion;
+      const rate = lookupRate(inv.agent_id, code, tier);
+      const codeCommission = codeInvoiceAmount * (rate / 100);
+      if (rate > 0) breakdown.push({ item_code: code, amount_foreign: codeInvoiceAmount, rate_pct: rate, commission_foreign: codeCommission });
+      commissionForeign += codeCommission;
     }
+    // This invoice's share of the contract's physical sqm — used only for
+    // an agent's SQM bonus threshold, not for the commission itself.
+    const sqm = (Number(inv.contract_total_sqm) || 0) * proration;
 
     rows.push({
       invoice_id: inv.invoice_id, invoice_no: inv.invoice_no,
       agent_id: inv.agent_id, agent_name: inv.agent_name,
       exhibitor_id: inv.exhibitor_id, exhibitor_name: inv.exhibitor_name,
       is_repeat_exhibitor: inv.is_repeat_exhibitor,
-      currency: inv.currency, invoice_amount: invoiceAmount,
+      currency: inv.currency, invoice_amount: invoiceAmount, amount_myr: Number(inv.amount_myr) || 0, sqm,
       commission: commissionForeign, breakdown,
     });
   }
 
   // Subtotal per agent, kept in each invoice's own currency (never
   // converted) — the user's own requirement, since an agent is paid in
-  // whatever currency their exhibitors were actually billed in.
+  // whatever currency their exhibitors were actually billed in. Bonus
+  // tiers are the one exception: a threshold has to compare a single
+  // number, so it's checked against the agent's total MYR/sqm and, once
+  // crossed, paid out in MYR — not blended into the native-currency
+  // commission above.
   const byAgent = {};
   for (const r of rows) {
-    if (!byAgent[r.agent_id]) byAgent[r.agent_id] = { agent_id: r.agent_id, agent_name: r.agent_name, byCurrency: {} };
+    if (!byAgent[r.agent_id]) {
+      byAgent[r.agent_id] = { agent_id: r.agent_id, agent_name: r.agent_name, byCurrency: {}, totalMyr: 0, totalSqm: 0 };
+    }
     byAgent[r.agent_id].byCurrency[r.currency] = (byAgent[r.agent_id].byCurrency[r.currency] || 0) + r.commission;
+    byAgent[r.agent_id].totalMyr += r.amount_myr;
+    byAgent[r.agent_id].totalSqm += r.sqm;
+  }
+  const bonusTiersByAgent = {};
+  for (const b of bonusResult.rows) {
+    bonusTiersByAgent[b.agent_id] = bonusTiersByAgent[b.agent_id] || [];
+    bonusTiersByAgent[b.agent_id].push(b);
+  }
+  for (const agent of Object.values(byAgent)) {
+    agent.bonuses = [];
+    for (const b of bonusTiersByAgent[agent.agent_id] || []) {
+      const actual = b.threshold_type === 'SQM' ? agent.totalSqm : agent.totalMyr;
+      if (actual >= Number(b.threshold_value)) {
+        agent.bonuses.push({
+          threshold_type: b.threshold_type,
+          threshold_value: Number(b.threshold_value),
+          bonus_pct: Number(b.bonus_pct),
+          bonus_amount_myr: agent.totalMyr * (Number(b.bonus_pct) / 100),
+        });
+      }
+    }
   }
 
   res.json({ rows, agentSummary: Object.values(byAgent) });
 }
 
 module.exports = {
-  getOverview, getBySalesperson, getByItem, getPipeline, getComparison, getByCountry, getByMonth, getTargets, saveTargets,
+  getOverview, getBySalesperson, getByAgent, getByItem, getPipeline, getComparison, getByCountry, getByMonth, getTargets, saveTargets,
   getAgentCommission,
 };
