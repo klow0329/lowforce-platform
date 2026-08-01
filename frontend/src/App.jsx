@@ -67,6 +67,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [availableRoles, setAvailableRoles] = useState([]);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [company, setCompany] = useState(null);
 
   // The backend session is cookie-based and outlives a page reload, but the
   // React state doesn't — without this, every refresh looks logged-out even
@@ -75,6 +76,10 @@ export default function App() {
     api.me().then(({ user, availableRoles }) => {
       setUser(user);
       setAvailableRoles(availableRoles || []);
+      // Nav bar logo must be this tenant's own branding (or the neutral
+      // platform default), never a baked-in reference customer's — see
+      // BrandLogo's fallback in CompanyBranding.jsx.
+      api.getCompany().then(({ company }) => setCompany(company));
     }).finally(() => setCheckingSession(false));
   }, []);
 
@@ -110,7 +115,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <EventProvider>
-        <NavBar user={user} onLogout={handleLogout} availableRoles={availableRoles} onSwitchRole={handleSwitchRole} />
+        <NavBar user={user} company={company} onLogout={handleLogout} availableRoles={availableRoles} onSwitchRole={handleSwitchRole} />
         {/* A bug on any one page (React 18 otherwise unmounts the whole app
             to a blank white screen on an uncaught render error, with no way
             back except a hard refresh) is contained here instead — the nav

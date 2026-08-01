@@ -2,8 +2,11 @@ import { useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useEventContext } from '../context/EventContext';
 import { confirmDiscardIfDirty } from '../utils/unsavedChanges';
+import { BrandLogo } from './CompanyBranding';
 
-// Navy top bar with the ExpoCO logo — palette per checkpoint doc Section 6.
+// Navy top bar — logo is the logged-in tenant's own upload, or the neutral
+// LowForce default until they set one up in Admin > Company Profile (see
+// BrandLogo). Palette per checkpoint doc Section 6.
 const linkStyle = ({ isActive }) => ({
   marginRight: 16,
   textDecoration: 'none',
@@ -11,7 +14,7 @@ const linkStyle = ({ isActive }) => ({
   color: isActive ? '#F47920' : '#fff',
 });
 
-export default function NavBar({ user, onLogout, availableRoles = [], onSwitchRole }) {
+export default function NavBar({ user, company, onLogout, availableRoles = [], onSwitchRole }) {
   const { events, selectedEventId, setSelectedEventId, loading } = useEventContext();
   const navRef = useRef(null);
 
@@ -48,10 +51,10 @@ export default function NavBar({ user, onLogout, availableRoles = [], onSwitchRo
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 6 }}>
-          <img
-            src="/logo.png"
-            alt="ExpoCO"
-            style={{ height: 34, marginRight: 20, background: '#fff', borderRadius: 6, padding: '2px 6px' }}
+          <BrandLogo
+            company={company}
+            height={34}
+            style={{ marginRight: 20, background: '#fff', borderRadius: 6, padding: '2px 6px' }}
           />
           <NavLink to="/dashboard" style={linkStyle} onClick={guardNav}>Dashboard</NavLink>
           <NavLink to="/exhibitors" style={linkStyle} onClick={guardNav}>Exhibitors</NavLink>
