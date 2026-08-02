@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 import { useEventContext } from '../context/EventContext';
+import { useCompanyContext } from '../context/CompanyContext';
 import { confirmDiscardIfDirty } from '../utils/unsavedChanges';
 import { BrandLogo } from './CompanyBranding';
 
@@ -18,8 +19,9 @@ const linkStyle = ({ isActive }) => ({
   color: isActive ? '#63A6E8' : '#fff',
 });
 
-export default function NavBar({ user, company, onLogout, availableRoles = [], onSwitchRole }) {
+export default function NavBar({ user, onLogout, availableRoles = [], onSwitchRole }) {
   const { events, selectedEventId, setSelectedEventId, loading } = useEventContext();
+  const { company } = useCompanyContext();
   const navRef = useRef(null);
 
   // Every top-nav link is a "go to another screen" action — the exact case

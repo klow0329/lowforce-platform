@@ -98,6 +98,10 @@ async function getBrandingImage(req, res) {
   );
   const filename = result.rows[0] && result.rows[0].filename;
   if (!filename) return res.status(404).json({ error: 'No image uploaded.' });
+  // This URL is the same for every logo a company ever uploads (only the
+  // file on disk changes) — without this, a browser can keep serving a
+  // stale cached image after a re-upload or removal.
+  res.set('Cache-Control', 'no-store');
   res.sendFile(path.join(BRANDING_DIR, filename));
 }
 

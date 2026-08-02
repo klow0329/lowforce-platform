@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { api } from '../api/client';
 import DataTable from '../components/DataTable';
+import { useCompanyContext } from '../context/CompanyContext';
 
 const label = { display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4, marginTop: 12 };
 const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'border-box' };
@@ -109,6 +110,7 @@ const ARCHIVE_TYPES = [
 ];
 
 export default function Admin({ user }) {
+  const { refresh: refreshCompany } = useCompanyContext();
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
@@ -793,6 +795,10 @@ export default function Admin({ user }) {
       await api.uploadBrandingImage(type, file);
       setBranding((b) => ({ ...b, [type]: true }));
       setBrandingBust((n) => n + 1);
+      // Nav bar (and anywhere else) reading the shared company/has_logo
+      // state needs to know right away, not just this page's own local
+      // preview — see CompanyContext.jsx.
+      if (type === 'logo') refreshCompany();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -806,6 +812,8 @@ export default function Admin({ user }) {
     try {
       await api.deleteBrandingImage(type);
       setBranding((b) => ({ ...b, [type]: false }));
+      setBrandingBust((n) => n + 1);
+      if (type === 'logo') refreshCompany();
     } catch (err) {
       setError(err.message);
     }

@@ -1,12 +1,13 @@
 import { api } from '../api/client';
 
-// Falls back to the neutral LowForce placeholder when a tenant hasn't
-// uploaded their own — so a freshly onboarded company still prints
-// something sensible rather than a broken image (or worse, another real
-// customer's branding) until they set it up in Admin > Company Profile.
+// Renders nothing until the tenant uploads their own — this slot is their
+// identity specifically, so it should never show a placeholder (LowForce's
+// own mark lives in its own dedicated nav-bar spot, not here) or another
+// real customer's leftover branding. Matches the same "render nothing until
+// set" convention LetterheadBand/FooterBand/EventBrandLogo already use.
 export function BrandLogo({ company, height = 44, style }) {
-  const src = company?.has_logo ? api.brandingImageUrl('logo') : '/default-logo.svg';
-  return <img src={src} alt="" style={{ height, display: 'block', marginBottom: 6, ...style }} />;
+  if (!company?.has_logo) return null;
+  return <img src={api.brandingImageUrl('logo')} alt="" style={{ height, display: 'block', marginBottom: 6, ...style }} />;
 }
 
 // Full-width header/footer strips — only render once the company has
