@@ -18,9 +18,23 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 - **User Invite emails now functional and tested**: re-ran the same test send after domain verification — `{"success":true}` from the live Railway API. Also created a default `USER_INVITE` email template for the ExpoCO company on Railway (none existed yet — was blocking the very first test attempt).
 
 **Still open / unresolved:**
-- Awaiting the user's own inbox confirmation that the test email actually arrived (readable, correct sender) — the API accepting it is strong evidence but not the same as confirmed delivery.
-- Password-reset-by-email, invoice-delivery-by-email, and general system notifications still don't exist as real flows — only the User Invite touchpoint sends via Resend today (noted in the 2026-08-02 entry below, still true).
+- ~~Awaiting the user's own inbox confirmation that the test email actually arrived~~ — **resolved same day**: user confirmed receipt (correct subject "Welcome to LowForce Platform, Test User", correct sender).
+- Password-reset-by-email, invoice-delivery-by-email, and general system notifications still don't exist as real flows — only the User Invite touchpoint sends via Resend today.
 - The old `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD` Railway variables are now dead (unused by the code) — left in place at the user's option, not removed.
+
+---
+
+**Later the same day — asked:** connect the custom domain `lowforce.co` (hosted on Cloudflare) to the Railway app.
+
+**Built / decided:**
+- Ran `railway domain lowforce.co --service lowforce-platform` to register the custom domain on Railway and get the real DNS requirements: a `CNAME` record (`@` → `gmtjkjok.up.railway.app`, DNS-only/unproxied) plus a `TXT` ownership-verification record (`_railway-verify` → `railway-verify=c62b188f5096079d6af24f6e7e4af56adfd476326437d0ab748ab0ac9f8e7712`). Walked the user through adding both in Cloudflare.
+- First check after the user added the records showed `https://lowforce.co` returning Railway's generic "domain not provisioned" page. Misdiagnosed this initially as a leftover conflicting A record at the root — **that was wrong**: the domain's DNS list only had the CNAME/MX/TXT records it should, no stray A/AAAA record. Corrected by checking what Railway's own target hostname (`gmtjkjok.up.railway.app`) resolves to directly (`69.46.46.22`) — it matched what `lowforce.co` itself was resolving to, confirming Cloudflare was correctly "flattening" the apex CNAME (required since MX/TXT records coexist at the same root name) and DNS was actually fine all along.
+- The real cause was simply Railway's SSL certificate still mid-issuance (`CERTIFICATE_STATUS_TYPE_ISSUING`) at the time of the first check. **Set up Cloudflare DNS CNAME pointing lowforce.co to Railway** — confirmed complete once the certificate finished issuing (`issuedAt: 2026-08-02T15:33:42Z`, valid through 2026-10-31): `https://lowforce.co` returns HTTP 200 and `/api/health` responds correctly, same app as the `railway.app` URL.
+- **Completed and verified: 2026-08-03**, DNS values used — CNAME `@` → `gmtjkjok.up.railway.app` (DNS only, Auto TTL); TXT `_railway-verify` → `railway-verify=c62b188f5096079d6af24f6e7e4af56adfd476326437d0ab748ab0ac9f8e7712`.
+
+**Still open / unresolved:**
+- User still needs to confirm in their own browser (not just via curl) that `https://lowforce.co` loads correctly — the earlier cached "Not Found" page may need a hard refresh to clear.
+- Whether to switch the CNAME to Cloudflare-proxied (orange cloud) later for CDN/DDoS protection is an open option, not required — left DNS-only for now since that's what allowed certificate issuance to complete cleanly.
 
 ---
 
