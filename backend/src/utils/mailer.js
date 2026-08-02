@@ -1,33 +1,25 @@
-// Outbound transactional email — SMTP config comes entirely from
-// environment variables (never hardcoded), so this works for any company's
-// own mail account, not just noreply@lowforce.co. If the env vars aren't
-// set (e.g. local dev), sendMail() logs a warning and returns without
-// throwing, so the rest of the app keeps working without email configured.
-const nodemailer = require('nodemailer');
+// Outbound transactional email via Resend's HTTP API — not SMTP. Gmail SMTP
+// (the original design) turned out to hang/timeout on Railway: consumer
+// Gmail's SMTP servers routinely block or silently drop connections from
+// cloud/datacenter IPs as an anti-spam measure, which is a network-level
+// problem no amount of app-side config can fix. An HTTP API sidesteps that
+// entirely — no SMTP port, no port-blocking, no "is this IP a spam source"
+// heuristic against a residential mail server.
+// RESEND_API_KEY comes from the environment only (never hardcoded), so this
+// isn't tied to one specific account.
+const { Resend } = require('resend');
 
-let transporter = null;
-function getTransporter() {
-  if (transporter) return transporter;
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD } = process.env;
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASSWORD) return null;
-  transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: Number(SMTP_PORT) === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASSWORD },
-    // Without these, a blocked/filtered outbound connection (common on
-    // PaaS hosts — some restrict or throttle port 587/465 egress) hangs
-    // the request indefinitely instead of failing with a diagnosable
-    // error. 15s is generous for a real SMTP handshake.
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 15000,
-  });
-  return transporter;
+let client = null;
+function getClient() {
+  if (client) return client;
+  const { RESEND_API_KEY } = process.env;
+  if (!RESEND_API_KEY) return null;
+  client = new Resend(RESEND_API_KEY);
+  return client;
 }
 
 function isMailConfigured() {
-  return getTransporter() !== null;
+  return getClient() !== null;
 }
 
 // Every automated email gets the same "don't reply to this" footer,
@@ -41,25 +33,29 @@ const AUTOMATED_FOOTER_HTML = '<hr style="margin-top:24px;border:none;border-top
 
 // `text`/`html` are the message body only — the automated-sender footer is
 // appended here so every call site gets it automatically. Returns
-// { sent: true } on success or { sent: false, reason } if unconfigured —
-// callers should surface `reason` to the admin who triggered the action
-// rather than silently pretending it went out.
+// { sent: true } on success or { sent: false, reason } if unconfigured or
+// rejected by Resend — callers should surface `reason` to the admin who
+// triggered the action rather than silently pretending it went out.
 async function sendMail({ to, subject, text, html }) {
-  const t = getTransporter();
-  if (!t) {
-    console.warn(`[mailer] SMTP not configured — email to ${to} ("${subject}") was not sent.`);
-    return { sent: false, reason: 'Email is not configured on this server yet (SMTP_HOST/PORT/USER/PASSWORD).' };
+  const c = getClient();
+  if (!c) {
+    console.warn(`[mailer] RESEND_API_KEY not set — email to ${to} ("${subject}") was not sent.`);
+    return { sent: false, reason: 'Email is not configured on this server yet (RESEND_API_KEY).' };
   }
   const fromName = process.env.EMAIL_FROM_NAME || 'LowForce Platform';
-  const fromAddress = process.env.EMAIL_FROM_ADDRESS || process.env.SMTP_USER;
-  await t.sendMail({
-    from: `"${fromName}" <${fromAddress}>`,
+  const fromAddress = process.env.EMAIL_FROM_ADDRESS || 'noreply@lowforce.co';
+  const { data, error } = await c.emails.send({
+    from: `${fromName} <${fromAddress}>`,
     to,
     subject,
     text: text ? `${text}${AUTOMATED_FOOTER_TEXT}` : undefined,
     html: html ? `${html}${AUTOMATED_FOOTER_HTML}` : undefined,
   });
-  return { sent: true };
+  if (error) {
+    console.warn(`[mailer] Resend rejected email to ${to} ("${subject}"): ${error.message}`);
+    return { sent: false, reason: error.message };
+  }
+  return { sent: true, id: data?.id };
 }
 
 module.exports = { sendMail, isMailConfigured };

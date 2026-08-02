@@ -15,8 +15,8 @@
     "express": "^4.19.2",
     "express-session": "^1.18.0",
     "multer": "^2.2.0",
-    "nodemailer": "^9.0.3",
     "pg": "^8.11.5",
+    "resend": "^6.18.1",
     "xlsx": "^0.18.5"
   }
 }
