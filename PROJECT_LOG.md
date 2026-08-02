@@ -6,6 +6,24 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-03
+
+**Asked:** the SMTP_PASSWORD had been set on Railway — test the User Invite email end to end. Then, after Gmail SMTP turned out to hang indefinitely (`ETIMEDOUT` on the raw TCP connect, before even reaching auth — Gmail silently blocking/dropping connections from Railway's cloud IP range, a network-level anti-spam measure with no app-side fix), migrate to Resend's HTTP API instead, using a Resend API key the user provided.
+
+**Built / decided:**
+- Fixed a real robustness bug found while diagnosing the Gmail hang: `mailer.js` had no connection timeout, so a blocked SMTP connection hung the request forever instead of failing with a diagnosable error — added 15s timeouts on all three nodemailer connection phases (later moot once SMTP was replaced, but a correct fix regardless).
+- **Migrated email from Gmail SMTP to Resend API** — rewrote `backend/src/utils/mailer.js` to use the `resend` npm package's HTTP API instead of `nodemailer`/SMTP (removed the now-unused `nodemailer` dependency). Same `sendMail()`/`isMailConfigured()` interface, so no call sites needed to change. Config is now just `RESEND_API_KEY` (never hardcoded, set by the user directly on Railway — see the standing rule about not entering credentials myself) plus the existing `EMAIL_FROM_NAME`/`EMAIL_FROM_ADDRESS`.
+- User pasted a live Resend API key directly in chat — flagged it as compromised-by-exposure and recommended rotating it; user chose to keep using the same key rather than rotate.
+- First attempt after the Resend key was set failed with a specific, expected error: `lowforce.co` domain not verified in Resend. Walked the user through domain verification (Resend's Cloudflare "Auto configure" vs. manual DNS records) — user completed it and confirmed all records verified.
+- **User Invite emails now functional and tested**: re-ran the same test send after domain verification — `{"success":true}` from the live Railway API. Also created a default `USER_INVITE` email template for the ExpoCO company on Railway (none existed yet — was blocking the very first test attempt).
+
+**Still open / unresolved:**
+- Awaiting the user's own inbox confirmation that the test email actually arrived (readable, correct sender) — the API accepting it is strong evidence but not the same as confirmed delivery.
+- Password-reset-by-email, invoice-delivery-by-email, and general system notifications still don't exist as real flows — only the User Invite touchpoint sends via Resend today (noted in the 2026-08-02 entry below, still true).
+- The old `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD` Railway variables are now dead (unused by the code) — left in place at the user's option, not removed.
+
+---
+
 ## 2026-08-02
 
 **Asked:** recheck all Reports/Overview data-linkage (triggered by a CONSTELLAR "not yet invoiced = 0" example); then push the whole repo to GitHub for the first time and deploy to Railway; then a resellability audit after noticing the live Railway instance showed the ExpoCO logo and MIFB26/sample agents despite being a "clean" test deploy.
