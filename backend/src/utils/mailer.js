@@ -15,6 +15,13 @@ function getTransporter() {
     port: Number(SMTP_PORT),
     secure: Number(SMTP_PORT) === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASSWORD },
+    // Without these, a blocked/filtered outbound connection (common on
+    // PaaS hosts — some restrict or throttle port 587/465 egress) hangs
+    // the request indefinitely instead of failing with a diagnosable
+    // error. 15s is generous for a real SMTP handshake.
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 15000,
   });
   return transporter;
 }
