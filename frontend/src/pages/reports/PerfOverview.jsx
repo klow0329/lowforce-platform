@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { api } from '../../api/client';
 import { useEventContext } from '../../context/EventContext';
-import { fmtMYR, fmtNum, fmtPct, fmtMYRShort, NAVY, ORANGE, GREEN, RED, tile, tileLabel, tileValue } from './fmt';
+import { fmtMYR, fmtNum, fmtPct, fmtMYRShort, NAVY, ACCENT_BLUE, GREEN, RED, tile, tileLabel, tileValue } from './fmt';
 
 export default function PerfOverview() {
   const { selectedEventId } = useEventContext();
@@ -44,14 +44,14 @@ export default function PerfOverview() {
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={tileLabel}>Achieved</div>
-              <div style={{ ...tileValue, color: salesPct != null && salesPct >= 100 ? GREEN : ORANGE }}>{fmtMYR(data.achieved.myr)}</div>
+              <div style={{ ...tileValue, color: salesPct != null && salesPct >= 100 ? GREEN : ACCENT_BLUE }}>{fmtMYR(data.achieved.myr)}</div>
             </div>
           </div>
           {salesPct != null && (
             <div style={{ marginTop: 4, textAlign: 'right' }}>
               <span style={{
                 fontSize: 14, fontWeight: 700, color: '#fff', padding: '2px 10px', borderRadius: 12,
-                background: salesPct >= 100 ? GREEN : ORANGE,
+                background: salesPct >= 100 ? GREEN : ACCENT_BLUE,
               }}>
                 {fmtPct(salesPct)} of target
               </span>
@@ -66,14 +66,14 @@ export default function PerfOverview() {
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={tileLabel}>Achieved</div>
-              <div style={{ ...tileValue, color: sqmPct != null && sqmPct >= 100 ? GREEN : ORANGE }}>{fmtNum(data.achieved.sqm)} sqm</div>
+              <div style={{ ...tileValue, color: sqmPct != null && sqmPct >= 100 ? GREEN : ACCENT_BLUE }}>{fmtNum(data.achieved.sqm)} sqm</div>
             </div>
           </div>
           {sqmPct != null && (
             <div style={{ marginTop: 4, textAlign: 'right' }}>
               <span style={{
                 fontSize: 14, fontWeight: 700, color: '#fff', padding: '2px 10px', borderRadius: 12,
-                background: sqmPct >= 100 ? GREEN : ORANGE,
+                background: sqmPct >= 100 ? GREEN : ACCENT_BLUE,
               }}>
                 {fmtPct(sqmPct)} of target
               </span>
@@ -86,9 +86,9 @@ export default function PerfOverview() {
           <div style={tileLabel}>{data.achieved.exhibitors} exhibitors</div>
         </div>
         {data.daysToEvent != null && (
-          <div style={{ ...tile, border: data.daysToEvent <= 60 ? `2px solid ${ORANGE}` : tile.border }}>
+          <div style={{ ...tile, border: data.daysToEvent <= 60 ? `2px solid ${ACCENT_BLUE}` : tile.border }}>
             <div style={tileLabel}>Days to Event</div>
-            <div style={{ ...tileValue, color: data.daysToEvent <= 60 ? ORANGE : NAVY }}>
+            <div style={{ ...tileValue, color: data.daysToEvent <= 60 ? ACCENT_BLUE : NAVY }}>
               {data.daysToEvent > 0 ? data.daysToEvent : 'Started'}
             </div>
             <div style={tileLabel}>starts {data.eventStartDate?.slice(0, 10)}</div>

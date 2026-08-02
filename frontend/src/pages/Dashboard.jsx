@@ -255,11 +255,11 @@ export default function Dashboard() {
           <div style={tileValue}>{data.opportunities.conversionRatePct.toFixed(1)}%</div>
         </button>
         <button
-          style={{ ...tile, border: data.followUpsDue > 0 ? '2px solid #F47920' : tile.border }}
+          style={{ ...tile, border: data.followUpsDue > 0 ? '2px solid #185FA5' : tile.border }}
           onClick={() => navigate('/opportunities')}
         >
           <div style={tileLabel}>Follow-Ups Due</div>
-          <div style={{ ...tileValue, color: data.followUpsDue > 0 ? '#F47920' : 'inherit' }}>{data.followUpsDue}</div>
+          <div style={{ ...tileValue, color: data.followUpsDue > 0 ? '#185FA5' : 'inherit' }}>{data.followUpsDue}</div>
         </button>
         <button style={tile} onClick={() => navigate('/sales-orders')} title="Physical booths on approved contracts only — Bare Space, Shell Scheme, Enhanced Shell, Walk-On Package and Custom Build">
           <div style={tileLabel}>Total Booth Contracted</div>

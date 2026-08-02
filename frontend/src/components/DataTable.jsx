@@ -262,7 +262,7 @@ export default function DataTable({ screenKey, columns, rows, getRowKey, onRowCl
                 style={{
                   position: 'relative', whiteSpace: 'nowrap', cursor: 'grab',
                   opacity: draggedKey === col.key ? 0.4 : 1,
-                  borderLeft: dragOverKey === col.key && draggedKey && draggedKey !== col.key ? '2px solid #F47920' : '2px solid transparent',
+                  borderLeft: dragOverKey === col.key && draggedKey && draggedKey !== col.key ? '2px solid #185FA5' : '2px solid transparent',
                 }}
               >
                 <span style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort(col.key)}>
@@ -275,7 +275,7 @@ export default function DataTable({ screenKey, columns, rows, getRowKey, onRowCl
                   onClick={() => setOpenFilterKey(openFilterKey === col.key ? null : col.key)}
                   title={`Filter ${col.label}`}
                   style={{
-                    background: filters[col.key]?.size ? '#F47920' : 'none',
+                    background: filters[col.key]?.size ? '#185FA5' : 'none',
                     color: filters[col.key]?.size ? '#fff' : '#5c6070',
                     padding: '0 4px', fontSize: 11, borderRadius: 4,
                   }}

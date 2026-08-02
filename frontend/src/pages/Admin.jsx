@@ -256,10 +256,11 @@ export default function Admin({ user }) {
 
   function handleDownloadSegmentTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Main Code', 'Main Name', 'Sub Code', 'Sub Name'],
+      ['Main Code *', 'Main Name *', 'Sub Code', 'Sub Name'],
       ['ASSOC', 'ASSOCIATION', 'ASSOC-TRADE', 'TRADE ASSOCIATION'],
       ['ASSOC', 'ASSOCIATION', 'ASSOC-PROF', 'PROFESSIONAL BODY'],
       ['GOVT', 'GOVERNMENT', '', ''],
+      ['', '', '', '', '* = mandatory. Delete the sample rows above before importing your real data. Sub Code/Sub Name are optional but must both be filled to create a subcategory.'],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Segments');
@@ -277,11 +278,11 @@ export default function Admin({ user }) {
       const sheet = book.Sheets[book.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const rows = json.map((r) => ({
-        main_code: r['Main Code'] ?? r['main_code'] ?? '',
-        main_name: r['Main Name'] ?? r['main_name'] ?? '',
+        main_code: r['Main Code *'] ?? r['Main Code'] ?? r['main_code'] ?? '',
+        main_name: r['Main Name *'] ?? r['Main Name'] ?? r['main_name'] ?? '',
         sub_code: r['Sub Code'] ?? r['sub_code'] ?? '',
         sub_name: r['Sub Name'] ?? r['sub_name'] ?? '',
-      }));
+      })).filter((r) => r.main_code || r.main_name);
       const result = await api.importSegments(rows);
       setSegImportResult(result);
       loadSegments();
@@ -295,8 +296,10 @@ export default function Admin({ user }) {
 
   function handleDownloadRepeatTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Company Name'],
+      ['Company Name *'],
       ['ACME EXHIBITIONS SDN BHD'],
+      ['GLOBAL PACKAGING SOLUTIONS SDN BHD'],
+      ['* = mandatory. Delete the sample rows above before importing your real data. Matched against your existing Exhibitor list by company name.'],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Repeat Exhibitors');
@@ -314,8 +317,8 @@ export default function Admin({ user }) {
       const sheet = book.Sheets[book.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const rows = json.map((r) => ({
-        company_name: r['Company Name'] ?? r['company_name'] ?? '',
-      }));
+        company_name: r['Company Name *'] ?? r['Company Name'] ?? r['company_name'] ?? '',
+      })).filter((r) => r.company_name && !r.company_name.startsWith('* = mandatory'));
       const result = await api.importRepeatExhibitors(rows);
       setRepeatImportResult(result);
     } catch (err) {
@@ -329,13 +332,24 @@ export default function Admin({ user }) {
   function handleDownloadExhibitorTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
       [
-        'Company Name', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State',
+        'Company Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State',
         'Reg No', 'TIN No', 'SST No', 'Website', 'Fax',
         'Contact 1 Name', 'Contact 1 Job Title', 'Contact 1 Phone', 'Contact 1 Email',
         'Contact 2 Name', 'Contact 2 Job Title', 'Contact 2 Phone', 'Contact 2 Email',
-        'Salesperson Email', 'Agent Name',
+        'Salesperson Email', 'Agent Name', 'Billing Company',
       ],
-      ['ACME EXHIBITIONS SDN BHD', '', 'MY', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      [
+        'ACME EXHIBITIONS SDN BHD', 'ACME EXPO', 'MY', '12 Jalan Ampang', '50450', 'Kuala Lumpur', 'W.P. Kuala Lumpur',
+        '199901012345', 'C1234567890', 'W10-1234-56789012', 'https://acme-exhibitions.example.com', '+60-3-1234-5679',
+        'Jane Tan', 'Marketing Manager', '+60-12-345-6789', 'jane.tan@acme-exhibitions.example.com',
+        'Ahmad Faizal', 'Finance Executive', '+60-12-987-6543', 'ahmad.faizal@acme-exhibitions.example.com',
+        'salesperson@example.com', 'ACME TRAVEL & EVENTS', '',
+      ],
+      [
+        '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
+        '', '', '* = mandatory. Delete the sample rows above before importing your real data. '
+          + 'Salesperson Email / Agent Name / Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable.',
+      ],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Exhibitors');
@@ -353,7 +367,7 @@ export default function Admin({ user }) {
       const sheet = book.Sheets[book.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const rows = json.map((r) => ({
-        company_name: r['Company Name'] ?? r['company_name'] ?? '',
+        company_name: r['Company Name *'] ?? r['Company Name'] ?? r['company_name'] ?? '',
         company_name_alt: r['Name (Alt)'] ?? r['company_name_alt'] ?? '',
         country_code: r['Country Code'] ?? r['country_code'] ?? '',
         address: r['Address'] ?? r['address'] ?? '',
@@ -375,7 +389,8 @@ export default function Admin({ user }) {
         contact2_email: r['Contact 2 Email'] ?? r['contact2_email'] ?? '',
         salesperson_email: r['Salesperson Email'] ?? r['salesperson_email'] ?? '',
         agent_name: r['Agent Name'] ?? r['agent_name'] ?? '',
-      }));
+        billing_company_name: r['Billing Company'] ?? r['billing_company_name'] ?? '',
+      })).filter((r) => r.company_name);
       const result = await api.importExhibitors(rows);
       setExhibitorImportResult(result);
     } catch (err) {
@@ -388,8 +403,9 @@ export default function Admin({ user }) {
 
   function handleDownloadAgentTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Name', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Salesperson Email'],
-      ['ACME TRAVEL & EVENTS', '', 'MY', '', '', '', '', '', '', '', '', '', 'salesperson@example.com'],
+      ['Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Salesperson Email'],
+      ['ACME TRAVEL & EVENTS', 'ACME T&E', 'MY', '8 Jalan Bukit Bintang', '55100', 'Kuala Lumpur', 'W.P. Kuala Lumpur', '199801098765', 'C9876543210', 'W10-9876-54321098', 'https://acme-travel.example.com', '+60-3-2345-6780', 'salesperson@example.com'],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Salesperson Email is matched by exact text against existing Users — leave blank if not applicable.'],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Agents');
@@ -407,7 +423,7 @@ export default function Admin({ user }) {
       const sheet = book.Sheets[book.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const rows = json.map((r) => ({
-        name: r['Name'] ?? r['name'] ?? '',
+        name: r['Name *'] ?? r['Name'] ?? r['name'] ?? '',
         name_alt: r['Name (Alt)'] ?? r['name_alt'] ?? '',
         country_code: r['Country Code'] ?? r['country_code'] ?? '',
         address: r['Address'] ?? r['address'] ?? '',
@@ -420,7 +436,7 @@ export default function Admin({ user }) {
         website: r['Website'] ?? r['website'] ?? '',
         fax: r['Fax'] ?? r['fax'] ?? '',
         salesperson_email: r['Salesperson Email'] ?? r['salesperson_email'] ?? '',
-      }));
+      })).filter((r) => r.name);
       const result = await api.importAgents(rows);
       setAgentImportResult(result);
     } catch (err) {
@@ -433,9 +449,10 @@ export default function Admin({ user }) {
 
   function handleDownloadExpenseCodeTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Code', 'Description', 'Type (EXPENSE or REVENUE)'],
+      ['Code *', 'Description *', 'Type (EXPENSE or REVENUE)'],
       ['MKT-001', 'Marketing & Advertising', 'EXPENSE'],
       ['REV-001', 'Sponsorship Income', 'REVENUE'],
+      ['* = mandatory. Delete the sample rows above before importing your real data.', '', 'Type defaults to EXPENSE if left blank.'],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Expense Codes');
@@ -453,10 +470,10 @@ export default function Admin({ user }) {
       const sheet = book.Sheets[book.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const rows = json.map((r) => ({
-        code: r['Code'] ?? r['code'] ?? '',
-        description: r['Description'] ?? r['description'] ?? '',
+        code: r['Code *'] ?? r['Code'] ?? r['code'] ?? '',
+        description: r['Description *'] ?? r['Description'] ?? r['description'] ?? '',
         type: r['Type (EXPENSE or REVENUE)'] ?? r['Type'] ?? r['type'] ?? 'EXPENSE',
-      }));
+      })).filter((r) => r.code && !r.code.startsWith('* = mandatory'));
       const result = await api.importExpenseCodes(rows);
       setExpenseCodeImportResult(result);
       api.listExpenseCodes().then(({ expenseCodes }) => setExpenseCodes(expenseCodes));
@@ -469,9 +486,11 @@ export default function Admin({ user }) {
   }
 
   function handleDownloadUserTemplate() {
+    const validCodes = roles.map((r) => r.code).join(', ') || 'e.g. SALES, FIN, MGT, ADM';
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Email', 'Full Name', 'Role Code'],
+      ['Email *', 'Full Name *', 'Role Code *'],
       ['jane.doe@example.com', 'JANE DOE', roles[0]?.code || 'SALES'],
+      ['* = mandatory. Delete the sample row above before importing your real data.', '', `Valid role codes for this company: ${validCodes}`],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Users');
@@ -489,10 +508,10 @@ export default function Admin({ user }) {
       const sheet = book.Sheets[book.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const rows = json.map((r) => ({
-        email: r['Email'] ?? r['email'] ?? '',
-        full_name: r['Full Name'] ?? r['full_name'] ?? '',
-        role_code: r['Role Code'] ?? r['role_code'] ?? '',
-      }));
+        email: r['Email *'] ?? r['Email'] ?? r['email'] ?? '',
+        full_name: r['Full Name *'] ?? r['Full Name'] ?? r['full_name'] ?? '',
+        role_code: r['Role Code *'] ?? r['Role Code'] ?? r['role_code'] ?? '',
+      })).filter((r) => r.email && !r.email.startsWith('* = mandatory'));
       const result = await api.adminImportUsers(rows);
       setUserImportResult(result);
       loadAll();

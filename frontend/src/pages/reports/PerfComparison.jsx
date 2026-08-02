@@ -4,7 +4,7 @@ import {
 } from 'recharts';
 import { api } from '../../api/client';
 import { useEventContext } from '../../context/EventContext';
-import { fmtMYR, fmtMYRShort, NAVY, ORANGE } from './fmt';
+import { fmtMYR, fmtMYRShort, NAVY, ACCENT_BLUE } from './fmt';
 
 // Compares two events month by month, aligned on "months before/after event
 // start" so e.g. MIFB26 and MIFB27 line up even though they're a year apart.
@@ -95,7 +95,7 @@ export default function PerfComparison() {
               <Tooltip formatter={(v) => fmtMYR(v)} labelFormatter={offsetLabel} />
               <Legend />
               <Line type="monotone" dataKey={primaryName} stroke={NAVY} strokeWidth={2} dot={false} connectNulls />
-              {compareName && <Line type="monotone" dataKey={compareName} stroke={ORANGE} strokeWidth={2} dot={false} connectNulls />}
+              {compareName && <Line type="monotone" dataKey={compareName} stroke={ACCENT_BLUE} strokeWidth={2} dot={false} connectNulls />}
             </LineChart>
           </ResponsiveContainer>
         </div>

@@ -323,7 +323,7 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
           {TOOLS.map((t) => (
             <button
               key={t.key} type="button" title={t.label} onClick={() => setTool(t.key)}
-              style={{ background: tool === t.key ? '#F47920' : '#2a4d80', border: 'none', fontSize: 15, padding: '5px 8px' }}
+              style={{ background: tool === t.key ? '#185FA5' : '#2a4d80', border: 'none', fontSize: 15, padding: '5px 8px' }}
             >
               {t.icon}
             </button>
@@ -351,9 +351,9 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
 
         {activeText && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#0f2d5c', padding: '4px 8px', borderRadius: 6 }}>
-            <button type="button" onClick={() => updateActiveText({ bold: !activeText.bold })} style={{ fontWeight: 700, background: activeText.bold ? '#F47920' : '#2a4d80' }}>B</button>
-            <button type="button" onClick={() => updateActiveText({ italic: !activeText.italic })} style={{ fontStyle: 'italic', background: activeText.italic ? '#F47920' : '#2a4d80' }}>I</button>
-            <button type="button" onClick={() => updateActiveText({ underline: !activeText.underline })} style={{ textDecoration: 'underline', background: activeText.underline ? '#F47920' : '#2a4d80' }}>U</button>
+            <button type="button" onClick={() => updateActiveText({ bold: !activeText.bold })} style={{ fontWeight: 700, background: activeText.bold ? '#185FA5' : '#2a4d80' }}>B</button>
+            <button type="button" onClick={() => updateActiveText({ italic: !activeText.italic })} style={{ fontStyle: 'italic', background: activeText.italic ? '#185FA5' : '#2a4d80' }}>I</button>
+            <button type="button" onClick={() => updateActiveText({ underline: !activeText.underline })} style={{ textDecoration: 'underline', background: activeText.underline ? '#185FA5' : '#2a4d80' }}>U</button>
             <button type="button" onClick={() => updateActiveText({ fontSize: Math.max(8, activeText.fontSize - 2) })}>A−</button>
             <span style={{ fontSize: 12, minWidth: 20, textAlign: 'center' }}>{activeText.fontSize}</span>
             <button type="button" onClick={() => updateActiveText({ fontSize: Math.min(48, activeText.fontSize + 2) })}>A+</button>
@@ -369,7 +369,7 @@ export default function FloorPlanPresentation({ hallName, imageUrl, booths, onCl
         <button type="button" onClick={toggleFullscreen}>⛶ Full Screen</button>
         <span style={{ flex: 1 }} />
         <button type="button" onClick={handleSavePdf} disabled={saving}>{saving ? 'Saving...' : 'Save as PDF'}</button>
-        <button type="button" onClick={handleExit} style={{ background: '#F47920' }}>Exit Presentation</button>
+        <button type="button" onClick={handleExit} style={{ background: '#185FA5' }}>Exit Presentation</button>
       </div>
 
       <div

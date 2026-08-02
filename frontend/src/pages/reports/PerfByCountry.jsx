@@ -5,7 +5,7 @@ import {
 import { api } from '../../api/client';
 import { useEventContext } from '../../context/EventContext';
 import DataTable from '../../components/DataTable';
-import { fmtMYR, fmtNum, fmtMYRShort, NAVY, ORANGE, GREEN, tile, tileLabel, tileValue } from './fmt';
+import { fmtMYR, fmtNum, fmtMYRShort, NAVY, ACCENT_BLUE, GREEN, tile, tileLabel, tileValue } from './fmt';
 
 export default function PerfByCountry() {
   const { selectedEventId } = useEventContext();
@@ -44,7 +44,7 @@ export default function PerfByCountry() {
         </div>
         <div style={tile}>
           <div style={tileLabel}>International</div>
-          <div style={{ ...tileValue, color: ORANGE }}>{fmtMYR(sumBy(intl, 'contracted_myr'))} <span style={{ fontSize: 14 }}>({pctOfTotal(sumBy(intl, 'contracted_myr'))})</span></div>
+          <div style={{ ...tileValue, color: ACCENT_BLUE }}>{fmtMYR(sumBy(intl, 'contracted_myr'))} <span style={{ fontSize: 14 }}>({pctOfTotal(sumBy(intl, 'contracted_myr'))})</span></div>
           <div style={tileLabel}>{sumBy(intl, 'exhibitors')} exhibitors · {fmtNum(sumBy(intl, 'sqm'))} sqm · {intl.length} countries</div>
         </div>
         <div style={{ ...tile, background: '#eafaf1' }}>

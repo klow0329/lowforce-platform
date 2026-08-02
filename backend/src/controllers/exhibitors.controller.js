@@ -318,12 +318,32 @@ async function importExhibitors(req, res) {
       else skipped.push(`${companyName}: agent "${agentName}" not found (exhibitor still saved, unassigned)`);
     }
 
-    const fields = {};
+    // Billed-through-another-exhibitor link, matched by name — same
+    // resolve-by-name pattern as agent/salesperson above. The referenced
+    // company must already exist (either from earlier in this same file,
+    // processed sequentially, or already in the system) since the link
+    // stores an id, not a name.
+    let billingExhibitorId = null;
+    const billingCompanyName = (row.billing_company_name || '').toString().trim();
+    if (billingCompanyName) {
+      const b = await pool.query(
+        `SELECT id FROM exhibitors WHERE company_id = $1 AND UPPER(TRIM(company_name)) = $2`,
+        [req.companyId, billingCompanyName.toUpperCase()]
+      );
+      if (b.rows[0]) billingExhibitorId = b.rows[0].id;
+      else skipped.push(`${companyName}: billing company "${billingCompanyName}" not found (exhibitor still saved, billed to itself)`);
+    }
+
+    let fields = {};
     for (const f of IMPORT_EXHIBITOR_FIELDS) {
       if (row[f]) fields[f] = row[f];
     }
     if (salespersonId) fields.salesperson_id = salespersonId;
     if (agentId) fields.agent_id = agentId;
+    if (billingExhibitorId) {
+      fields.billing_exhibitor_id = billingExhibitorId;
+      fields = await applyBillingExhibitorLink(fields, req.companyId);
+    }
 
     const existing = await pool.query(
       `SELECT id FROM exhibitors WHERE company_id = $1 AND UPPER(TRIM(company_name)) = $2`,

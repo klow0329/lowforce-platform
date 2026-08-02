@@ -15,7 +15,7 @@ export const fmtMYRShort = (n) => {
 };
 
 export const NAVY = '#1B3A6B';
-export const ORANGE = '#F47920';
+export const ACCENT_BLUE = '#185FA5';
 export const GREEN = '#1A9C5B';
 export const RED = '#D13434';
 export const GRAY = '#8b90a0';

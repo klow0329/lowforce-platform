@@ -5,7 +5,7 @@ import {
 import { api } from '../../api/client';
 import { useEventContext } from '../../context/EventContext';
 import DataTable from '../../components/DataTable';
-import { fmtMYR, fmtMYRShort, NAVY, ORANGE, GREEN } from './fmt';
+import { fmtMYR, fmtMYRShort, NAVY, ACCENT_BLUE, GREEN } from './fmt';
 
 export default function PerfByMonth() {
   const { selectedEventId } = useEventContext();
@@ -60,7 +60,7 @@ export default function PerfByMonth() {
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar dataKey="Contracted (month)" fill={NAVY} />
               <Bar dataKey="Collected (month)" fill={GREEN} />
-              <Line type="monotone" dataKey="Cumulative Contracted" stroke={ORANGE} strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="Cumulative Contracted" stroke={ACCENT_BLUE} strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="Cumulative Collected" stroke={GREEN} strokeWidth={2} strokeDasharray="5 3" dot={false} />
             </ComposedChart>
           </ResponsiveContainer>

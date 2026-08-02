@@ -5,7 +5,7 @@ import {
 import { api } from '../../api/client';
 import { useEventContext } from '../../context/EventContext';
 import DataTable from '../../components/DataTable';
-import { fmtMYR, fmtNum, fmtPct, fmtMYRShort, NAVY, ORANGE } from './fmt';
+import { fmtMYR, fmtNum, fmtPct, fmtMYRShort, NAVY, ACCENT_BLUE } from './fmt';
 
 export default function PerfBySalesperson({ user }) {
   const { selectedEventId } = useEventContext();
@@ -61,7 +61,7 @@ export default function PerfBySalesperson({ user }) {
               <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={110} />
               <Tooltip formatter={(v) => fmtMYR(v)} />
               <Legend />
-              <Bar dataKey="Target" fill={ORANGE} barSize={14} />
+              <Bar dataKey="Target" fill={ACCENT_BLUE} barSize={14} />
               <Bar dataKey="Contracted" fill={NAVY} barSize={14} />
             </BarChart>
           </ResponsiveContainer>

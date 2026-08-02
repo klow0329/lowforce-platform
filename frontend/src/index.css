@@ -1,5 +1,7 @@
-/* LowForce branding — palette from the checkpoint doc Section 6:
-   Navy #1B3A6B · Orange #F47920 · Orange Dark #C45E10 · Surface #F5F6FA */
+/* LowForce branding — platform palette (2026-08-02 rebrand: primary accent
+   changed from orange to LowForce blue so the product doesn't read as a
+   One-International-specific tool):
+   Navy #1B3A6B · Accent Blue #185FA5 · Accent Blue Dark #134C84 · Surface #F5F6FA */
 
 body {
   margin: 0;
@@ -13,7 +15,7 @@ h2, h3, h4 {
 }
 
 button {
-  background: #F47920;
+  background: #185FA5;
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -22,7 +24,7 @@ button {
   font-family: inherit;
   font-size: 13px;
 }
-button:hover { background: #C45E10; }
+button:hover { background: #134C84; }
 button:disabled { opacity: 0.5; cursor: default; }
 
 input, select, textarea {
@@ -50,7 +52,7 @@ th { color: #1B3A6B; }
 }
 .card-tile:hover { background: #f5f6fa; }
 
-a { color: #1B3A6B; }
+a { color: #185FA5; }
 
 /* ---------------------------------------------------------------------------
    Mobile & tablet support — standing Phase 1 requirement: readable text,

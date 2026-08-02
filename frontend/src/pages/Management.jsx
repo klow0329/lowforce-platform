@@ -216,11 +216,11 @@ export default function Management({ user }) {
           <div style={tileLabel}>{dashboard.totalBooths.totalSqm} sqm</div>
         </button>
         <button
-          style={{ ...tile, border: pendingApprovals.length > 0 ? '2px solid #F47920' : tile.border }}
+          style={{ ...tile, border: pendingApprovals.length > 0 ? '2px solid #185FA5' : tile.border }}
           onClick={() => document.getElementById('approvals-queue')?.scrollIntoView({ behavior: 'smooth' })}
         >
           <div style={tileLabel}>Awaiting My Approval</div>
-          <div style={{ ...tileValue, color: pendingApprovals.length > 0 ? '#F47920' : 'inherit' }}>{pendingApprovals.length}</div>
+          <div style={{ ...tileValue, color: pendingApprovals.length > 0 ? '#185FA5' : 'inherit' }}>{pendingApprovals.length}</div>
         </button>
       </div>
 

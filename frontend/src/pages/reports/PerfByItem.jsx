@@ -5,7 +5,7 @@ import {
 import { api } from '../../api/client';
 import { useEventContext } from '../../context/EventContext';
 import DataTable from '../../components/DataTable';
-import { fmtMYR, fmtNum, fmtMYRShort, NAVY, ORANGE } from './fmt';
+import { fmtMYR, fmtNum, fmtMYRShort, NAVY, ACCENT_BLUE } from './fmt';
 
 export default function PerfByItem() {
   const { selectedEventId } = useEventContext();
@@ -55,7 +55,7 @@ export default function PerfByItem() {
               <Tooltip formatter={(v) => (isMyr ? fmtMYR(v) : `${fmtNum(v)} sqm`)} />
               <Legend />
               <Bar dataKey="Local" stackId="a" fill={NAVY} />
-              <Bar dataKey="International" stackId="a" fill={ORANGE} />
+              <Bar dataKey="International" stackId="a" fill={ACCENT_BLUE} />
             </BarChart>
           </ResponsiveContainer>
         </div>

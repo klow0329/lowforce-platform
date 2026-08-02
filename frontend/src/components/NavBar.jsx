@@ -6,12 +6,16 @@ import { BrandLogo } from './CompanyBranding';
 
 // Navy top bar — logo is the logged-in tenant's own upload, or the neutral
 // LowForce default until they set one up in Admin > Company Profile (see
-// BrandLogo). Palette per checkpoint doc Section 6.
+// BrandLogo).
+// Active-link color is a lighter tint of the platform accent (#185FA5),
+// not the exact accent itself — the plain accent blue sits too close to
+// this bar's navy background to read clearly as text (contrast ~1.7:1);
+// this tint keeps ~4.3:1 against navy while staying visibly the same hue.
 const linkStyle = ({ isActive }) => ({
   marginRight: 16,
   textDecoration: 'none',
   fontWeight: isActive ? 700 : 400,
-  color: isActive ? '#F47920' : '#fff',
+  color: isActive ? '#63A6E8' : '#fff',
 });
 
 export default function NavBar({ user, company, onLogout, availableRoles = [], onSwitchRole }) {
