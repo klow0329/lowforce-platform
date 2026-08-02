@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const { getAccessibleEventIds } = require('../middleware/eventAccess');
 const { visibilityClause } = require('../utils/visibility');
+const { cleanText, cleanLower, cleanKeepCase, cleanDigits } = require('../utils/importNormalize');
 
 // Every query in here filters by req.companyId (set by middleware/tenant.js).
 // This is the pattern every other Phase 1 module (opportunities, sales
@@ -284,6 +285,21 @@ const IMPORT_EXHIBITOR_FIELDS = [
   'contact2_name', 'contact2_job_title', 'contact2_phone', 'contact2_email',
 ];
 
+// Per-field cleanup on the way in — trimmed + uppercased by default (matches
+// the manual New Exhibitor form's own convention), except: phone numbers
+// (digits only, no + / spaces / dashes — see importNormalize.js), emails
+// (trimmed + lowercased), and website (trimmed only, casing left alone since
+// it's a URL).
+const DIGITS_FIELDS = new Set(['postcode', 'contact1_phone', 'contact2_phone']);
+const LOWER_FIELDS = new Set(['contact1_email', 'contact2_email']);
+const KEEP_CASE_FIELDS = new Set(['website']);
+function cleanImportField(field, value) {
+  if (DIGITS_FIELDS.has(field)) return cleanDigits(value);
+  if (LOWER_FIELDS.has(field)) return cleanLower(value);
+  if (KEEP_CASE_FIELDS.has(field)) return cleanKeepCase(value);
+  return cleanText(value);
+}
+
 async function importExhibitors(req, res) {
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
   if (rows.length === 0) return res.status(400).json({ error: 'No rows to import.' });
@@ -293,11 +309,11 @@ async function importExhibitors(req, res) {
   const skipped = [];
 
   for (const row of rows) {
-    const companyName = (row.company_name || '').toString().trim().toUpperCase();
+    const companyName = cleanText(row.company_name);
     if (!companyName) continue;
 
     let salespersonId = null;
-    const salespersonEmail = (row.salesperson_email || '').toString().trim();
+    const salespersonEmail = cleanLower(row.salesperson_email);
     if (salespersonEmail) {
       const u = await pool.query(
         `SELECT id FROM users WHERE company_id = $1 AND LOWER(email) = LOWER($2)`,
@@ -308,11 +324,11 @@ async function importExhibitors(req, res) {
     }
 
     let agentId = null;
-    const agentName = (row.agent_name || '').toString().trim();
+    const agentName = cleanText(row.agent_name);
     if (agentName) {
       const a = await pool.query(
         `SELECT id FROM agents WHERE company_id = $1 AND UPPER(TRIM(name)) = $2`,
-        [req.companyId, agentName.toUpperCase()]
+        [req.companyId, agentName]
       );
       if (a.rows[0]) agentId = a.rows[0].id;
       else skipped.push(`${companyName}: agent "${agentName}" not found (exhibitor still saved, unassigned)`);
@@ -324,11 +340,11 @@ async function importExhibitors(req, res) {
     // processed sequentially, or already in the system) since the link
     // stores an id, not a name.
     let billingExhibitorId = null;
-    const billingCompanyName = (row.billing_company_name || '').toString().trim();
+    const billingCompanyName = cleanText(row.billing_company_name);
     if (billingCompanyName) {
       const b = await pool.query(
         `SELECT id FROM exhibitors WHERE company_id = $1 AND UPPER(TRIM(company_name)) = $2`,
-        [req.companyId, billingCompanyName.toUpperCase()]
+        [req.companyId, billingCompanyName]
       );
       if (b.rows[0]) billingExhibitorId = b.rows[0].id;
       else skipped.push(`${companyName}: billing company "${billingCompanyName}" not found (exhibitor still saved, billed to itself)`);
@@ -336,7 +352,10 @@ async function importExhibitors(req, res) {
 
     let fields = {};
     for (const f of IMPORT_EXHIBITOR_FIELDS) {
-      if (row[f]) fields[f] = row[f];
+      if (row[f]) {
+        const cleaned = cleanImportField(f, row[f]);
+        if (cleaned) fields[f] = cleaned;
+      }
     }
     if (salespersonId) fields.salesperson_id = salespersonId;
     if (agentId) fields.agent_id = agentId;

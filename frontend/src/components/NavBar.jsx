@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, Link } from 'react-router-dom';
 import { useEventContext } from '../context/EventContext';
 import { confirmDiscardIfDirty } from '../utils/unsavedChanges';
 import { BrandLogo } from './CompanyBranding';
@@ -95,6 +95,21 @@ export default function NavBar({ user, company, onLogout, availableRoles = [], o
             {user.full_name}
           </NavLink>
           <button onClick={() => { if (confirmDiscardIfDirty()) onLogout(); }}>Log out</button>
+          {/* Platform branding (LowForce itself, not the tenant) — always
+              the same asset for every company, since this identifies the
+              product, not the workspace. Separated from the tenant's own
+              controls with a divider so it doesn't read as part of them. */}
+          <Link
+            to="/about"
+            title="About LowForce"
+            style={{ display: 'flex', alignItems: 'center', marginLeft: 8, paddingLeft: 12, borderLeft: '1px solid rgba(255,255,255,0.25)' }}
+          >
+            <img
+              src="/lowforce-logo.png"
+              alt="LowForce"
+              style={{ height: 30, display: 'block', background: '#fff', borderRadius: 6, padding: '2px 6px' }}
+            />
+          </Link>
         </div>
       </div>
     </div>

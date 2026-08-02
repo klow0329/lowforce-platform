@@ -3,6 +3,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 const { pool } = require('../config/db');
+const { cleanText, cleanLower, cleanKeepCase, cleanDigits } = require('../utils/importNormalize');
 
 // ---------------------------------------------------------------------------
 // Company branding — logo, letterhead header strip, footer strip. Rendered
@@ -230,11 +231,11 @@ async function importAgents(req, res) {
   const skipped = [];
 
   for (const row of rows) {
-    const name = (row.name || '').toString().trim().toUpperCase();
+    const name = cleanText(row.name);
     if (!name) continue;
 
     let salespersonId = null;
-    const salespersonEmail = (row.salesperson_email || '').toString().trim();
+    const salespersonEmail = cleanLower(row.salesperson_email);
     if (salespersonEmail) {
       const u = await pool.query(
         `SELECT id FROM users WHERE company_id = $1 AND LOWER(email) = LOWER($2)`,
@@ -244,11 +245,14 @@ async function importAgents(req, res) {
       else skipped.push(`${name}: salesperson email "${salespersonEmail}" not found (agent still saved, unassigned)`);
     }
 
+    // Trimmed + uppercased like the exhibitor import, except website (kept
+    // as-typed) and postcode (digits only — see importNormalize.js).
     const fields = {
-      name_alt: row.name_alt || null, country_code: row.country_code || null,
-      address: row.address || null, postcode: row.postcode || null, city: row.city || null, state: row.state || null,
-      reg_no: row.reg_no || null, tin_no: row.tin_no || null, sst_no: row.sst_no || null,
-      website: row.website || null, fax: row.fax || null,
+      name_alt: cleanText(row.name_alt) || null, country_code: cleanText(row.country_code) || null,
+      address: cleanText(row.address) || null, postcode: cleanDigits(row.postcode) || null,
+      city: cleanText(row.city) || null, state: cleanText(row.state) || null,
+      reg_no: cleanText(row.reg_no) || null, tin_no: cleanText(row.tin_no) || null, sst_no: cleanText(row.sst_no) || null,
+      website: cleanKeepCase(row.website) || null, fax: cleanText(row.fax) || null,
     };
     if (salespersonId) fields.salesperson_id = salespersonId;
 
@@ -469,9 +473,9 @@ async function importExpenseCodes(req, res) {
   const errors = [];
 
   for (const row of rows) {
-    const code = (row.code || '').toString().trim().toUpperCase();
-    const description = (row.description || '').toString().trim();
-    const type = (row.type || 'EXPENSE').toString().trim().toUpperCase();
+    const code = cleanText(row.code);
+    const description = cleanText(row.description);
+    const type = cleanText(row.type) || 'EXPENSE';
     if (!code || !description) continue;
     if (!['EXPENSE', 'REVENUE'].includes(type)) {
       errors.push(`${code}: type must be EXPENSE or REVENUE, got "${type}"`);

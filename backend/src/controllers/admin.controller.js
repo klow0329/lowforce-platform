@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { pool } = require('../config/db');
 const { hashPassword } = require('../utils/password');
+const { cleanText, cleanLower } = require('../utils/importNormalize');
 
 // ---------------------------------------------------------------------------
 // Users
@@ -235,13 +236,21 @@ async function importUsers(req, res) {
   const roleResult = await pool.query(`SELECT id, code FROM roles WHERE company_id = $1`, [req.companyId]);
   const roleIdByCode = new Map(roleResult.rows.map((r) => [r.code.toUpperCase(), r.id]));
 
+  const existingUserCount = await pool.query(`SELECT count(*) FROM users WHERE company_id = $1`, [req.companyId]);
+  let noUsersYet = Number(existingUserCount.rows[0].count) === 0;
+
   const createdUsers = [];
   const skipped = [];
 
   for (const row of rows) {
-    const email = (row.email || '').toString().trim().toLowerCase();
-    const fullName = (row.full_name || '').toString().trim();
-    const roleCode = (row.role_code || '').toString().trim().toUpperCase();
+    const email = cleanLower(row.email);
+    const fullName = cleanText(row.full_name);
+    let roleCode = cleanText(row.role_code);
+    // A company can never end up with zero Admins after its first import —
+    // whichever row lands first for a brand-new company is forced to ADM
+    // regardless of what the sheet said, so there's always someone who can
+    // actually manage the account afterward.
+    if (noUsersYet) roleCode = 'ADM';
     if (!email || !fullName || !roleCode) {
       skipped.push({ email: email || '(blank)', reason: 'Missing email, full name, or role code.' });
       continue;
@@ -267,11 +276,52 @@ async function importUsers(req, res) {
        VALUES ($1, $2, $3, $4, $5) RETURNING id`,
       [req.companyId, roleId, email, passwordHash, fullName]
     );
+    noUsersYet = false;
     await pool.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, [result.rows[0].id, roleId]);
     createdUsers.push({ id: result.rows[0].id, email, full_name: fullName, role_code: roleCode, temp_password: tempPassword });
   }
 
   res.json({ success: true, created: createdUsers.length, createdUsers, skipped, rowsProcessed: rows.length });
+}
+
+// Actually sends the USER_INVITE template (vs. the "Copy Invite Email"
+// clipboard fallback, which still works if SMTP isn't configured — see
+// mailer.js). Only usable right after an import/reset where the caller
+// still has the plaintext temp password in hand (never stored, so it can't
+// be re-sent later without generating a new one).
+function fillTemplate(text, vars) {
+  return text.replace(/\{\{(\w+)\}\}/g, (m, k) => (vars[k] || m));
+}
+
+async function sendUserInviteEmail(req, res) {
+  const { email, full_name, temp_password } = req.body;
+  if (!email || !full_name || !temp_password) {
+    return res.status(400).json({ error: 'email, full_name, and temp_password are required.' });
+  }
+  const tplResult = await pool.query(
+    `SELECT subject, body FROM email_templates WHERE company_id = $1 AND template_key = 'USER_INVITE'`,
+    [req.companyId]
+  );
+  if (!tplResult.rows[0]) {
+    return res.status(400).json({ error: 'No USER_INVITE template saved yet — set one up under Admin > Email Templates first.' });
+  }
+  const companyResult = await pool.query(`SELECT name FROM companies WHERE id = $1`, [req.companyId]);
+  const senderResult = await pool.query(`SELECT full_name FROM users WHERE id = $1`, [req.userId]);
+  const vars = {
+    full_name, email, temp_password,
+    company_name: companyResult.rows[0]?.name || '',
+    sender_name: senderResult.rows[0]?.full_name || '',
+  };
+  const { sendMail } = require('../utils/mailer');
+  const result = await sendMail({
+    to: email,
+    subject: fillTemplate(tplResult.rows[0].subject, vars),
+    text: fillTemplate(tplResult.rows[0].body, vars),
+  });
+  if (!result.sent) {
+    return res.status(503).json({ error: result.reason });
+  }
+  res.json({ success: true });
 }
 
 async function listRoles(req, res) {
@@ -447,7 +497,7 @@ async function updateEvent(req, res) {
 }
 
 module.exports = {
-  listUsers, createUser, importUsers, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
+  listUsers, createUser, importUsers, sendUserInviteEmail, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
   createRole, updateRole, deleteRole, MODULE_NAMES, PERMISSION_LEVELS,
   listEvents, createEvent, updateEvent,
 };

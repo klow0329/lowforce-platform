@@ -283,6 +283,7 @@ export const api = {
   adminCreateUser: (payload) =>
     apiFetch('/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
   adminImportUsers: (rows) => apiFetch('/admin/users/import', { method: 'POST', body: JSON.stringify({ rows }) }),
+  sendUserInviteEmail: (user) => apiFetch('/admin/users/send-invite-email', { method: 'POST', body: JSON.stringify(user) }),
   adminUpdateUser: (id, payload) =>
     apiFetch(`/admin/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   adminResetPassword: (id, payload) =>

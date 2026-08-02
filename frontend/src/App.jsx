@@ -28,6 +28,7 @@ import Management from './pages/Management';
 import Budget from './pages/Budget';
 import StatementPrint from './pages/StatementPrint';
 import TaxDetailForm from './pages/TaxDetailForm';
+import About from './pages/About';
 import NavBar from './components/NavBar';
 import ErrorBoundary from './components/ErrorBoundary';
 import { EventProvider } from './context/EventContext';
@@ -160,6 +161,7 @@ export default function App() {
           {/* Old bookmark/tile links keep working — Aging now lives under Reports */}
           <Route path="/customer-aging" element={<Navigate to="/reports/aging" replace />} />
           <Route path="/change-password" element={<ChangePassword />} />
+          <Route path="/about" element={<About />} />
           <Route path="/price-list" element={<PriceList user={user} />} />
           <Route path="/floor-plan" element={<FloorPlan user={user} />} />
           <Route

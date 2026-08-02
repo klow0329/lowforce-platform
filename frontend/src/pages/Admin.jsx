@@ -264,7 +264,7 @@ export default function Admin({ user }) {
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Segments');
-    XLSX.writeFile(book, 'segment_template.xlsx');
+    XLSX.writeFile(book, 'segment_template.csv');
   }
 
   async function handleUploadSegmentFile(e) {
@@ -303,7 +303,7 @@ export default function Admin({ user }) {
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Repeat Exhibitors');
-    XLSX.writeFile(book, 'repeat_exhibitor_template.xlsx');
+    XLSX.writeFile(book, 'repeat_exhibitor_template.csv');
   }
 
   async function handleUploadRepeatFile(e) {
@@ -339,21 +339,23 @@ export default function Admin({ user }) {
         'Salesperson Email', 'Agent Name', 'Billing Company',
       ],
       [
-        'ACME EXHIBITIONS SDN BHD', 'ACME EXPO', 'MY', '12 Jalan Ampang', '50450', 'Kuala Lumpur', 'W.P. Kuala Lumpur',
-        '199901012345', 'C1234567890', 'W10-1234-56789012', 'https://acme-exhibitions.example.com', '+60-3-1234-5679',
-        'Jane Tan', 'Marketing Manager', '+60-12-345-6789', 'jane.tan@acme-exhibitions.example.com',
-        'Ahmad Faizal', 'Finance Executive', '+60-12-987-6543', 'ahmad.faizal@acme-exhibitions.example.com',
+        'ACME EXHIBITIONS SDN BHD', 'ACME EXPO', 'MY', '12 JALAN AMPANG', '50450', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR',
+        '199901012345', 'C1234567890', 'W10-1234-56789012', 'https://acme-exhibitions.example.com', '60312345679',
+        'JANE TAN', 'MARKETING MANAGER', '60123456789', 'jane.tan@acme-exhibitions.example.com',
+        'AHMAD FAIZAL', 'FINANCE EXECUTIVE', '60129876543', 'ahmad.faizal@acme-exhibitions.example.com',
         'salesperson@example.com', 'ACME TRAVEL & EVENTS', '',
       ],
       [
         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-        '', '', '* = mandatory. Delete the sample rows above before importing your real data. '
-          + 'Salesperson Email / Agent Name / Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable.',
+        '', '', '* = mandatory. Delete the sample row above before importing your real data. Contact/phone numbers '
+          + 'must be digits only (no +, spaces, or dashes — required for WhatsApp links). Everything is trimmed and '
+          + 'converted to UPPERCASE on import except Website and email addresses. Salesperson Email / Agent Name / '
+          + 'Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable.',
       ],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Exhibitors');
-    XLSX.writeFile(book, 'exhibitor_template.xlsx');
+    XLSX.writeFile(book, 'exhibitor_template.csv');
   }
 
   async function handleUploadExhibitorFile(e) {
@@ -404,12 +406,12 @@ export default function Admin({ user }) {
   function handleDownloadAgentTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
       ['Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Salesperson Email'],
-      ['ACME TRAVEL & EVENTS', 'ACME T&E', 'MY', '8 Jalan Bukit Bintang', '55100', 'Kuala Lumpur', 'W.P. Kuala Lumpur', '199801098765', 'C9876543210', 'W10-9876-54321098', 'https://acme-travel.example.com', '+60-3-2345-6780', 'salesperson@example.com'],
-      ['', '', '', '', '', '', '', '', '', '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Salesperson Email is matched by exact text against existing Users — leave blank if not applicable.'],
+      ['ACME TRAVEL & EVENTS', 'ACME T&E', 'MY', '8 JALAN BUKIT BINTANG', '55100', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR', '199801098765', 'C9876543210', 'W10-9876-54321098', 'https://acme-travel.example.com', '60323456780', 'salesperson@example.com'],
+      ['', '', '', '', '', '', '', '', '', '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Trimmed and converted to UPPERCASE on import except Website. Salesperson Email is matched by exact text against existing Users — leave blank if not applicable.'],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Agents');
-    XLSX.writeFile(book, 'agent_template.xlsx');
+    XLSX.writeFile(book, 'agent_template.csv');
   }
 
   async function handleUploadAgentFile(e) {
@@ -450,13 +452,13 @@ export default function Admin({ user }) {
   function handleDownloadExpenseCodeTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
       ['Code *', 'Description *', 'Type (EXPENSE or REVENUE)'],
-      ['MKT-001', 'Marketing & Advertising', 'EXPENSE'],
-      ['REV-001', 'Sponsorship Income', 'REVENUE'],
+      ['MKT-001', 'MARKETING & ADVERTISING', 'EXPENSE'],
+      ['REV-001', 'SPONSORSHIP INCOME', 'REVENUE'],
       ['* = mandatory. Delete the sample rows above before importing your real data.', '', 'Type defaults to EXPENSE if left blank.'],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Expense Codes');
-    XLSX.writeFile(book, 'expense_code_template.xlsx');
+    XLSX.writeFile(book, 'expense_code_template.csv');
   }
 
   async function handleUploadExpenseCodeFile(e) {
@@ -494,7 +496,7 @@ export default function Admin({ user }) {
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Users');
-    XLSX.writeFile(book, 'user_template.xlsx');
+    XLSX.writeFile(book, 'user_template.csv');
   }
 
   async function handleUploadUserFile(e) {
@@ -531,6 +533,22 @@ export default function Admin({ user }) {
       await navigator.clipboard.writeText(`Subject: ${fill(template.subject)}\n\n${fill(template.body)}`);
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  // Actually delivers the invite via SMTP instead of drafting it for the
+  // Admin to send by hand — falls back to a clear message (not a crash) if
+  // this server doesn't have SMTP_HOST/PORT/USER/PASSWORD set yet.
+  const [invitingEmail, setInvitingEmail] = useState('');
+  async function sendUserInvite(user) {
+    setInvitingEmail(user.email);
+    try {
+      await api.sendUserInviteEmail(user);
+      window.alert(`Invite email sent to ${user.email}.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setInvitingEmail('');
     }
   }
 
@@ -1779,7 +1797,12 @@ export default function Admin({ user }) {
                         <td style={{ fontFamily: 'monospace' }}>{u.temp_password}</td>
                         <td>
                           {userImportMode === 'email_invite' && (
-                            <button type="button" onClick={() => copyUserInvite(u)}>Copy Invite Email</button>
+                            <>
+                              <button type="button" onClick={() => copyUserInvite(u)} style={{ marginRight: 6 }}>Copy Invite Email</button>
+                              <button type="button" disabled={invitingEmail === u.email} onClick={() => sendUserInvite(u)}>
+                                {invitingEmail === u.email ? 'Sending...' : 'Send Invite Email'}
+                              </button>
+                            </>
                           )}
                         </td>
                       </tr>
