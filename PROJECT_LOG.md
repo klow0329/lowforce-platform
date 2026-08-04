@@ -6,6 +6,28 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04 (later)
+
+**Asked:** six items — (1) advice on multi-event / multi-company exhibitor scoping and role design; (2) event columns on the Exhibitor template; (3) cap attachments at 3MB; (4) Floor Plan hall header showing allocated vs total sqm/booths; (5) whether SSO can offer an account chooser; (6) a booth/sqm analysis report (local vs international, by country, by type).
+
+**Built / decided:**
+- **(2) Exhibitor template — "Event Codes" column.** Comma-separated main/sub event codes, resolved by name on import exactly like Agent Name / Salesperson Email / Billing Company already are, writing to `exhibitor_events`. Deliberately **additive**: an event not listed in the sheet is never removed, so a partial import can't silently wipe participation. Unknown codes are reported in `skipped` rather than failing the row. Template also lists that company's valid codes inline.
+- **(3) Attachments capped at 3MB** — invoice, contract and credit note attachments, front-end pre-check and multer limit and the shared 413 message. Found and fixed a genuine mismatch along the way: company branding uploads were **10MB in the backend while the Admin screen told users 5MB** — both now 3MB. **Left Floor Plan hall backgrounds at 25MB** deliberately: those are scanned hall maps / Illustrator PDF exports and would break at 3MB.
+- **(4) Hall allocation tally** on the Floor Plan header — allocated vs total booths and sqm. **Found a real data-presentation trap while verifying**: Hall 1 & 2 showed "152 / 152 sqm (100%)" because 131 of its 148 booths have no sqm captured — arithmetically correct but reads as "hall sold out". The percentage is now suppressed whenever any booth lacks sqm, replaced by an explicit "N booth(s) have no sqm set — hall capacity is incomplete" warning.
+- **(6) New "Booth & Space" report** (`getBoothSpace` + `PerfBoothSpace.jsx`): allocated vs total space/booths, Contracted vs Proposed, local vs international, by country and by booth type. Sourced from `floor_plan_booths` rather than billing line items — the Floor Plan is the source of truth for allocation now, and counting booths directly sidesteps the BAS-vs-upgrade double-counting `getByItem` has to correct for. Verified reconciling against live data: 33 booths / 296 sqm consistent across totals, country and type breakdowns.
+- Deployed and verified live on `lowforce.co`.
+
+**Advice given (nothing built):**
+- **(1) Multi-event/multi-company exhibitor scoping** — recommended keeping ONE database and ONE exhibitor table, adding a per-event "assignment" layer plus a global search that shows name/owner/event but blocks opening the record. Advised against separate databases per event/company (kills cross-company search, multiplies backup/migration surface, and the group-consolidation feature already in the schema would become impossible). Also flagged the roles the user hadn't listed: Operations, Marketing, and a read-only Group/Executive role. Not built — needs the user's decision first.
+- **(5) SSO account chooser** — yes, this is standard (`prompt=select_account` on the OAuth request forces Google/Microsoft to show the account picker instead of silently using whichever account is already signed in). Still advisory only; SSO itself remains unbuilt.
+
+**Still open / unresolved:**
+- Items (1) and (5) are advice only — no code written for either. (1) in particular needs the user to choose a direction before anything is built.
+- The Floor Plan sqm-capacity data gap is now *surfaced* but not *fixed* — someone still needs to enter sqm for the 131 booths in Hall 1 & 2 (and check other halls) before the take-up percentage becomes meaningful.
+- Stamp duty rate still unverified against LHDN (carried over from earlier today).
+
+---
+
 ## 2026-08-04
 
 **Asked:** (1) for a clean fresh account, clear the seeded tax codes so each company defines its own, and add a Stamp Duty option (active/inactive; when active, usable on Opportunity/Contract/billing) — user's stated Malaysian rule: 0.5% of total value excluding GST/SST, to the nearest RM5, minimum RM10, with a request to verify against Malaysian stamp rules. (2) Advice on adding SSO as a second login method.
