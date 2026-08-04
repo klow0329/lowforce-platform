@@ -6,6 +6,35 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04 (night)
+
+**Asked:** proceed with the 3-phase group resource sharing plan, **with each entity able to opt out of sharing its own data**. Noted that a future Vendor list (Operations invoicing) will follow the same concept.
+
+**Built — Phase 1 only (of 3):**
+- **`company_group_sharing` table (migration 079)**, keyed by `(company_id, resource_type)` rather than a boolean column on `company_settings` — chosen specifically so the planned **Vendor** list plugs in with **no schema change**, just a new `resource_type` value.
+- **`backend/src/utils/groupSharing.js`** — the one security-critical helper. Group is always DERIVED (`user -> company -> group`), never accepted as a parameter.
+- **Two deliberate policy decisions**, both flagged to the user:
+  - **Opt-in, default OFF.** The user asked for an opt-*out*; I made it opt-*in* instead, because sharing identity data across separate legal entities shouldn't silently switch on during an upgrade, and LowForce is sold to unrelated groups whose subsidiaries may be genuinely independent. One click to enable per company.
+  - **Reciprocal.** You only see peers while sharing yourself — otherwise a company could harvest the group's contact list while exposing nothing.
+- **`listExhibitors`** gained a **completely separate** group query returning `groupMatches[]` (name, country, owning company, salesperson, events — deliberately **no contact fields**). Runs only on an explicit search, never on browsing. The tenant-scoped query above it is byte-for-byte unchanged.
+- **Admin > Company Profile** toggle, showing the group name and peer count, disabled with an explanation for standalone companies.
+- **Exhibitor list** renders group matches in their own greyed, non-clickable section headed "Also found elsewhere in your group", so they can never be mistaken for owned records.
+
+**Verified by live test (all four isolation properties):**
+  1. default off → nobody sees anyone;
+  2. one-way sharing → the non-sharer sees nothing (reciprocity holds);
+  3. a **different customer's group** (simulated "ABC Holdings") never appears even while sharing aggressively;
+  4. cross-company `GET /exhibitors/:id` **and** `claim-for-event` both hard-blocked (404), and group results carry no contact fields.
+All 381 existing `company_id` filters untouched — this is an additive read path, not a relaxation of tenant isolation. Deployed and verified live on `lowforce.co`.
+
+**Still open / unresolved:**
+- **Phase 2 (adopt into my company)** and **Phase 3 (group consolidated reporting)** are NOT built. Phase 2 needs an explicit decision on adopt-vs-transfer semantics (my recommendation: copy identity fields into the adopting company's own row, blank billing, link via `master_exhibitor_id` — two rows deliberately, same as SAP company-code data, because each entity invoices separately).
+- The **Vendor** list doesn't exist yet; the sharing table is ready for it (`resource_type = 'VENDORS'`), but nothing consumes it.
+- `users.has_group_access` is still unused — deliberately reserved for Phase 3 consolidated reporting rather than gating Phase 1 search (the company-level flag governs that).
+- Nobody has enabled sharing yet: every company is opted out, so the feature is dormant until an Admin turns it on.
+
+---
+
 ## 2026-08-04 (evening)
 
 **Asked:** build per-event exhibitor ownership + search-visible/open-blocked (with a clarifying question: does sharing an exhibitor across 2 events create 2 duplicate exhibitor records?); contested-booth indicator on the Floor Plan map; sold-vs-proposed split in the hall tally; LowForce logo on the login page.
