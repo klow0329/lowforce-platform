@@ -339,21 +339,24 @@ export default function Admin({ user }) {
         'Reg No', 'TIN No', 'SST No', 'Website', 'Fax',
         'Contact 1 Name', 'Contact 1 Job Title', 'Contact 1 Phone', 'Contact 1 Email',
         'Contact 2 Name', 'Contact 2 Job Title', 'Contact 2 Phone', 'Contact 2 Email',
-        'Salesperson Email', 'Agent Name', 'Billing Company',
+        'Salesperson Email', 'Agent Name', 'Billing Company', 'Event Codes',
       ],
       [
         'ACME EXHIBITIONS SDN BHD', 'ACME EXPO', 'MY', '12 JALAN AMPANG', '50450', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR',
         '199901012345', 'C1234567890', 'W10-1234-56789012', 'https://acme-exhibitions.example.com', '60312345679',
         'JANE TAN', 'MARKETING MANAGER', '60123456789', 'jane.tan@acme-exhibitions.example.com',
         'AHMAD FAIZAL', 'FINANCE EXECUTIVE', '60129876543', 'ahmad.faizal@acme-exhibitions.example.com',
-        'salesperson@example.com', 'ACME TRAVEL & EVENTS', '',
+        'salesperson@example.com', 'ACME TRAVEL & EVENTS', '', events.map((ev) => ev.code).slice(0, 2).join(', ') || 'MIFB27',
       ],
       [
         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-        '', '', '* = mandatory. Delete the sample row above before importing your real data. Contact/phone numbers '
+        '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Contact/phone numbers '
           + 'must be digits only (no +, spaces, or dashes — required for WhatsApp links). Everything is trimmed and '
           + 'converted to UPPERCASE on import except Website and email addresses. Salesperson Email / Agent Name / '
-          + 'Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable.',
+          + 'Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable. '
+          + 'Event Codes: which main and/or sub events this exhibitor takes part in, comma-separated — '
+          + `valid codes for this company: ${events.map((ev) => ev.code).join(', ') || '(none set up yet — add Events first)'}. `
+          + 'Leave blank to leave existing event participation untouched.',
       ],
     ]);
     const book = XLSX.utils.book_new();
@@ -395,6 +398,7 @@ export default function Admin({ user }) {
         salesperson_email: r['Salesperson Email'] ?? r['salesperson_email'] ?? '',
         agent_name: r['Agent Name'] ?? r['agent_name'] ?? '',
         billing_company_name: r['Billing Company'] ?? r['billing_company_name'] ?? '',
+        event_codes: r['Event Codes'] ?? r['event_codes'] ?? '',
       })).filter((r) => r.company_name);
       const result = await api.importExhibitors(rows);
       setExhibitorImportResult(result);
@@ -1302,7 +1306,7 @@ export default function Admin({ user }) {
         <h4 style={{ marginBottom: 4 }}>Branding</h4>
         <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
           Your own logo and letterhead — replaces ExpoCO's on every Contract, Proforma, Invoice, Receipt and
-          Statement this company generates. PNG/JPG, up to 5MB each.
+          Statement this company generates. PNG/JPG, up to 3MB each.
         </p>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
           {[

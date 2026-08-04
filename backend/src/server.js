@@ -100,7 +100,7 @@ if (fs.existsSync(distDir)) {
 // Basic error handler so a thrown error doesn't crash the whole server
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'File is too large — the limit is 5MB. Please compress it and try again.' });
+    return res.status(413).json({ error: 'File is too large — the limit is 3MB. Please compress it and try again.' });
   }
   console.error(err);
   res.status(500).json({ error: 'Something went wrong.' });

@@ -20,12 +20,11 @@ const storage = multer.diskStorage({
   },
 });
 
-// 5MB — plenty for a scanned/photographed slip or a PDF e-invoice once
-// compressed; matches the limit already used for company branding uploads
-// (settings.controller.js) elsewhere in the app.
+// 3MB — plenty for a scanned/photographed slip or a PDF e-invoice once
+// compressed; matches every other document attachment type in the app.
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 3 * 1024 * 1024 },
 });
 
 async function listAttachments(req, res) {

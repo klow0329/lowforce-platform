@@ -60,8 +60,8 @@ export default function InvoiceDetail({ user }) {
   async function handleUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File is too large — the limit is 5MB. Please compress it and try again.');
+    if (file.size > 3 * 1024 * 1024) {
+      setError('File is too large — the limit is 3MB. Please compress it and try again.');
       e.target.value = '';
       return;
     }
@@ -318,7 +318,7 @@ export default function InvoiceDetail({ user }) {
       <div style={{ marginTop: 32 }}>
         <h3>Attachments</h3>
         <p style={{ fontSize: 13, color: '#5c6070' }}>
-          Upload any related document for audit/reference — e.g. bank-in slip, e-invoice, correspondence. Max 5MB per file (compress first if needed).
+          Upload any related document for audit/reference — e.g. bank-in slip, e-invoice, correspondence. Max 3MB per file (compress first if needed).
         </p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <select value={uploadDocType} onChange={(e) => setUploadDocType(e.target.value)} style={{ padding: 6 }}>

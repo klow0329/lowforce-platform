@@ -27,5 +27,6 @@ router.get('/performance/by-month', asyncHandler(performance.getByMonth));
 router.get('/performance/targets', asyncHandler(performance.getTargets));
 router.put('/performance/targets', asyncHandler(performance.saveTargets));
 router.get('/performance/agent-commission', asyncHandler(performance.getAgentCommission));
+router.get('/performance/booth-space', asyncHandler(performance.getBoothSpace));
 
 module.exports = router;

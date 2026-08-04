@@ -4,6 +4,7 @@ import PerfBySalesperson from './reports/PerfBySalesperson';
 import PerfByAgent from './reports/PerfByAgent';
 import PerfByItem from './reports/PerfByItem';
 import PerfByCountry from './reports/PerfByCountry';
+import PerfBoothSpace from './reports/PerfBoothSpace';
 import PerfByMonth from './reports/PerfByMonth';
 import PerfPipeline from './reports/PerfPipeline';
 import PerfComparison from './reports/PerfComparison';
@@ -20,6 +21,7 @@ const SECTIONS = [
   { key: 'agent', label: 'Agent Analysis', Component: PerfByAgent },
   { key: 'items', label: 'By Item & Type', Component: PerfByItem },
   { key: 'country', label: 'By Country', Component: PerfByCountry },
+  { key: 'booth-space', label: 'Booth & Space', Component: PerfBoothSpace },
   { key: 'monthly', label: 'By Month', Component: PerfByMonth },
   { key: 'pipeline', label: 'Pipeline', Component: PerfPipeline },
   { key: 'comparison', label: 'Comparison', Component: PerfComparison },

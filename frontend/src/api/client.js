@@ -271,6 +271,7 @@ export const api = {
   getPerfByItem: (eventId) => apiFetch(`/reports/performance/by-item?event_id=${eventId}`),
   getPerfPipeline: (eventId) => apiFetch(`/reports/performance/pipeline?event_id=${eventId}`),
   getPerfByCountry: (eventId) => apiFetch(`/reports/performance/by-country?event_id=${eventId}`),
+  getPerfBoothSpace: (eventId) => apiFetch(`/reports/performance/booth-space?event_id=${eventId}`),
   getPerfByMonth: (eventId) => apiFetch(`/reports/performance/by-month?event_id=${eventId}`),
   getAgentCommission: (eventId) => apiFetch(`/reports/performance/agent-commission?event_id=${eventId}`),
   getPerfComparison: (eventId, compareEventId) =>

@@ -46,10 +46,24 @@ async function listHalls(req, res) {
   if (!event_id) return res.status(400).json({ error: 'event_id is required.' });
 
   const result = await pool.query(
+    // Booth counts AND sqm, total vs allocated — the Floor Plan is now the
+    // single source of truth for booth allocation, so each hall shows how
+    // much of its own space is actually taken (see the hall header in
+    // FloorPlan.jsx). "Allocated" uses the same definition as
+    // occupied_count: reserved, or claimed by an Opportunity/Contract.
     `SELECT h.id, h.name, h.background_filename, h.background_original_filename, h.source_pdf_filename, h.created_at,
             (SELECT COUNT(*) FROM floor_plan_booths b WHERE b.hall_id = h.id) AS booth_count,
             (SELECT COUNT(*) FROM floor_plan_booths b WHERE b.hall_id = h.id
-               AND (b.status = 'RESERVED' OR b.opportunity_id IS NOT NULL OR b.sales_order_id IS NOT NULL)) AS occupied_count
+               AND (b.status = 'RESERVED' OR b.opportunity_id IS NOT NULL OR b.sales_order_id IS NOT NULL)) AS occupied_count,
+            (SELECT COALESCE(SUM(b.sqm), 0) FROM floor_plan_booths b WHERE b.hall_id = h.id) AS total_sqm,
+            (SELECT COALESCE(SUM(b.sqm), 0) FROM floor_plan_booths b WHERE b.hall_id = h.id
+               AND (b.status = 'RESERVED' OR b.opportunity_id IS NOT NULL OR b.sales_order_id IS NOT NULL)) AS occupied_sqm,
+            -- Booths with no sqm captured yet. Without surfacing this, a
+            -- hall where only the sold booths have sqm reads as "100%
+            -- allocated" when really the capacity denominator is unknown —
+            -- the percentage is arithmetically right but badly misleading.
+            (SELECT COUNT(*) FROM floor_plan_booths b WHERE b.hall_id = h.id
+               AND (b.sqm IS NULL OR b.sqm = 0)) AS booths_without_sqm
      FROM floor_plan_halls h
      WHERE h.company_id = $1 AND h.event_id = $2
      ORDER BY h.name`,

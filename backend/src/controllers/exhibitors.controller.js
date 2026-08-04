@@ -369,6 +369,7 @@ async function importExhibitors(req, res) {
       [req.companyId, companyName]
     );
     const cols = Object.keys(fields);
+    let exhibitorId;
     if (existing.rows[0]) {
       if (cols.length > 0) {
         const setClause = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
@@ -377,15 +378,39 @@ async function importExhibitors(req, res) {
           [existing.rows[0].id, req.companyId, ...cols.map((c) => fields[c])]
         );
       }
+      exhibitorId = existing.rows[0].id;
       updated += 1;
     } else {
       const insertCols = ['company_id', 'company_name', ...cols];
       const placeholders = insertCols.map((_, i) => `$${i + 1}`);
-      await pool.query(
-        `INSERT INTO exhibitors (${insertCols.join(', ')}) VALUES (${placeholders.join(', ')})`,
+      const inserted = await pool.query(
+        `INSERT INTO exhibitors (${insertCols.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING id`,
         [req.companyId, companyName, ...cols.map((c) => fields[c])]
       );
+      exhibitorId = inserted.rows[0].id;
       created += 1;
+    }
+
+    // Which main/sub events this exhibitor takes part in, given as a
+    // comma-separated list of event CODES (e.g. "MIFB27, MYFT26") — matched
+    // by name the same way Agent/Salesperson/Billing Company are above.
+    // Additive: an unlisted event is NOT removed, so a partial import can't
+    // silently wipe participation the sheet simply didn't mention. Blank
+    // leaves everything as-is.
+    const eventCodes = cleanText(row.event_codes).split(',').map((c) => c.trim()).filter(Boolean);
+    for (const code of eventCodes) {
+      const ev = await pool.query(
+        `SELECT id FROM events WHERE company_id = $1 AND UPPER(TRIM(code)) = $2`,
+        [req.companyId, code]
+      );
+      if (!ev.rows[0]) {
+        skipped.push(`${companyName}: event code "${code}" not found (exhibitor still saved, that event not linked)`);
+        continue;
+      }
+      await pool.query(
+        `INSERT INTO exhibitor_events (exhibitor_id, event_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [exhibitorId, ev.rows[0].id]
+      );
     }
   }
 

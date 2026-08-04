@@ -54,8 +54,8 @@ export default function CreditNoteDetail({ user }) {
   async function handleUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File is too large — the limit is 5MB. Please compress it and try again.');
+    if (file.size > 3 * 1024 * 1024) {
+      setError('File is too large — the limit is 3MB. Please compress it and try again.');
       e.target.value = '';
       return;
     }
@@ -267,7 +267,7 @@ export default function CreditNoteDetail({ user }) {
       {(cn.status === 'DRAFT' || cn.status === 'CONFIRMED') && (
         <div style={{ marginTop: 32 }}>
           <h3>Attachments</h3>
-          <p style={{ fontSize: 13, color: '#5c6070' }}>Upload any related document for audit/reference. Max 5MB per file (compress first if needed).</p>
+          <p style={{ fontSize: 13, color: '#5c6070' }}>Upload any related document for audit/reference. Max 3MB per file (compress first if needed).</p>
           <input type="file" onChange={handleUpload} disabled={uploading} />
           <table width="100%" cellPadding="6" style={{ marginTop: 8 }}>
             <tbody>

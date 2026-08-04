@@ -857,6 +857,37 @@ export default function FloorPlan({ user }) {
               <option key={h.id} value={h.id}>{h.name} ({h.booth_count} booths, {h.occupied_count} occupied)</option>
             ))}
           </select>
+          {/* Allocation tally for the hall currently selected — the Floor
+              Plan drives booth allocation now, so this is the authoritative
+              "how full is this hall" figure that the booth list below
+              should agree with. */}
+          {selectedHall && (
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 13 }}>
+                <span style={{ color: '#5c6070' }}>Booths allocated: </span>
+                <strong>{Number(selectedHall.occupied_count) || 0} / {Number(selectedHall.booth_count) || 0}</strong>
+              </div>
+              <div style={{ fontSize: 13 }}>
+                <span style={{ color: '#5c6070' }}>Sqm allocated: </span>
+                <strong>
+                  {(Number(selectedHall.occupied_sqm) || 0).toLocaleString('en-MY')} / {(Number(selectedHall.total_sqm) || 0).toLocaleString('en-MY')} sqm
+                </strong>
+                {Number(selectedHall.total_sqm) > 0 && !Number(selectedHall.booths_without_sqm) && (
+                  <span style={{ color: '#5c6070' }}>
+                    {' '}({Math.round((Number(selectedHall.occupied_sqm) || 0) / Number(selectedHall.total_sqm) * 100)}%)
+                  </span>
+                )}
+              </div>
+              {/* The percentage is deliberately hidden while any booth is
+                  missing its sqm — the denominator would be understated,
+                  making a half-empty hall read as 100% allocated. */}
+              {Number(selectedHall.booths_without_sqm) > 0 && (
+                <div style={{ fontSize: 12, color: '#B45309', background: '#FEF3C7', padding: '3px 8px', borderRadius: 6 }}>
+                  {Number(selectedHall.booths_without_sqm)} booth(s) have no sqm set — hall capacity is incomplete
+                </div>
+              )}
+            </div>
+          )}
           {isElevated && (
             <>
               {hallId && <button type="button" onClick={handleDeleteHall}>Delete Hall</button>}

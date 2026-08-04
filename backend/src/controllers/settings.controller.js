@@ -30,8 +30,11 @@ const brandingStorage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, `${crypto.randomBytes(16).toString('hex')}${path.extname(file.originalname)}`),
 });
 const uploadBranding = multer({
+  // 3MB, matching every document attachment type in the app. This used to
+  // be 10MB here while the Admin screen told users 5MB — a genuine
+  // mismatch, so the two are now aligned on one number.
   storage: brandingStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 3 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const isPdfType = PDF_BRANDING_TYPES.includes(req.params.type);
     if (isPdfType) {

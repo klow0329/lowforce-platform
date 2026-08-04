@@ -5,6 +5,7 @@
 // (main event + sub-events, same pattern as the Dashboard).
 const { pool } = require('../config/db');
 const { isElevated, visibilityClause } = require('../utils/visibility');
+const { getPrimaryBaseCode } = require('../utils/priceListHelpers');
 
 // "Total Sqm" is always sales_orders.total_sqm / opportunities.total_sqm —
 // the one field Sales actually enters for "how much physical space does
@@ -733,7 +734,134 @@ async function getAgentCommission(req, res) {
   res.json({ rows, agentSummary: Object.values(byAgent) });
 }
 
+// Booth & Space Analysis — physical floor space, not revenue. Deliberately
+// sourced from floor_plan_booths rather than sales_order_items: the Floor
+// Plan is the single source of truth for booth allocation now (booth type
+// is picked there, and Total Sqm on a Contract is derived from it), so
+// counting the booths themselves is what actually reconciles with what
+// Operations sees on the map. That also makes each booth exactly one row —
+// no BAS-vs-upgrade double-counting to correct for (contrast getByItem,
+// which works off line items and has to subtract upgrade sqm back out).
+//
+// A booth counts as allocated when it carries a Contract or Opportunity
+// claim — same definition the Floor Plan's own hall tallies use. Contracted
+// (sales_order) and Proposed (opportunity) are reported separately, since
+// a proposal is not yet sold space.
+async function getBoothSpace(req, res) {
+  const { event_id } = req.query;
+  if (!event_id) return res.status(400).json({ error: 'event_id is required.' });
+
+  // One row per allocated booth, tagged with who holds it, their country,
+  // and which booth type it was tagged as on the Floor Plan picker. The
+  // COALESCE(sales_order → opportunity) ordering matches listBooths: a
+  // Contract claim outranks an Opportunity claim on the same booth.
+  const allocatedCte = `
+    WITH allocated AS (
+      SELECT b.id, b.sqm,
+             CASE WHEN b.sales_order_id IS NOT NULL THEN 'CONTRACTED' ELSE 'PROPOSED' END AS allocation_state,
+             COALESCE(ex_so.country_code, ex_opp.country_code) AS country_code,
+             COALESCE(
+               (SELECT c.allocated_item_code FROM floor_plan_booth_claims c
+                WHERE c.booth_id = b.id AND c.record_type = 'sales_order' AND c.record_id = b.sales_order_id AND c.released_at IS NULL),
+               (SELECT c.allocated_item_code FROM floor_plan_booth_claims c
+                WHERE c.booth_id = b.id AND c.record_type = 'opportunity' AND c.record_id = b.opportunity_id AND c.released_at IS NULL)
+             ) AS item_code
+      FROM floor_plan_booths b
+      JOIN floor_plan_halls h ON h.id = b.hall_id
+      LEFT JOIN sales_orders so ON so.id = b.sales_order_id AND so.is_active = TRUE
+      LEFT JOIN exhibitors ex_so ON ex_so.id = so.exhibitor_id
+      LEFT JOIN opportunities opp ON opp.id = b.opportunity_id AND opp.is_active = TRUE
+      LEFT JOIN exhibitors ex_opp ON ex_opp.id = opp.exhibitor_id
+      WHERE h.company_id = $1 AND h.event_id ${EVENT_SCOPE}
+        AND (b.sales_order_id IS NOT NULL OR b.opportunity_id IS NOT NULL)
+    )`;
+
+  const params = [req.companyId, event_id];
+  const [totalsR, byCountryR, byTypeR] = await Promise.all([
+    // Whole-event capacity, so the allocated figures have a denominator.
+    pool.query(
+      `SELECT COUNT(*) AS total_booths, COALESCE(SUM(b.sqm), 0) AS total_sqm,
+              COUNT(*) FILTER (WHERE b.sales_order_id IS NOT NULL OR b.opportunity_id IS NOT NULL) AS allocated_booths,
+              COALESCE(SUM(b.sqm) FILTER (WHERE b.sales_order_id IS NOT NULL OR b.opportunity_id IS NOT NULL), 0) AS allocated_sqm,
+              COUNT(*) FILTER (WHERE b.sales_order_id IS NOT NULL) AS contracted_booths,
+              COALESCE(SUM(b.sqm) FILTER (WHERE b.sales_order_id IS NOT NULL), 0) AS contracted_sqm,
+              COUNT(*) FILTER (WHERE b.sales_order_id IS NULL AND b.opportunity_id IS NOT NULL) AS proposed_booths,
+              COALESCE(SUM(b.sqm) FILTER (WHERE b.sales_order_id IS NULL AND b.opportunity_id IS NOT NULL), 0) AS proposed_sqm
+       FROM floor_plan_booths b
+       JOIN floor_plan_halls h ON h.id = b.hall_id
+       WHERE h.company_id = $1 AND h.event_id ${EVENT_SCOPE}`, params
+    ),
+    // Local vs International is derived per row from country_code, same
+    // MY-vs-rest rule as getByCountry/getByItem — kept consistent so the
+    // two reports don't disagree on what "local" means.
+    pool.query(
+      `${allocatedCte}
+       SELECT COALESCE(a.country_code, '—') AS code,
+              COALESCE(cy.name, 'Unspecified') AS country,
+              CASE WHEN a.country_code = 'MY' THEN 'LOCAL' ELSE 'INT' END AS type,
+              COUNT(*) AS booths, COALESCE(SUM(a.sqm), 0) AS sqm,
+              COUNT(*) FILTER (WHERE a.allocation_state = 'CONTRACTED') AS contracted_booths,
+              COALESCE(SUM(a.sqm) FILTER (WHERE a.allocation_state = 'CONTRACTED'), 0) AS contracted_sqm
+       FROM allocated a
+       LEFT JOIN countries cy ON cy.code = a.country_code
+       GROUP BY a.country_code, cy.name
+       ORDER BY sqm DESC`, params
+    ),
+    // Booth type = whatever the Floor Plan picker tagged (BAS/SSS/WOP/...),
+    // joined to the Price List purely for its human-readable description.
+    // An untagged booth falls back to the primary base item's code rather
+    // than being dropped, so the type breakdown always reconciles with the
+    // country breakdown above.
+    pool.query(
+      `${allocatedCte}
+       SELECT COALESCE(a.item_code, $3) AS item_code,
+              COUNT(*) AS booths, COALESCE(SUM(a.sqm), 0) AS sqm,
+              COUNT(*) FILTER (WHERE a.allocation_state = 'CONTRACTED') AS contracted_booths,
+              COALESCE(SUM(a.sqm) FILTER (WHERE a.allocation_state = 'CONTRACTED'), 0) AS contracted_sqm,
+              COUNT(*) FILTER (WHERE a.country_code = 'MY') AS local_booths,
+              COALESCE(SUM(a.sqm) FILTER (WHERE a.country_code = 'MY'), 0) AS local_sqm,
+              COUNT(*) FILTER (WHERE a.country_code IS DISTINCT FROM 'MY') AS int_booths,
+              COALESCE(SUM(a.sqm) FILTER (WHERE a.country_code IS DISTINCT FROM 'MY'), 0) AS int_sqm
+       FROM allocated a
+       GROUP BY COALESCE(a.item_code, $3)
+       ORDER BY sqm DESC`,
+      [...params, await getPrimaryBaseCode(req.companyId, event_id)]
+    ),
+  ]);
+
+  // Descriptions come from the Price List so a company's own renamed/added
+  // booth types show through with no code change.
+  const plResult = await pool.query(
+    `SELECT DISTINCT sales_item_code, description FROM price_list WHERE company_id = $1 AND event_id = $2`,
+    [req.companyId, event_id]
+  );
+  const descByCode = Object.fromEntries(plResult.rows.map((r) => [r.sales_item_code, r.description]));
+
+  const t = totalsR.rows[0];
+  const num = (v) => Number(v) || 0;
+  res.json({
+    totals: {
+      totalBooths: num(t.total_booths), totalSqm: num(t.total_sqm),
+      allocatedBooths: num(t.allocated_booths), allocatedSqm: num(t.allocated_sqm),
+      contractedBooths: num(t.contracted_booths), contractedSqm: num(t.contracted_sqm),
+      proposedBooths: num(t.proposed_booths), proposedSqm: num(t.proposed_sqm),
+    },
+    byCountry: byCountryR.rows.map((r) => ({
+      code: r.code, country: r.country, type: r.type,
+      booths: num(r.booths), sqm: num(r.sqm),
+      contracted_booths: num(r.contracted_booths), contracted_sqm: num(r.contracted_sqm),
+    })),
+    byType: byTypeR.rows.map((r) => ({
+      item_code: r.item_code, description: descByCode[r.item_code] || r.item_code,
+      booths: num(r.booths), sqm: num(r.sqm),
+      contracted_booths: num(r.contracted_booths), contracted_sqm: num(r.contracted_sqm),
+      local_booths: num(r.local_booths), local_sqm: num(r.local_sqm),
+      int_booths: num(r.int_booths), int_sqm: num(r.int_sqm),
+    })),
+  });
+}
+
 module.exports = {
   getOverview, getBySalesperson, getByAgent, getByItem, getPipeline, getComparison, getByCountry, getByMonth, getTargets, saveTargets,
-  getAgentCommission,
+  getAgentCommission, getBoothSpace,
 };
