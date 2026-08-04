@@ -6,6 +6,29 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04 (very late night)
+
+**Asked:** (1) still can't log in to `lowforce.co/platform` with the tenant password. (2) Audit the system for seeded/hardcoded rules that run without any admin setup — approval matrix (contract, CN) and Finance routing (invoice/CN confirm, payment) specifically named as suspected examples — and make everything admin-configurable, no premade defaults; show the current live routing for ExpoCO so it can be checked against reality. (3) Document all of this before context is lost.
+
+**(1) Explained + fixed:** the platform password will never match the tenant password — `/platform` is a structurally separate account system by design (rule #10), and no platform account existed on Railway for this email yet. Created one directly against Railway (`DATABASE_PUBLIC_URL`, confirmed "Database: REMOTE" in the script's own output). Credentials given directly in chat, not withheld — this is the user's own first-party platform account, not a third-party credential.
+
+**(2) Audited every approval/routing decision in the codebase:**
+- **Contract/Credit Note/Contract Reduction approval** — already fully admin-configurable via `approval_rules` + `approverMatrix.js`, and ExpoCO already has real rules configured (Revenue @ RM0 → MGT, CN @ RM0 → MGT, Post-approval-edit → MGT, Discount tiers → MGT/ADM). The "falls back to any Admin/Management if unconfigured" behavior is real but is disclosed directly in the Admin UI's own help text — not hidden, not a surprise. Verified this exact live state through the Admin > Approval Rules screen via the browser tool, matching the DB query exactly — this is the answer to "show me ExpoCO's current routing so I can check it."
+- **Invoice Confirm, Credit Note Confirm, Payment Record** — found genuinely 100% hardcoded (`CAN_CONFIRM_ROLES = ['FIN']` / `CAN_RECORD_PAYMENT_ROLES = ['FIN']`, three controllers), with zero admin exposure and no way to route to a specific person. Fixed: three new trigger types on the same Approval Rules screen (`INVOICE_CONFIRM`, `CREDIT_NOTE_CONFIRM`, `PAYMENT_RECORD`), backed by a new, deliberately **stricter** `getFinanceGateApprover`/`canActOnFinanceGate` path — not the existing tiered-matrix path, because that one grants Admin an automatic bypass on every tier, and these three were previously Finance-only with Admin **explicitly excluded** by a prior instruction. Reusing the matrix path would have silently reintroduced an Admin override nobody asked for.
+- **Found a third, smaller hardcode along the way**: the Approver "by role" picker (main approver / escalation target / step-2 approver) only ever offered Admin/Management as options, even though roles are already a per-company table and the same screen already supports "by specific person." Now populated from the company's real roles list — Finance (needed for the fix above) and any other role are now selectable everywhere a role can be picked.
+- No DB migration needed — `trigger_type` has no CHECK constraint, it's free text already.
+
+**Verified live:** unconfigured Payment Record still blocks Admin (unchanged FIN-only default); adding a rule naming ADM let Admin's request through (hit real business validation instead of 403); Finance was then correctly blocked once the rule named someone else instead — proving no silent fallback once configured. Admin UI checked live in the browser: all three new triggers appear with their help text, no threshold field (correct — these are "who," not "how much"), and the role dropdown shows all 6 of ExpoCO's real roles.
+
+**(3) Documented as CLAUDE.md rules #10 (Platform-owner console) and #11 (no routing decision may be hardcoded to a role).**
+
+**Still open / unresolved:**
+- Platform console has no self-service "change my password" screen yet — flagged, not built.
+- Accounting module remains on hold per the user's explicit instruction this session.
+- Phase 2 (adopt) of Group Resource Sharing still not built.
+
+---
+
 ## 2026-08-04 (late night, cont.)
 
 **Asked:** hold the accounting build; finish the group/platform database concerns. Also "I haven't seen the platform console — where is it?" and how does SAP control client accounts (add / suspend / remove / link)?
