@@ -18,8 +18,8 @@ export default function ChangePassword() {
     e.preventDefault();
     setError('');
 
-    if (next.length < 8) {
-      setError('New password must be at least 8 characters.');
+    if (next.length < 8 || !/[A-Z]/.test(next) || !/[a-z]/.test(next) || !/[0-9]/.test(next) || !/[^A-Za-z0-9]/.test(next)) {
+      setError('New password must be at least 8 characters and include an uppercase letter, a lowercase letter, a number, and a special character.');
       return;
     }
     if (next !== confirm) {
@@ -54,7 +54,10 @@ export default function ChangePassword() {
         <label style={label}>Current Password</label>
         <input type="password" style={inputStyle} value={current} onChange={(e) => setCurrent(e.target.value)} required />
 
-        <label style={label}>New Password (min 8 characters)</label>
+        <label style={label}>New Password</label>
+        <p style={{ fontSize: 12, color: '#5c6070', margin: '0 0 4px' }}>
+          At least 8 characters, with an uppercase letter, a lowercase letter, a number, and a special character.
+        </p>
         <input type="password" style={inputStyle} value={next} onChange={(e) => setNext(e.target.value)} required />
 
         <label style={label}>Confirm New Password</label>

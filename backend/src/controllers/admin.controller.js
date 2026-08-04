@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { pool } = require('../config/db');
 const { hashPassword } = require('../utils/password');
+const { passwordPolicyError, generateStrongPassword } = require('../utils/passwordPolicy');
 const { cleanText, cleanLower } = require('../utils/importNormalize');
 
 // ---------------------------------------------------------------------------
@@ -119,9 +120,8 @@ async function createUser(req, res) {
   if (!email || !full_name || !role_id || !temp_password) {
     return res.status(400).json({ error: 'email, full_name, role_id and temp_password are required.' });
   }
-  if (temp_password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  }
+  const policyError = passwordPolicyError(temp_password);
+  if (policyError) return res.status(400).json({ error: policyError });
 
   const duplicate = await pool.query(
     `SELECT 1 FROM users WHERE company_id = $1 AND LOWER(email) = LOWER($2)`,
@@ -196,9 +196,8 @@ async function updateUser(req, res) {
 
 async function resetPassword(req, res) {
   const { new_password } = req.body;
-  if (!new_password || new_password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  }
+  const policyError = passwordPolicyError(new_password);
+  if (policyError) return res.status(400).json({ error: policyError });
 
   const passwordHash = await hashPassword(new_password);
   const result = await pool.query(
@@ -226,7 +225,7 @@ async function resetPassword(req, res) {
 // modes create the account identically, the mode only changes what the
 // frontend shows the Admin afterwards.
 function generateTempPassword() {
-  return crypto.randomBytes(6).toString('base64').replace(/[+/=]/g, '').slice(0, 10) + '!1';
+  return generateStrongPassword();
 }
 
 async function importUsers(req, res) {

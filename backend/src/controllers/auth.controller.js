@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { verifyPassword, hashPassword } = require('../utils/password');
+const { passwordPolicyError } = require('../utils/passwordPolicy');
 const { recordAudit } = require('../utils/auditLog');
 
 async function getAvailableRoles(userId) {
@@ -202,9 +203,8 @@ async function changePassword(req, res) {
   if (!current_password || !new_password) {
     return res.status(400).json({ error: 'Current and new password are required.' });
   }
-  if (new_password.length < 8) {
-    return res.status(400).json({ error: 'New password must be at least 8 characters.' });
-  }
+  const policyError = passwordPolicyError(new_password);
+  if (policyError) return res.status(400).json({ error: policyError });
 
   const result = await pool.query(
     `SELECT password_hash FROM users WHERE id = $1`,

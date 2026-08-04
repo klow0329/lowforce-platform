@@ -1011,7 +1011,7 @@ export default function Admin({ user }) {
   }
 
   async function handleResetPassword(u) {
-    const newPassword = window.prompt(`New temporary password for ${u.full_name} (min 8 characters):`);
+    const newPassword = window.prompt(`New temporary password for ${u.full_name} (min 8 characters, with upper/lowercase, a number, and a special character):`);
     if (!newPassword) return;
     setError('');
     try {
@@ -1138,7 +1138,7 @@ export default function Admin({ user }) {
                 <option key={r.id} value={r.id}>{r.name}</option>
               ))}
             </select>
-            <label style={label}>Temporary Password (min 8 characters — the user should change it after first login)</label>
+            <label style={label}>Temporary Password (min 8 characters, with upper/lowercase, a number, and a special character — the user should change it after first login)</label>
             <input style={inputStyle} value={userForm.temp_password} onChange={(e) => setUserForm({ ...userForm, temp_password: e.target.value })} required />
             <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>Create User</button>
           </form>

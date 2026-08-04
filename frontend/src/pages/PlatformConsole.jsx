@@ -144,6 +144,9 @@ export default function PlatformConsole() {
           <label style={label}>Current password</label>
           <input style={input} type="password" value={pwForm.current_password} onChange={(e) => setPwForm({ ...pwForm, current_password: e.target.value })} required />
           <label style={label}>New password</label>
+          <p style={{ fontSize: 11, color: '#5c6070', margin: '0 0 4px' }}>
+            At least 8 characters, with an uppercase letter, a lowercase letter, a number, and a special character.
+          </p>
           <input style={input} type="password" value={pwForm.new_password} onChange={(e) => setPwForm({ ...pwForm, new_password: e.target.value })} required minLength={8} />
           <label style={label}>Confirm new password</label>
           <input style={input} type="password" value={pwForm.confirm} onChange={(e) => setPwForm({ ...pwForm, confirm: e.target.value })} required minLength={8} />

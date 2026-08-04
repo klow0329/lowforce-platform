@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { verifyPassword, hashPassword } = require('../utils/password');
+const { passwordPolicyError, generateStrongPassword } = require('../utils/passwordPolicy');
 
 // Platform actions are logged to their own table (see migration 081) —
 // audit_log's company_id is NOT NULL, and these actions often have no
@@ -76,9 +77,8 @@ async function platformChangePassword(req, res) {
   if (!current_password || !new_password) {
     return res.status(400).json({ error: 'Current and new password are required.' });
   }
-  if (new_password.length < 8) {
-    return res.status(400).json({ error: 'New password must be at least 8 characters.' });
-  }
+  const policyError = passwordPolicyError(new_password);
+  if (policyError) return res.status(400).json({ error: policyError });
   const result = await pool.query(`SELECT password_hash FROM platform_admins WHERE id = $1`, [req.platformAdmin.id]);
   if (!(await verifyPassword(current_password, result.rows[0].password_hash))) {
     return res.status(401).json({ error: 'Current password is incorrect.' });
@@ -426,7 +426,7 @@ async function resetCompanyUserPassword(req, res) {
   const user = await pool.query(`SELECT email FROM users WHERE id = $1 AND company_id = $2`, [req.params.userId, req.params.id]);
   if (!user.rows[0]) return res.status(404).json({ error: 'User not found.' });
 
-  const tempPassword = require('crypto').randomBytes(9).toString('base64').replace(/[+/=]/g, '').slice(0, 12) + '!1';
+  const tempPassword = generateStrongPassword();
   const passwordHash = await hashPassword(tempPassword);
   await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, req.params.userId]);
 
@@ -471,7 +471,7 @@ async function createCompanyAdmin(req, res) {
   const role = await pool.query(`SELECT id FROM roles WHERE company_id = $1 AND code = 'ADM'`, [req.params.id]);
   if (!role.rows[0]) return res.status(400).json({ error: 'This company has no ADM role set up.' });
 
-  const tempPassword = require('crypto').randomBytes(9).toString('base64').replace(/[+/=]/g, '').slice(0, 12) + '!1';
+  const tempPassword = generateStrongPassword();
   const passwordHash = await hashPassword(tempPassword);
   const user = await pool.query(
     `INSERT INTO users (company_id, role_id, email, password_hash, full_name)
