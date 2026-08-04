@@ -1,6 +1,6 @@
 const { pool } = require('../config/db');
 const { getAccessibleEventIds } = require('../middleware/eventAccess');
-const { visibilityClause } = require('../utils/visibility');
+const { visibilityClause, isElevated } = require('../utils/visibility');
 const { cleanText, cleanLower, cleanKeepCase, cleanDigits } = require('../utils/importNormalize');
 
 // Every query in here filters by req.companyId (set by middleware/tenant.js).
@@ -8,29 +8,84 @@ const { cleanText, cleanLower, cleanKeepCase, cleanDigits } = require('../utils/
 // orders, invoices...) should follow.
 async function listExhibitors(req, res) {
   const search = req.query.search || '';
+  const eventId = req.query.event_id || null;
+
+  // Ownership is per-event now (exhibitor_events.salesperson_id, migration
+  // 078) — an exhibitor can be one rep's under MIFB and another's under
+  // AgriFood. `effective_salesperson_id` is that event's owner where set,
+  // falling back to the account-level owner so nothing regresses for
+  // exhibitors that predate the per-event rows.
+  //
   // Browsing with no search term still respects the normal own+unclaimed
   // visibility (keeps each rep's list focused/private day to day) — but the
   // moment there's a search term, every matching exhibitor company-wide is
   // returned (with its owner's name) so Sales can catch a duplicate before
   // creating one, instead of a same-name account under another rep being
-  // invisible and silently re-created.
-  const vis = search ? { sql: 'TRUE', param: undefined } : visibilityClause(req, 'e.salesperson_id', 3);
+  // invisible and silently re-created. The record itself still can't be
+  // OPENED unless it's genuinely theirs — see getExhibitor.
+  const effectiveOwner = eventId ? 'COALESCE(ee.salesperson_id, e.salesperson_id)' : 'e.salesperson_id';
+  const vis = search ? { sql: 'TRUE', param: undefined } : visibilityClause(req, effectiveOwner, eventId ? 4 : 3);
+
+  const params = [req.companyId, `%${search}%`];
+  if (eventId) params.push(eventId);
+  if (vis.param !== undefined) params.push(vis.param);
 
   const result = await pool.query(
-    `SELECT e.id, e.company_name, e.country_code, e.contact1_name, e.contact1_email, e.is_active, e.salesperson_id,
-            u.full_name AS salesperson_name
+    `SELECT e.id, e.company_name, e.country_code, e.contact1_name, e.contact1_email, e.is_active,
+            ${effectiveOwner} AS salesperson_id,
+            COALESCE(ue.full_name, u.full_name) AS salesperson_name,
+            ${eventId ? '(ee.exhibitor_id IS NOT NULL)' : 'FALSE'} AS in_selected_event,
+            -- Every event this exhibitor takes part in, so a rep searching
+            -- for a possible duplicate can see where it already lives
+            -- without being able to open it.
+            (SELECT STRING_AGG(ev.code, ', ' ORDER BY ev.code)
+               FROM exhibitor_events x JOIN events ev ON ev.id = x.event_id
+              WHERE x.exhibitor_id = e.id) AS event_codes
      FROM exhibitors e
      LEFT JOIN users u ON u.id = e.salesperson_id
+     ${eventId ? 'LEFT JOIN exhibitor_events ee ON ee.exhibitor_id = e.id AND ee.event_id = $3' : ''}
+     ${eventId ? 'LEFT JOIN users ue ON ue.id = ee.salesperson_id' : 'LEFT JOIN users ue ON FALSE'}
      WHERE e.company_id = $1
        AND e.is_active = TRUE
        AND e.company_name ILIKE $2
        AND ${vis.sql}
      ORDER BY e.company_name
      LIMIT 200`,
-    [req.companyId, `%${search}%`, ...(vis.param !== undefined ? [vis.param] : [])]
+    params
   );
 
   res.json({ exhibitors: result.rows });
+}
+
+// Claim an exhibitor into an event and assign it to yourself — the
+// cross-event/cross-team handover the user asked for: a rep working
+// AgriFood finds an exhibitor already active under MIFB, and takes it on
+// for THEIR event without touching the MIFB assignment.
+// Additive by design: this only ever inserts/updates this one event's row.
+async function claimExhibitorForEvent(req, res) {
+  const { event_id } = req.body;
+  if (!event_id) return res.status(400).json({ error: 'event_id is required.' });
+
+  const exists = await pool.query(
+    `SELECT company_name FROM exhibitors WHERE id = $1 AND company_id = $2 AND is_active = TRUE`,
+    [req.params.id, req.companyId]
+  );
+  if (!exists.rows[0]) return res.status(404).json({ error: 'Exhibitor not found.' });
+
+  const accessible = await getAccessibleEventIds(req.userId, req.companyId);
+  if (!accessible.includes(event_id)) {
+    return res.status(403).json({ error: 'You do not have access to that event.' });
+  }
+
+  await pool.query(
+    `INSERT INTO exhibitor_events (exhibitor_id, event_id, salesperson_id, assigned_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (exhibitor_id, event_id)
+       DO UPDATE SET salesperson_id = EXCLUDED.salesperson_id, assigned_at = now()`,
+    [req.params.id, event_id, req.userId]
+  );
+
+  res.json({ success: true, exhibitor: { id: req.params.id, company_name: exists.rows[0].company_name } });
 }
 
 const EXHIBITOR_FIELDS = [
@@ -86,17 +141,47 @@ async function applyBillingExhibitorLink(fields, companyId) {
 }
 
 async function getExhibitor(req, res) {
-  const vis = visibilityClause(req, 'ex.salesperson_id', 3);
+  // Visible if this user owns the exhibitor at account level OR owns it in
+  // ANY event (per-event ownership, migration 078) — otherwise a rep who
+  // claimed an exhibitor for their own event would be locked out of the
+  // record they just claimed.
+  const ownsAnywhere = `(ex.salesperson_id = $3 OR ex.salesperson_id IS NULL
+     OR EXISTS (SELECT 1 FROM exhibitor_events ee WHERE ee.exhibitor_id = ex.id AND ee.salesperson_id = $3))`;
+  const elevated = isElevated(req);
   const exhibitorResult = await pool.query(
     `SELECT ex.*, ag.name AS agent_name, be.company_name AS billing_exhibitor_name
      FROM exhibitors ex
      LEFT JOIN agents ag ON ag.id = ex.agent_id
      LEFT JOIN exhibitors be ON be.id = ex.billing_exhibitor_id
-     WHERE ex.id = $1 AND ex.company_id = $2 AND ${vis.sql}`,
-    [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
+     WHERE ex.id = $1 AND ex.company_id = $2 ${elevated ? '' : `AND ${ownsAnywhere}`}`,
+    elevated ? [req.params.id, req.companyId] : [req.params.id, req.companyId, req.userId]
   );
   const exhibitor = exhibitorResult.rows[0];
   if (!exhibitor) {
+    // Distinguish "doesn't exist" from "exists but isn't yours" — a bare
+    // 404 for the latter is what makes reps re-create a duplicate they were
+    // never allowed to see. Name the current owner and events so they can
+    // go ask, or claim it for their own event, instead (search already
+    // surfaces it; this is the same information on direct navigation).
+    const blocked = await pool.query(
+      `SELECT ex.company_name, u.full_name AS owner_name,
+              (SELECT STRING_AGG(ev.code, ', ' ORDER BY ev.code)
+                 FROM exhibitor_events x JOIN events ev ON ev.id = x.event_id
+                WHERE x.exhibitor_id = ex.id) AS event_codes
+       FROM exhibitors ex
+       LEFT JOIN users u ON u.id = ex.salesperson_id
+       WHERE ex.id = $1 AND ex.company_id = $2`,
+      [req.params.id, req.companyId]
+    );
+    if (blocked.rows[0]) {
+      const b = blocked.rows[0];
+      return res.status(403).json({
+        error: `"${b.company_name}" is assigned to ${b.owner_name || 'another salesperson'}`
+          + `${b.event_codes ? ` (events: ${b.event_codes})` : ''}.`
+          + ' Ask them to hand it over, or claim it for your own event from the Exhibitors search.',
+        blocked: { company_name: b.company_name, owner_name: b.owner_name, event_codes: b.event_codes },
+      });
+    }
     return res.status(404).json({ error: 'Exhibitor not found.' });
   }
 
@@ -106,7 +191,10 @@ async function getExhibitor(req, res) {
     [exhibitor.id]
   );
   const eventsResult = await pool.query(
-    `SELECT event_id FROM exhibitor_events WHERE exhibitor_id = $1`,
+    `SELECT ee.event_id, ee.salesperson_id, u.full_name AS salesperson_name
+     FROM exhibitor_events ee
+     LEFT JOIN users u ON u.id = ee.salesperson_id
+     WHERE ee.exhibitor_id = $1`,
     [exhibitor.id]
   );
 
@@ -115,6 +203,11 @@ async function getExhibitor(req, res) {
       ...exhibitor,
       segments: segmentsResult.rows,
       event_ids: eventsResult.rows.map((r) => r.event_id),
+      // Per-event ownership (migration 078) — who holds this exhibitor in
+      // each event they take part in. Sent alongside the plain event_ids
+      // list so the existing participation checkboxes keep working
+      // unchanged while the detail screen can also show the assignments.
+      event_assignments: eventsResult.rows,
     },
   });
 }
@@ -217,15 +310,28 @@ async function replaceEventParticipation(exhibitorId, eventIds, userId, companyI
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // This function replaces participation wholesale (delete-then-insert),
+    // which would otherwise WIPE each row's per-event salesperson_id
+    // (migration 078) every time someone saved the Exhibitor form — a
+    // silent loss of assignment data. Snapshot the existing owners first
+    // and restore them for any event that survives the replace.
+    const priorRows = await client.query(
+      `SELECT event_id, salesperson_id, assigned_at FROM exhibitor_events WHERE exhibitor_id = $1`,
+      [exhibitorId]
+    );
+    const priorByEvent = Object.fromEntries(priorRows.rows.map((r) => [r.event_id, r]));
+
     await client.query(
       `DELETE FROM exhibitor_events WHERE exhibitor_id = $1 AND event_id = ANY($2)`,
       [exhibitorId, accessible]
     );
     for (const eventId of allowed) {
+      const prior = priorByEvent[eventId];
       await client.query(
-        `INSERT INTO exhibitor_events (exhibitor_id, event_id) VALUES ($1, $2)
+        `INSERT INTO exhibitor_events (exhibitor_id, event_id, salesperson_id, assigned_at)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT DO NOTHING`,
-        [exhibitorId, eventId]
+        [exhibitorId, eventId, prior?.salesperson_id || null, prior?.assigned_at || null]
       );
     }
     await client.query('COMMIT');
@@ -419,4 +525,5 @@ async function importExhibitors(req, res) {
 
 module.exports = {
   listExhibitors, getExhibitor, createExhibitor, updateExhibitor, importRepeatExhibitors, importExhibitors,
+  claimExhibitorForEvent,
 };

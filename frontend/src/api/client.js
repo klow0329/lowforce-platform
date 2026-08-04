@@ -36,7 +36,8 @@ export const api = {
   changePassword: (payload) =>
     apiFetch('/auth/change-password', { method: 'POST', body: JSON.stringify(payload) }),
 
-  listExhibitors: (search = '') => apiFetch(`/exhibitors?search=${encodeURIComponent(search)}`),
+  listExhibitors: (search = '', eventId = '') => apiFetch(`/exhibitors?search=${encodeURIComponent(search)}${eventId ? `&event_id=${eventId}` : ''}`),
+  claimExhibitorForEvent: (id, eventId) => apiFetch(`/exhibitors/${id}/claim-for-event`, { method: 'POST', body: JSON.stringify({ event_id: eventId }) }),
   getExhibitor: (id) => apiFetch(`/exhibitors/${id}`),
   createExhibitor: (payload) =>
     apiFetch('/exhibitors', { method: 'POST', body: JSON.stringify(payload) }),

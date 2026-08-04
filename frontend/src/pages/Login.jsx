@@ -35,7 +35,7 @@ export default function Login({ onLoggedIn }) {
   if (companies) {
     return (
       <div style={{ maxWidth: 320, margin: '80px auto' }}>
-        <h2>LowForce Platform</h2>
+        <img src="/lowforce-logo.png" alt="LowForce" style={{ display: "block", width: 180, maxWidth: "100%", margin: "0 auto 16px" }} />
         <p style={{ fontSize: 14, color: '#5c6070' }}>
           {email} is linked to more than one company — choose which one to log into.
         </p>
@@ -64,7 +64,7 @@ export default function Login({ onLoggedIn }) {
 
   return (
     <form onSubmit={handleSubmit} style={{ maxWidth: 320, margin: '80px auto' }}>
-      <h2>LowForce Platform</h2>
+      <img src="/lowforce-logo.png" alt="LowForce" style={{ display: "block", width: 180, maxWidth: "100%", margin: "0 auto 16px" }} />
       <input
         type="email"
         placeholder="Email"

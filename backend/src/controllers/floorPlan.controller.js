@@ -58,6 +58,19 @@ async function listHalls(req, res) {
             (SELECT COALESCE(SUM(b.sqm), 0) FROM floor_plan_booths b WHERE b.hall_id = h.id) AS total_sqm,
             (SELECT COALESCE(SUM(b.sqm), 0) FROM floor_plan_booths b WHERE b.hall_id = h.id
                AND (b.status = 'RESERVED' OR b.opportunity_id IS NOT NULL OR b.sales_order_id IS NOT NULL)) AS occupied_sqm,
+            -- Sold vs merely proposed, split out — "allocated" on its own
+            -- overstates how much is actually committed, since a proposal
+            -- can still fall through. A Contract link outranks an
+            -- Opportunity link on the same booth (same precedence the map
+            -- and every report use).
+            (SELECT COUNT(*) FROM floor_plan_booths b WHERE b.hall_id = h.id
+               AND b.sales_order_id IS NOT NULL) AS sold_count,
+            (SELECT COALESCE(SUM(b.sqm), 0) FROM floor_plan_booths b WHERE b.hall_id = h.id
+               AND b.sales_order_id IS NOT NULL) AS sold_sqm,
+            (SELECT COUNT(*) FROM floor_plan_booths b WHERE b.hall_id = h.id
+               AND b.sales_order_id IS NULL AND b.opportunity_id IS NOT NULL) AS proposed_count,
+            (SELECT COALESCE(SUM(b.sqm), 0) FROM floor_plan_booths b WHERE b.hall_id = h.id
+               AND b.sales_order_id IS NULL AND b.opportunity_id IS NOT NULL) AS proposed_sqm,
             -- Booths with no sqm captured yet. Without surfacing this, a
             -- hall where only the sold booths have sqm reads as "100%
             -- allocated" when really the capacity denominator is unknown —
@@ -281,7 +294,29 @@ async function listBooths(req, res) {
             COALESCE(
               (SELECT array_agg(a.item_code) FROM floor_plan_booth_addons a WHERE a.booth_id = b.id),
               ARRAY[]::text[]
-            ) AS addon_codes
+            ) AS addon_codes,
+            -- Every LIVE claim on this booth, not just the primary one.
+            -- Several Opportunities can propose the same booth until a
+            -- Contract is approved (competing-claims rule) — the map shows
+            -- a count badge when there's more than one, and this list is
+            -- what the hover tooltip breaks down.
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                       'record_type', c.record_type,
+                       'exhibitor_name', COALESCE(cex_so.company_name, cex_opp.company_name),
+                       'salesperson_name', COALESCE(cu_so.full_name, cu_opp.full_name),
+                       'item_code', c.allocated_item_code
+                     ) ORDER BY c.record_type, c.claimed_at)
+              FROM floor_plan_booth_claims c
+              LEFT JOIN sales_orders cso ON cso.id = c.record_id AND c.record_type = 'sales_order'
+              LEFT JOIN exhibitors cex_so ON cex_so.id = cso.exhibitor_id
+              LEFT JOIN users cu_so ON cu_so.id = COALESCE(cso.salesperson_id, cex_so.salesperson_id)
+              LEFT JOIN opportunities copp ON copp.id = c.record_id AND c.record_type = 'opportunity'
+              LEFT JOIN exhibitors cex_opp ON cex_opp.id = copp.exhibitor_id
+              LEFT JOIN users cu_opp ON cu_opp.id = COALESCE(copp.salesperson_id, cex_opp.salesperson_id)
+              WHERE c.booth_id = b.id AND c.released_at IS NULL
+                AND COALESCE(cso.is_active, copp.is_active, TRUE) = TRUE
+            ), '[]'::json) AS claims
      FROM floor_plan_booths b
      LEFT JOIN sales_orders so ON so.id = b.sales_order_id
      LEFT JOIN exhibitors ex_so ON ex_so.id = so.exhibitor_id

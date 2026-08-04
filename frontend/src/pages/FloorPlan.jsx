@@ -864,11 +864,14 @@ export default function FloorPlan({ user }) {
           {selectedHall && (
             <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
               <div style={{ fontSize: 13 }}>
-                <span style={{ color: '#5c6070' }}>Booths allocated: </span>
+                <span style={{ color: '#5c6070' }}>Booths: </span>
                 <strong>{Number(selectedHall.occupied_count) || 0} / {Number(selectedHall.booth_count) || 0}</strong>
+                <span style={{ color: '#5c6070' }}>
+                  {' '}(sold {Number(selectedHall.sold_count) || 0}, proposed {Number(selectedHall.proposed_count) || 0})
+                </span>
               </div>
               <div style={{ fontSize: 13 }}>
-                <span style={{ color: '#5c6070' }}>Sqm allocated: </span>
+                <span style={{ color: '#5c6070' }}>Sqm: </span>
                 <strong>
                   {(Number(selectedHall.occupied_sqm) || 0).toLocaleString('en-MY')} / {(Number(selectedHall.total_sqm) || 0).toLocaleString('en-MY')} sqm
                 </strong>
@@ -877,6 +880,9 @@ export default function FloorPlan({ user }) {
                     {' '}({Math.round((Number(selectedHall.occupied_sqm) || 0) / Number(selectedHall.total_sqm) * 100)}%)
                   </span>
                 )}
+                <span style={{ color: '#5c6070' }}>
+                  {' '}(sold {(Number(selectedHall.sold_sqm) || 0).toLocaleString('en-MY')}, proposed {(Number(selectedHall.proposed_sqm) || 0).toLocaleString('en-MY')})
+                </span>
               </div>
               {/* The percentage is deliberately hidden while any booth is
                   missing its sqm — the denominator would be understated,
@@ -1000,11 +1006,26 @@ export default function FloorPlan({ user }) {
                       const nameFs = fitBoothName(name, boxW, nameAvailH);
                       const displayName = truncateBoothName(name, nameFs, boxW, nameAvailH);
                       const isCapSelected = (pickFor?.mode === 'cap' || pickFor?.mode === 'cn') && capSelected.has(b.id);
+                      // Several Opportunities can propose the same booth
+                      // until a Contract is approved (competing-claims
+                      // rule). One claim reads normally off the booth's own
+                      // label; 2+ get a count badge, with the full
+                      // breakdown in the hover tooltip — otherwise the map
+                      // silently shows only whichever claim happens to be
+                      // primary, hiding that the booth is contested.
+                      const claims = b.claims || [];
+                      const contested = claims.length > 1;
+                      const claimLines = contested
+                        ? `\n\n${claims.length} exhibitors proposing this booth:\n`
+                          + claims.map((c, i) => `${i + 1}. ${c.exhibitor_name || 'Unknown'}`
+                            + `${c.salesperson_name ? ` — ${c.salesperson_name}` : ''}`
+                            + `${c.record_type === 'sales_order' ? ' [CONTRACT]' : ' [proposed]'}`).join('\n')
+                        : '';
                       return (
                       <div
                         key={b.id}
                         id={`floor-plan-booth-${b.id}`}
-                        title={`${b.booth_no}${name ? ` — ${b.fascia_name || b.exhibitor_display_name}` : ''}${b.is_loading ? ' [LOADING]' : ''}${b.is_corner ? ' [CORNER]' : ''}`}
+                        title={`${b.booth_no}${name ? ` — ${b.fascia_name || b.exhibitor_display_name}` : ''}${b.is_loading ? ' [LOADING]' : ''}${b.is_corner ? ' [CORNER]' : ''}${claimLines}`}
                         onClick={() => handleBoothClick(b)}
                         style={{
                           position: 'absolute',
@@ -1033,6 +1054,19 @@ export default function FloorPlan({ user }) {
                         {displayName && (
                           <div style={{ fontSize: nameFs, fontWeight: 400, whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'break-word', maxWidth: '100%' }}>
                             {displayName}
+                          </div>
+                        )}
+                        {contested && (
+                          <div
+                            style={{
+                              position: 'absolute', top: 1, right: 1,
+                              background: '#B45309', color: '#fff', borderRadius: '50%',
+                              minWidth: Math.max(9, numFs * 1.2), height: Math.max(9, numFs * 1.2),
+                              fontSize: Math.max(6, numFs * 0.85), fontWeight: 700, lineHeight: `${Math.max(9, numFs * 1.2)}px`,
+                              textAlign: 'center', pointerEvents: 'none',
+                            }}
+                          >
+                            {claims.length}
                           </div>
                         )}
                       </div>
