@@ -6,6 +6,26 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04
+
+**Asked:** (1) for a clean fresh account, clear the seeded tax codes so each company defines its own, and add a Stamp Duty option (active/inactive; when active, usable on Opportunity/Contract/billing) — user's stated Malaysian rule: 0.5% of total value excluding GST/SST, to the nearest RM5, minimum RM10, with a request to verify against Malaysian stamp rules. (2) Advice on adding SSO as a second login method.
+
+**Built / decided:**
+- **Verified the stamp duty rate — could not confirm the user's figures.** Published legal/tax sources (Skrine, Crowe, Donovan & Ho, RDS Law, BoardRoom) consistently give a **flat RM10** for general agreements under Item 4, First Schedule, Stamp Act 1949; tenancies use a different banded formula (RM1/3/5/7 per RM250 of annual rent, RM10 minimum); the 0.5% figure appears for **loan/financing** instruments, not obviously applicable to an exhibition booth contract. Malaysia's stamp duty regime is also mid-reform (self-assessment from 1 Jan 2026). Told the user plainly rather than asserting either way, and built the feature so the rate/rounding/minimum are all admin-editable — correct the moment they confirm the right figure with LHDN, with no code change needed.
+- **Stamp Duty feature** (migration `077_stamp_duty.sql`): four `company_settings` columns (`stamp_duty_enabled` default FALSE, `stamp_duty_rate_pct` 0.5, `stamp_duty_round_to` 5, `stamp_duty_minimum` 10), exposed via `getSettings`/`PROFILE_FIELDS`, edited under Admin > Company Profile behind an enable checkbox, with an explicit on-screen warning that the defaults are unverified. When enabled, a `STAMP` row renders in `BillingTemplate` (Opportunity, Contract, and the Value Change editor); Sales opts in per record via its checkbox, and the amount is always derived (qty locked to 1, rate read-only) rather than typed.
+- Added a `taxableOf` helper (subtotal net of discount, **before** tax) — the existing `calcLineTotal` is tax-inclusive, so using it would have violated the "excluding GST/SST" rule. Caught this during live verification: the first run produced RM165.00 (tax-inclusive base) where the correct answer is RM155.00. Stamp Duty also excludes its own row from its base so toggling it doesn't change what it's a percentage of.
+- Verified live against a real record (ABC SDN BHD): line items BAS 24,300 + MEP 1,600 + SSS 5,400 = pre-tax base RM31,300 → 0.5% = RM156.50 → nearest RM5 = **RM155.00**, matching the UI exactly. Separately checked the rounding/minimum branches (base 4,600 → RM25; 4,400 → RM20; 1,000/500/0 → RM10 minimum).
+- Also fixed a real gap found while wiring this: a saved `STAMP` line wouldn't reload on reopening a record, since it isn't a Price List item and so wasn't in `addonCodes` — added it explicitly to the load mapping. And split `NarrowRow`'s `qtyLocked` into a separate `checkboxLocked` prop so Stamp Duty's qty can be locked while its checkbox stays clickable (the two were previously coupled).
+- **Tax codes**: deleted the three seeded Malaysian codes (SV-6/SV-8/NTS) from the Railway company — confirmed nothing referenced them first (0 price_list defaults, 0 sales_order_items, 0 opportunity_items). **Left the local dev DB alone**: Postgres correctly blocked the same delete there via FK constraint because it has 64 sales_order_items + 122 opportunity_items of real historical test data referencing them. Local dev is not a "fresh account" and shouldn't be treated as one.
+- Deployed to Railway and verified live (`lowforce.co` healthy, 0 tax codes remaining, stamp duty present and defaulted off).
+
+**Still open / unresolved:**
+- **The stamp duty rate needs confirming with LHDN or a tax advisor before real invoices depend on it** — see above. The feature is correct mechanically; the default numbers are unverified.
+- SSO was answered as advice only — nothing built. See the answer given: recommendation was to defer until there's a customer who actually needs it, since it's a substantial build (OAuth/SAML provider integration, account linking, provisioning rules) against the standing custom-auth rule (#4) and has real limitations worth understanding first.
+- Local dev DB still carries the old seeded tax codes (by design — they're in use by historical test records there).
+
+---
+
 ## 2026-08-03
 
 **Asked:** the SMTP_PASSWORD had been set on Railway — test the User Invite email end to end. Then, after Gmail SMTP turned out to hang indefinitely (`ETIMEDOUT` on the raw TCP connect, before even reaching auth — Gmail silently blocking/dropping connections from Railway's cloud IP range, a network-level anti-spam measure with no app-side fix), migrate to Resend's HTTP API instead, using a Resend API key the user provided.
