@@ -1,15 +1,31 @@
 // Creates (or resets) a platform-owner account — the LowForce operator's
-// own login, outside every tenant. Run it yourself:
+// own login, outside every tenant.
 //
+// Local database:
 //   node backend/scripts/create-platform-admin.js you@example.com "Your Name"
 //
+// Railway (production) — `railway run` injects the service's own variables,
+// so no credential is ever typed or left in shell history:
+//   railway run --service lowforce-platform node backend/scripts/create-platform-admin.js you@example.com "Your Name"
+//
 // A strong random password is generated and printed ONCE. It is never
-// stored in plain text, never committed, and never passed as an argument
-// (which would leave it in your shell history).
+// stored in plain text, never committed, and never passed as an argument.
 require('dotenv').config();
 const crypto = require('crypto');
-const { pool } = require('../src/config/db');
+const { Pool } = require('pg');
 const { hashPassword } = require('../src/utils/password');
+
+// Under `railway run` the injected DATABASE_URL points at the *internal*
+// host (postgres.railway.internal), which only resolves inside Railway's
+// network — it can't be reached from a laptop. DATABASE_PUBLIC_URL is the
+// TCP-proxy address that can, so prefer it whenever Railway provides it.
+// Falls back to the ordinary local DATABASE_URL for dev.
+const connectionString = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
+const isRemote = /proxy\.rlwy\.net|railway/.test(connectionString || '');
+const pool = new Pool({
+  connectionString,
+  ...(isRemote ? { ssl: { rejectUnauthorized: false } } : {}),
+});
 
 async function main() {
   const [email, fullName] = process.argv.slice(2);
@@ -37,6 +53,10 @@ async function main() {
   console.log('');
   console.log('  Email:    ' + email.trim().toLowerCase());
   console.log('  Password: ' + password);
+  console.log('');
+  // Which database this actually hit matters a lot — creating the account
+  // on the wrong one is the likeliest way to be locked out in production.
+  console.log('  Database: ' + (isRemote ? 'REMOTE (Railway)' : 'local'));
   console.log('');
   console.log('  Save this now — it is not recoverable. Sign in at /platform');
   console.log('');

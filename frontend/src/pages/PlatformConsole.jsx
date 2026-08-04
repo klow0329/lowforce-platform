@@ -30,6 +30,7 @@ export default function PlatformConsole() {
   const [companyForm, setCompanyForm] = useState(emptyCompany);
   const [adminFor, setAdminFor] = useState(null);
   const [adminForm, setAdminForm] = useState({ email: '', full_name: '' });
+  const [audit, setAudit] = useState([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -42,6 +43,7 @@ export default function PlatformConsole() {
   function load() {
     platformApi.listGroups().then(({ groups }) => setGroups(groups)).catch((e) => setError(e.message));
     platformApi.listCompanies().then(({ companies }) => setCompanies(companies)).catch((e) => setError(e.message));
+    platformApi.listAudit().then(({ entries }) => setAudit(entries)).catch(() => {});
   }
 
   useEffect(() => { if (admin) load(); }, [admin]);
@@ -164,8 +166,15 @@ export default function PlatformConsole() {
           <tbody>
             {companies.length === 0 && <tr><td style={td} colSpan={7}>No companies yet.</td></tr>}
             {companies.map((c) => (
-              <tr key={c.id} style={c.is_active ? null : { opacity: 0.5 }}>
-                <td style={td}>{c.name}</td>
+              <tr key={c.id} style={c.is_active ? null : { background: '#FDECEC' }}>
+                <td style={td}>
+                  {c.name}
+                  {!c.is_active && (
+                    <div style={{ fontSize: 11, color: '#B23A3A' }}>
+                      SUSPENDED{c.suspended_reason ? ` — ${c.suspended_reason}` : ''}
+                    </div>
+                  )}
+                </td>
                 <td style={td}>{c.reg_no || '—'}</td>
                 <td style={td}>
                   <select
@@ -182,8 +191,31 @@ export default function PlatformConsole() {
                 <td style={td}>{c.exhibitor_count}</td>
                 <td style={td}>
                   {Number(c.user_count) === 0 && (
-                    <button type="button" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => { setAdminFor(c); setAdminForm({ email: '', full_name: '' }); }}>
+                    <button type="button" style={{ fontSize: 12, padding: '3px 8px', marginRight: 6 }} onClick={() => { setAdminFor(c); setAdminForm({ email: '', full_name: '' }); }}>
                       Create first Admin
+                    </button>
+                  )}
+                  {c.is_active ? (
+                    <button
+                      type="button" style={{ fontSize: 12, padding: '3px 8px', background: '#B23A3A' }}
+                      onClick={() => {
+                        const reason = window.prompt(
+                          `Suspend "${c.name}"?\n\nEvery user of this company will be signed out immediately and unable to log back in. No data is deleted — reactivating restores everything.\n\nReason (required):`
+                        );
+                        if (reason === null) return;
+                        if (!reason.trim()) { setError('A reason is required to suspend a company.'); return; }
+                        run(() => platformApi.setCompanySuspension(c.id, false, reason.trim()), `${c.name} suspended.`);
+                      }}
+                    >
+                      Suspend
+                    </button>
+                  ) : (
+                    <button
+                      type="button" style={{ fontSize: 12, padding: '3px 8px' }}
+                      title={c.suspended_reason ? `Suspended: ${c.suspended_reason}` : undefined}
+                      onClick={() => run(() => platformApi.setCompanySuspension(c.id, true), `${c.name} reactivated.`)}
+                    >
+                      Reactivate
                     </button>
                   )}
                 </td>
@@ -255,6 +287,32 @@ export default function PlatformConsole() {
         >
           Register Company
         </button>
+      </div>
+
+      <h3 style={{ marginTop: 28 }}>Platform Activity</h3>
+      <div style={box}>
+        <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+          Every action taken from this console. Separate from each company&rsquo;s own Audit Log, and not visible to any
+          tenant.
+        </p>
+        <table width="100%" style={{ borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th}>When</th><th style={th}>Who</th><th style={th}>Action</th><th style={th}>Company</th><th style={th}>Detail</th></tr></thead>
+          <tbody>
+            {audit.length === 0 && <tr><td style={td} colSpan={5}>Nothing recorded yet.</td></tr>}
+            {audit.map((a) => (
+              <tr key={a.id}>
+                <td style={{ ...td, whiteSpace: 'nowrap' }}>{new Date(a.created_at).toLocaleString('en-MY')}</td>
+                <td style={td}>{a.admin_email || '—'}</td>
+                <td style={{ ...td, fontWeight: 600 }}>{a.action}</td>
+                <td style={td}>{a.company_name || '—'}</td>
+                <td style={{ ...td, fontSize: 12, color: '#5c6070' }}>
+                  {a.details ? Object.entries(a.details).filter(([, v]) => v !== null && v !== undefined)
+                    .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ') : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

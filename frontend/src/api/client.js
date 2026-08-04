@@ -38,6 +38,10 @@ export const platformApi = {
   createCompany: (body) => apiFetch('/platform/companies', { method: 'POST', body: JSON.stringify(body) }),
   updateCompany: (id, body) => apiFetch(`/platform/companies/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   createCompanyAdmin: (id, body) => apiFetch(`/platform/companies/${id}/admin-user`, { method: 'POST', body: JSON.stringify(body) }),
+  setCompanySuspension: (id, isActive, reason) => apiFetch(`/platform/companies/${id}/suspension`, {
+    method: 'PUT', body: JSON.stringify({ is_active: isActive, reason }),
+  }),
+  listAudit: () => apiFetch('/platform/audit'),
 };
 
 export const api = {

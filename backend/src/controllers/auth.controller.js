@@ -28,7 +28,7 @@ async function login(req, res) {
   // the first attempt, when it isn't known yet.
   const result = await pool.query(
     `SELECT u.id, u.company_id, u.email, u.password_hash, u.full_name, u.is_active, u.access_level_override,
-            r.code AS role_code, c.name AS company_name
+            r.code AS role_code, c.name AS company_name, c.is_active AS company_is_active
      FROM users u
      JOIN companies c ON c.id = u.company_id
      LEFT JOIN roles r ON r.id = u.role_id
@@ -37,7 +37,12 @@ async function login(req, res) {
     [email, company_id || null]
   );
 
-  const active = result.rows.filter((u) => u.is_active);
+  // A suspended COMPANY blocks every one of its users, regardless of their
+  // own is_active. Until this was added, `companies.is_active` was written
+  // but never read anywhere, so suspending a tenant from the platform
+  // console would have had no effect at all — people would simply have
+  // carried on working.
+  const active = result.rows.filter((u) => u.is_active && u.company_is_active);
 
   // More than one company has an active account under this email, and the
   // caller hasn't said which one yet — can't verify a password without
@@ -66,11 +71,18 @@ async function login(req, res) {
   // inactive or wrong password) — an unknown email has no company to
   // attribute the attempt to, and per multi-tenant isolation no one could
   // ever view it anyway.
-  if (!user || !user.is_active) {
+  // company_is_active must be checked HERE too, not only in the `active`
+  // filter above: that filter feeds the multi-company picker, but this line
+  // falls back to `result.rows[0]` when nothing is active, so a user whose
+  // own is_active is true would otherwise sail straight through even though
+  // their company is suspended. Caught by live test — suspension killed
+  // existing sessions but a fresh login still succeeded.
+  if (!user || !user.is_active || !user.company_is_active) {
     if (user) {
       recordAudit({
         companyId: user.company_id, userId: user.id, userName: user.full_name, roleCode: user.role_code,
-        action: 'FAILED_LOGIN', entityType: 'auth', entityId: user.id, details: { email, reason: 'inactive_account' },
+        action: 'FAILED_LOGIN', entityType: 'auth', entityId: user.id,
+        details: { email, reason: user.is_active ? 'company_suspended' : 'inactive_account' },
       });
     }
     return res.status(401).json({ error: 'Invalid email or password.' });
@@ -129,15 +141,19 @@ async function me(req, res) {
 
   const result = await pool.query(
     `SELECT u.id, u.company_id, u.email, u.full_name, u.is_active, u.access_level_override,
-            r.code AS role_code
+            r.code AS role_code, c.is_active AS company_is_active
      FROM users u
+     JOIN companies c ON c.id = u.company_id
      LEFT JOIN roles r ON r.id = u.role_id
      WHERE u.id = $1`,
     [req.session.user.id]
   );
 
   const user = result.rows[0];
-  if (!user || !user.is_active) {
+  // company_is_active is re-checked here too, not just at login, so
+  // suspending a tenant ends its users' LIVE sessions rather than waiting
+  // for them to log out — the whole point of a suspension.
+  if (!user || !user.is_active || !user.company_is_active) {
     return req.session.destroy(() => res.json({ user: null }));
   }
 

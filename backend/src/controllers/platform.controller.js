@@ -1,6 +1,25 @@
 const { pool } = require('../config/db');
 const { verifyPassword, hashPassword } = require('../utils/password');
 
+// Platform actions are logged to their own table (see migration 081) —
+// audit_log's company_id is NOT NULL, and these actions often have no
+// company (creating a group) or act ON one rather than inside it. Never
+// throws: an audit write failing must not block the operator's action, but
+// it should be visible in the server log.
+async function recordPlatformAudit(req, { action, entityType, entityId, companyId, details }) {
+  try {
+    const admin = req.platformAdmin || (req.session && req.session.platformAdmin) || {};
+    await pool.query(
+      `INSERT INTO platform_audit_log (platform_admin_id, admin_email, action, entity_type, entity_id, company_id, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [admin.id || null, admin.email || null, action, entityType || null, entityId || null, companyId || null,
+        details ? JSON.stringify(details) : null]
+    );
+  } catch (err) {
+    console.warn('[platform-audit] failed to record', action, err.message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Platform-owner console — the LowForce operator's own admin, outside any
 // tenant. Every query here is deliberately NOT company-scoped (that's the
@@ -33,6 +52,7 @@ async function platformLogin(req, res) {
     if (err) return res.status(500).json({ error: 'Could not start session.' });
     req.session.platformAdmin = { id: admin.id, email: admin.email, full_name: admin.full_name };
     pool.query(`UPDATE platform_admins SET last_login_at = now() WHERE id = $1`, [admin.id]).catch(() => {});
+    recordPlatformAudit(req, { action: 'LOGIN' });
     res.json({ platformAdmin: req.session.platformAdmin });
   });
 }
@@ -79,6 +99,10 @@ async function createGroup(req, res) {
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
     [String(name).trim(), slug, reg_no || null, country_code || null, notes || null, parent_group_id || null]
   );
+  await recordPlatformAudit(req, {
+    action: 'GROUP_CREATE', entityType: 'group', entityId: result.rows[0].id,
+    details: { name: String(name).trim(), reg_no: reg_no || null, parent_group_id: parent_group_id || null },
+  });
   res.status(201).json({ group: { id: result.rows[0].id } });
 }
 
@@ -124,7 +148,7 @@ async function updateGroup(req, res) {
 async function listCompanies(req, res) {
   const result = await pool.query(
     `SELECT c.id, c.name, c.slug, c.reg_no, c.country_code, c.notes, c.is_active, c.created_at, c.registered_at,
-            c.group_id, g.name AS group_name,
+            c.group_id, g.name AS group_name, c.suspended_at, c.suspended_reason,
             (SELECT COUNT(*) FROM users u WHERE u.company_id = c.id AND u.is_active) AS user_count,
             (SELECT COUNT(*) FROM events e WHERE e.company_id = c.id) AS event_count,
             (SELECT COUNT(*) FROM exhibitors e WHERE e.company_id = c.id AND e.is_active) AS exhibitor_count
@@ -189,6 +213,10 @@ async function createCompany(req, res) {
       [cid]
     );
     await client.query('COMMIT');
+    await recordPlatformAudit(req, {
+      action: 'COMPANY_CREATE', entityType: 'company', entityId: cid, companyId: cid,
+      details: { name: String(name).trim(), reg_no: reg_no || null, group_id: group_id || null },
+    });
     res.status(201).json({ company: { id: cid } });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -198,12 +226,15 @@ async function createCompany(req, res) {
   }
 }
 
-const COMPANY_FIELDS = ['name', 'reg_no', 'country_code', 'notes', 'group_id', 'is_active'];
+const COMPANY_FIELDS = ['name', 'reg_no', 'country_code', 'notes', 'group_id'];
 async function updateCompany(req, res) {
   const fields = {};
   for (const f of COMPANY_FIELDS) if (f in req.body) fields[f] = req.body[f] === '' ? null : req.body[f];
   const cols = Object.keys(fields);
   if (cols.length === 0) return res.json({ company: { id: req.params.id } });
+
+  const before = await pool.query(`SELECT name, group_id FROM companies WHERE id = $1`, [req.params.id]);
+  if (!before.rows[0]) return res.status(404).json({ error: 'Company not found.' });
 
   const setClause = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
   const result = await pool.query(
@@ -211,7 +242,60 @@ async function updateCompany(req, res) {
     [req.params.id, ...cols.map((c) => fields[c])]
   );
   if (!result.rows[0]) return res.status(404).json({ error: 'Company not found.' });
+  await recordPlatformAudit(req, {
+    action: 'COMPANY_UPDATE', entityType: 'company', entityId: req.params.id, companyId: req.params.id,
+    details: { changed: fields, previous_group_id: before.rows[0].group_id },
+  });
   res.json({ company: { id: req.params.id } });
+}
+
+// Suspend / reactivate, deliberately its own endpoint rather than a field
+// on updateCompany — it's the one action here with immediate, visible
+// consequences for real users, so it takes a reason and is logged as its
+// own event rather than being buried in a generic field diff.
+//
+// Effect: every user of a suspended company is refused at login AND has
+// their live session ended on the next request (see auth.controller.js's
+// login + me). Data is untouched and fully restored on reactivation —
+// this is a suspension, never a deletion.
+async function setCompanySuspension(req, res) {
+  const { is_active, reason } = req.body;
+  if (typeof is_active !== 'boolean') {
+    return res.status(400).json({ error: 'is_active (true/false) is required.' });
+  }
+  if (!is_active && !String(reason || '').trim()) {
+    return res.status(400).json({ error: 'A reason is required when suspending a company.' });
+  }
+
+  const result = await pool.query(
+    `UPDATE companies
+        SET is_active = $2,
+            suspended_at = CASE WHEN $2 THEN NULL ELSE now() END,
+            suspended_reason = CASE WHEN $2 THEN NULL ELSE $3 END
+      WHERE id = $1
+      RETURNING id, name`,
+    [req.params.id, is_active, String(reason || '').trim() || null]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: 'Company not found.' });
+
+  await recordPlatformAudit(req, {
+    action: is_active ? 'COMPANY_REACTIVATE' : 'COMPANY_SUSPEND',
+    entityType: 'company', entityId: req.params.id, companyId: req.params.id,
+    details: { name: result.rows[0].name, reason: reason || null },
+  });
+  res.json({ company: { id: req.params.id, is_active } });
+}
+
+async function listPlatformAudit(req, res) {
+  const result = await pool.query(
+    `SELECT l.id, l.admin_email, l.action, l.entity_type, l.entity_id, l.details, l.created_at,
+            c.name AS company_name
+     FROM platform_audit_log l
+     LEFT JOIN companies c ON c.id = l.company_id
+     ORDER BY l.created_at DESC
+     LIMIT 200`
+  );
+  res.json({ entries: result.rows });
 }
 
 // The tenant's first Admin. Deliberately the ONLY user-creating action in
@@ -248,11 +332,16 @@ async function createCompanyAdmin(req, res) {
   // admin-gated route (a real bug hit when the Railway admin was seeded).
   await pool.query(`INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, [user.rows[0].id, role.rows[0].id]);
 
+  await recordPlatformAudit(req, {
+    action: 'TENANT_ADMIN_CREATE', entityType: 'user', entityId: user.rows[0].id, companyId: req.params.id,
+    details: { email: String(email).trim().toLowerCase(), company: company.rows[0].name },
+  });
+
   res.status(201).json({ user: { id: user.rows[0].id, email, temp_password: tempPassword } });
 }
 
 module.exports = {
   platformLogin, platformMe, platformLogout,
   listGroups, createGroup, updateGroup,
-  listCompanies, createCompany, updateCompany, createCompanyAdmin,
+  listCompanies, createCompany, updateCompany, setCompanySuspension, createCompanyAdmin, listPlatformAudit,
 };
