@@ -2,6 +2,7 @@ const { pool } = require('../config/db');
 const { getAccessibleEventIds } = require('../middleware/eventAccess');
 const { visibilityClause, isElevated } = require('../utils/visibility');
 const { cleanText, cleanLower, cleanKeepCase, cleanDigits } = require('../utils/importNormalize');
+const { getGroupSharedCompanyIds } = require('../utils/groupSharing');
 
 // Every query in here filters by req.companyId (set by middleware/tenant.js).
 // This is the pattern every other Phase 1 module (opportunities, sales
@@ -54,7 +55,39 @@ async function listExhibitors(req, res) {
     params
   );
 
-  res.json({ exhibitors: result.rows });
+  // Group-wide search (Phase 1 of group resource sharing, migration 079).
+  // Runs ONLY on an explicit search — never on plain browsing — and as a
+  // completely SEPARATE query, so the tenant-scoped query above is left
+  // byte-for-byte unchanged. Results are flagged other_company: true and
+  // carry no contact details; they exist purely to answer "is this company
+  // already being handled somewhere in the group, and by whom?".
+  // Opening one is still hard-blocked by getExhibitor's company_id filter.
+  let groupMatches = [];
+  if (search.trim()) {
+    const peerCompanyIds = await getGroupSharedCompanyIds(req.companyId, 'EXHIBITORS');
+    if (peerCompanyIds.length > 0) {
+      const groupResult = await pool.query(
+        `SELECT e.id, e.company_name, e.country_code,
+                c.name AS owning_company_name,
+                u.full_name AS salesperson_name,
+                (SELECT STRING_AGG(ev.code, ', ' ORDER BY ev.code)
+                   FROM exhibitor_events x JOIN events ev ON ev.id = x.event_id
+                  WHERE x.exhibitor_id = e.id) AS event_codes
+         FROM exhibitors e
+         JOIN companies c ON c.id = e.company_id
+         LEFT JOIN users u ON u.id = e.salesperson_id
+         WHERE e.company_id = ANY($1::uuid[])
+           AND e.is_active = TRUE
+           AND e.company_name ILIKE $2
+         ORDER BY e.company_name
+         LIMIT 50`,
+        [peerCompanyIds, `%${search}%`]
+      );
+      groupMatches = groupResult.rows.map((r) => ({ ...r, other_company: true }));
+    }
+  }
+
+  res.json({ exhibitors: result.rows, groupMatches });
 }
 
 // Claim an exhibitor into an event and assign it to yourself — the

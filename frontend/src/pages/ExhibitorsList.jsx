@@ -22,6 +22,10 @@ const columns = [
 export default function ExhibitorsList({ user }) {
   const { selectedEventId, events } = useEventContext();
   const [exhibitors, setExhibitors] = useState([]);
+  // Matches inside OTHER companies of the same group (group resource
+  // sharing, migration 079) — read-only, deliberately kept in their own
+  // section so they can never be mistaken for records this company owns.
+  const [groupMatches, setGroupMatches] = useState([]);
   const [search, setSearch] = useState('');
   const [claiming, setClaiming] = useState('');
   const [notice, setNotice] = useState('');
@@ -31,7 +35,10 @@ export default function ExhibitorsList({ user }) {
   const selectedEvent = events?.find((ev) => ev.id === selectedEventId);
 
   function load() {
-    api.listExhibitors(search, selectedEventId).then((data) => setExhibitors(data.exhibitors));
+    api.listExhibitors(search, selectedEventId).then((data) => {
+      setExhibitors(data.exhibitors);
+      setGroupMatches(data.groupMatches || []);
+    });
   }
 
   useEffect(() => {
@@ -131,6 +138,30 @@ export default function ExhibitorsList({ user }) {
         exportFilename="exhibitors"
         exportSheetName="Exhibitors"
       />
+
+      {groupMatches.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <h3 style={{ marginBottom: 4 }}>Also found elsewhere in your group</h3>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            These belong to other companies in your group and are shown for reference only — so you know the company is
+            already being handled and who to speak to. They can&rsquo;t be opened, and aren&rsquo;t part of your own
+            exhibitor list.
+          </p>
+          <DataTable
+            screenKey="exhibitors-group"
+            columns={[
+              { key: 'company_name', label: 'Company', default: true },
+              { key: 'country_code', label: 'Country', default: true },
+              { key: 'owning_company_name', label: 'Handled By (Company)', default: true },
+              { key: 'salesperson_name', label: 'Salesperson', default: true, value: (r) => r.salesperson_name || 'Unassigned' },
+              { key: 'event_codes', label: 'Events', default: true, value: (r) => r.event_codes || '—' },
+            ]}
+            rows={groupMatches}
+            getRowKey={(r) => r.id}
+            getRowStyle={() => ({ color: '#5c6070', cursor: 'default', background: '#F7F8FB' })}
+          />
+        </div>
+      )}
     </div>
   );
 }

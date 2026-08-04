@@ -11,7 +11,7 @@ const {
   listAgentCommissionBonusTiers, saveAgentCommissionBonusTiers,
   createSegmentMain, updateSegmentMain, deleteSegmentMain,
   createSegmentSub, updateSegmentSub, deleteSegmentSub, importSegments,
-  getSettings, updateSettings,
+  getSettings, updateSettings, updateGroupSharing,
   uploadBranding, uploadBrandingImage, getBrandingImage, deleteBrandingImage,
 } = require('../controllers/settings.controller');
 
@@ -56,5 +56,6 @@ router.post('/segments/import', requireAdmin, asyncHandler(importSegments));
 
 router.get('/', asyncHandler(getSettings));
 router.put('/', requireAdmin, asyncHandler(updateSettings));
+router.put('/group-sharing', requireAdmin, asyncHandler(updateGroupSharing));
 
 module.exports = router;

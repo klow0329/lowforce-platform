@@ -182,6 +182,9 @@ export const api = {
   deleteCreditNoteAttachment: (id, attachmentId) => apiFetch(`/credit-notes/${id}/attachments/${attachmentId}`, { method: 'DELETE' }),
 
   getSettings: () => apiFetch('/settings'),
+  updateGroupSharing: (resourceType, isShared) => apiFetch('/settings/group-sharing', {
+    method: 'PUT', body: JSON.stringify({ resource_type: resourceType, is_shared: isShared }),
+  }),
   updateSettings: (payload) => apiFetch('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   listTaxCodes: () => apiFetch('/settings/tax-codes'),
   createTaxCode: (payload) =>

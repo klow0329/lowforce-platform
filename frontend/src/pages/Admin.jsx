@@ -113,6 +113,11 @@ const ARCHIVE_TYPES = [
 export default function Admin({ user }) {
   const { refresh: refreshCompany } = useCompanyContext();
   const [activeTab, setActiveTab] = useState('users');
+  // Group resource sharing (migration 079) — whether this company lets
+  // sibling companies in its group see its exhibitors in search.
+  const [groupInfo, setGroupInfo] = useState(null);
+  const [sharing, setSharing] = useState({});
+  const [savingSharing, setSavingSharing] = useState('');
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [newRoleForm, setNewRoleForm] = useState({ code: '', name: '' });
@@ -594,8 +599,10 @@ export default function Admin({ user }) {
   function loadCurrencyAndApprovals() {
     api.listTaxCodes().then(({ taxCodes }) => setTaxCodes(taxCodes));
     api.listExpenseCodes().then(({ expenseCodes }) => setExpenseCodes(expenseCodes));
-    api.getSettings().then(({ settings }) => {
+    api.getSettings().then(({ settings, group, sharing }) => {
       setExchangeRate(settings.usd_to_myr_rate);
+      setGroupInfo(group || null);
+      setSharing(sharing || {});
       setProfileForm({
         reg_no: settings.reg_no || '', tin_no: settings.tin_no || '', sst_no: settings.sst_no || '',
         address: settings.address || '', phone: settings.phone || '', email: settings.email || '',
@@ -1415,6 +1422,48 @@ export default function Admin({ user }) {
             value={profileForm.contract_terms}
             onChange={(e) => setProfileForm({ ...profileForm, contract_terms: e.target.value })}
           />
+
+          <h4 style={{ marginBottom: 4, marginTop: 24 }}>Group Resource Sharing</h4>
+          {!groupInfo?.group_id ? (
+            <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+              This company doesn&rsquo;t belong to a group, so there is nothing to share with.
+            </p>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+                Part of <strong>{groupInfo.group_name}</strong>
+                {Number(groupInfo.peer_count) > 0
+                  ? ` with ${groupInfo.peer_count} other compan${Number(groupInfo.peer_count) === 1 ? 'y' : 'ies'}.`
+                  : ' (no other companies in it yet).'}
+                {' '}When on, those companies can see your exhibitors <strong>in search results only</strong> — company
+                name, country, which of your salespeople handles them, and which events. They cannot open the record,
+                see contact details, or use it in their own quotes or invoices.
+                {' '}Sharing is <strong>mutual</strong>: you only see theirs while you are sharing yours.
+                Off by default.
+              </p>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={!!sharing.EXHIBITORS}
+                  disabled={savingSharing === 'EXHIBITORS'}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setSavingSharing('EXHIBITORS');
+                    setError('');
+                    try {
+                      await api.updateGroupSharing('EXHIBITORS', next);
+                      setSharing((s) => ({ ...s, EXHIBITORS: next }));
+                    } catch (err) {
+                      setError(err.message);
+                    } finally {
+                      setSavingSharing('');
+                    }
+                  }}
+                />
+                Share my Exhibitor list with the rest of {groupInfo.group_name} (search visibility only)
+              </label>
+            </>
+          )}
 
           <h4 style={{ marginBottom: 4, marginTop: 24 }}>Stamp Duty</h4>
           <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>

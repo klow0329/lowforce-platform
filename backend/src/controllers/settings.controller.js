@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const { pool } = require('../config/db');
 const { cleanText, cleanLower, cleanKeepCase, cleanDigits } = require('../utils/importNormalize');
+const { setSharing } = require('../utils/groupSharing');
 
 // ---------------------------------------------------------------------------
 // Company branding — logo, letterhead header strip, footer strip. Rendered
@@ -681,7 +682,28 @@ async function getSettings(req, res) {
      WHERE cs.company_id = $1`,
     [req.companyId]
   );
-  res.json({ settings: result.rows[0] || { usd_to_myr_rate: 4 } });
+  // Group resource sharing (migration 079) lives in its own table keyed by
+  // resource_type — not a company_settings column — so the planned Vendor
+  // list needs no schema change. Surfaced here so Company Profile can show
+  // one toggle per shared resource. Also reports whether this company even
+  // belongs to a group, since the toggle is meaningless if it doesn't.
+  const groupResult = await pool.query(
+    `SELECT c.group_id, g.name AS group_name,
+            (SELECT COUNT(*) FROM companies peer WHERE peer.group_id = c.group_id AND peer.id <> c.id) AS peer_count
+     FROM companies c LEFT JOIN groups g ON g.id = c.group_id
+     WHERE c.id = $1`,
+    [req.companyId]
+  );
+  const sharingResult = await pool.query(
+    `SELECT resource_type, is_shared FROM company_group_sharing WHERE company_id = $1`,
+    [req.companyId]
+  );
+
+  res.json({
+    settings: result.rows[0] || { usd_to_myr_rate: 4 },
+    group: groupResult.rows[0] || null,
+    sharing: Object.fromEntries(sharingResult.rows.map((r) => [r.resource_type, r.is_shared])),
+  });
 }
 
 // usd_to_myr_rate is required (it's NOT NULL and always has a value); the
@@ -719,6 +741,25 @@ async function updateSettings(req, res) {
   res.json({ success: true });
 }
 
+// Turn group sharing on/off for one resource type. Admin-only (see the
+// route) — this decides whether other legal entities in the group can see
+// this company's records at all, so it is not an ordinary settings edit.
+const SHAREABLE_RESOURCES = ['EXHIBITORS'];
+async function updateGroupSharing(req, res) {
+  const { resource_type, is_shared } = req.body;
+  if (!SHAREABLE_RESOURCES.includes(resource_type)) {
+    return res.status(400).json({ error: `Unknown resource type "${resource_type}".` });
+  }
+  // Pointless (and misleading) to enable sharing for a standalone company —
+  // there is no group to share with.
+  const grp = await pool.query(`SELECT group_id FROM companies WHERE id = $1`, [req.companyId]);
+  if (is_shared && !grp.rows[0]?.group_id) {
+    return res.status(400).json({ error: 'This company does not belong to a group, so there is nothing to share with.' });
+  }
+  await setSharing(req.companyId, resource_type, is_shared, req.userId);
+  res.json({ success: true });
+}
+
 module.exports = {
   listTaxCodes, createTaxCode, updateTaxCode,
   listExpenseCodes, createExpenseCode, updateExpenseCode, importExpenseCodes,
@@ -727,6 +768,6 @@ module.exports = {
   listAgentCommissionBonusTiers, saveAgentCommissionBonusTiers,
   createSegmentMain, updateSegmentMain, deleteSegmentMain,
   createSegmentSub, updateSegmentSub, deleteSegmentSub, importSegments,
-  getSettings, updateSettings,
+  getSettings, updateSettings, updateGroupSharing,
   uploadBranding, uploadBrandingImage, getBrandingImage, deleteBrandingImage,
 };
