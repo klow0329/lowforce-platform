@@ -24,6 +24,22 @@ async function apiFetch(path, options = {}) {
   return data;
 }
 
+// Platform-owner console — cross-tenant, authenticated by its own session
+// (see backend/src/middleware/platformAdmin.js), which is why it's a
+// separate object rather than more methods on `api`.
+export const platformApi = {
+  login: (email, password) => apiFetch('/platform/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  me: () => apiFetch('/platform/me'),
+  logout: () => apiFetch('/platform/logout', { method: 'POST' }),
+  listGroups: () => apiFetch('/platform/groups'),
+  createGroup: (body) => apiFetch('/platform/groups', { method: 'POST', body: JSON.stringify(body) }),
+  updateGroup: (id, body) => apiFetch(`/platform/groups/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  listCompanies: () => apiFetch('/platform/companies'),
+  createCompany: (body) => apiFetch('/platform/companies', { method: 'POST', body: JSON.stringify(body) }),
+  updateCompany: (id, body) => apiFetch(`/platform/companies/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  createCompanyAdmin: (id, body) => apiFetch(`/platform/companies/${id}/admin-user`, { method: 'POST', body: JSON.stringify(body) }),
+};
+
 export const api = {
   // company_id is omitted on the first attempt; if the response comes back
   // { requiresCompanySelection: true, companies }, resubmit with the id the

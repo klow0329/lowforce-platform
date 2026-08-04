@@ -29,6 +29,7 @@ import Budget from './pages/Budget';
 import StatementPrint from './pages/StatementPrint';
 import TaxDetailForm from './pages/TaxDetailForm';
 import About from './pages/About';
+import PlatformConsole from './pages/PlatformConsole';
 import NavBar from './components/NavBar';
 import ErrorBoundary from './components/ErrorBoundary';
 import { EventProvider } from './context/EventContext';
@@ -85,6 +86,15 @@ export default function App() {
   // it (and before the session lookup even matters).
   if (window.location.pathname.startsWith('/tax-details/')) {
     return <TaxDetailForm />;
+  }
+
+  // The platform-owner console is not part of any tenant — it has its own
+  // login and session, so it must render before the tenant login gate and
+  // outside the app shell (no NavBar, no event context, no company
+  // branding). A logged-in tenant user landing here just sees the platform
+  // login, since their session carries no platform-admin key.
+  if (window.location.pathname.startsWith('/platform')) {
+    return <PlatformConsole />;
   }
 
   if (checkingSession) return null;

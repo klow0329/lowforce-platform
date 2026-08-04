@@ -9,6 +9,7 @@ const pgSession = require('connect-pg-simple')(session);
 const { pool } = require('./config/db');
 const { auditMiddleware } = require('./middleware/audit');
 const authRoutes = require('./routes/auth.routes');
+const platformRoutes = require('./routes/platform.routes');
 const exhibitorsRoutes = require('./routes/exhibitors.routes');
 const referenceRoutes = require('./routes/reference.routes');
 const opportunitiesRoutes = require('./routes/opportunities.routes');
@@ -62,6 +63,9 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 app.use(auditMiddleware);
 
 app.use('/api/auth', authRoutes);
+// Platform-owner console — cross-tenant by design, gated by its own
+// session key (requirePlatformAdmin), never by attachTenant.
+app.use('/api/platform', platformRoutes);
 app.use('/api/exhibitors', exhibitorsRoutes);
 app.use('/api/reference', referenceRoutes);
 app.use('/api/opportunities', opportunitiesRoutes);
