@@ -6,6 +6,30 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04 (late night, cont.)
+
+**Asked:** hold the accounting build; finish the group/platform database concerns. Also "I haven't seen the platform console — where is it?" and how does SAP control client accounts (add / suspend / remove / link)?
+
+**Diagnosed:** the console was deployed and `/platform` returned HTTP 200 — but **no `platform_admins` row existed on Railway**, so it was a login nobody could pass. Root cause of "where is it?".
+
+**Built:**
+- **Bootstrap script now works against production.** It preferred the local `DATABASE_URL`; under `railway run` the injected value points at `postgres.railway.internal`, unreachable from a laptop. Now prefers `DATABASE_PUBLIC_URL` (populated once the TCP proxy existed) and **prints which database it hit** — creating the account on the wrong DB is the likeliest way to be locked out of prod.
+- **FOUND A REAL BUG: `companies.is_active` was never read anywhere** — not at login, not in tenant middleware. Suspending a company would have done nothing at all. Now enforced at login *and* re-checked in `me()` so suspension ends live sessions immediately.
+- **A second, subtler bug caught by live test after that fix**: the `active` filter feeds the multi-company picker, but login falls back to `result.rows[0]`, and the gate only tested `user.is_active`. A user whose own flag was true still logged in with their company suspended — sessions died but fresh logins succeeded. Gate now tests `company_is_active` too, audited as `company_suspended`.
+- **Suspend/reactivate** as its own endpoint requiring a **reason** (stored on `companies.suspended_at/suspended_reason`), deliberately not a field on updateCompany — it's the one action with immediate visible impact on real users. Fully reversible, touches no data.
+- **`platform_audit_log`** (migration 081) — separate table because `audit_log.company_id` is NOT NULL and platform actions often have no company. Records login, group/company create, update, suspend/reactivate, tenant-admin bootstrap. Invisible to tenants.
+- Console UI: suspend/reactivate with reason prompt, suspended rows highlighted with their reason, and a Platform Activity table.
+
+**Verified live:** suspend without reason refused (400); suspend ends the live session AND blocks fresh login (401); reactivate restores access with all 200 exhibitors intact; audit captured all six actions. Deployed; tenant login on `lowforce.co` unaffected.
+
+**Still open / unresolved:**
+- **The user still needs to create their production platform admin** — I can't handle the credential. Command: `railway run --service lowforce-platform node backend/scripts/create-platform-admin.js <email> "<Name>"`. Until then `/platform` remains unusable in prod.
+- No "remove/delete company" by design — audit_log FKs make hard deletion wrong; suspension is the correct lifecycle action (matches SAP, which archives rather than deletes).
+- Accounting module explicitly **on hold** at the user's request.
+- Phase 2 (adopt) still not built.
+
+---
+
 ## 2026-08-04 (late night)
 
 **Asked:** (1) is the "One International Group with 4 other companies" text hardcoded, and how should group structure actually be managed? (2) As LowForce owner, should I register companies by company number via an admin console? (3) An accounting system (AP/AR, GL, bank rec, consolidated reporting) is the next major build — how does that affect Phases 2/3? Then: "go as per recommended."
