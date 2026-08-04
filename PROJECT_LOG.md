@@ -6,6 +6,30 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04 (evening)
+
+**Asked:** build per-event exhibitor ownership + search-visible/open-blocked (with a clarifying question: does sharing an exhibitor across 2 events create 2 duplicate exhibitor records?); contested-booth indicator on the Floor Plan map; sold-vs-proposed split in the hall tally; LowForce logo on the login page.
+
+**Answered first (the clarifying question):** No — there is exactly ONE exhibitor row, never duplicated per event. `exhibitor_events` links it to N events; what becomes per-event is the ASSIGNMENT. Verified this explicitly after building (one exhibitor_id → MCE26 owned by Priya Nair, MIFB27 owned by TEST 1, single exhibitor row).
+
+**Built / decided:**
+- **Per-event exhibitor ownership (migration 078)**: `exhibitor_events.salesperson_id` + `assigned_at`, backfilled from each exhibitor's existing global owner so day-one behaviour is unchanged. `exhibitors.salesperson_id` deliberately KEPT as the account-level default/fallback — the per-event value takes priority where set.
+- Exhibitor list is now event-scoped: Salesperson = the selected event's owner (falling back to account level), plus a new **Events** column listing every event the exhibitor appears in — which is what makes a cross-event duplicate visible during search.
+- **"Add to my event"** button claims an exhibitor into the currently selected event and assigns it to the clicking user, additively — never touches any other event's assignment. New `POST /exhibitors/:id/claim-for-event`, gated on the `exhibitors:add` module permission (claiming is an add, not an edit of someone else's record).
+- `getExhibitor` now returns a **403 naming the current owner and their events** instead of a bare 404 when the record exists but isn't yours. A silent "not found" is precisely what drives reps to re-create a duplicate they were never allowed to see. Also widened visibility so a rep who claimed an exhibitor for their own event can actually open it.
+- **Found and fixed a real data-loss risk while building this**: `replaceEventParticipation` deletes-then-reinserts participation rows on every Exhibitor save, which would have wiped every per-event `salesperson_id` silently. It now snapshots existing owners and restores them for surviving events.
+- **Contested booths**: `listBooths` now returns a full `claims` array (every live claim, not just the primary). Booths with 2+ claims get a count badge on the map plus a hover breakdown (exhibitor, salesperson, contract-vs-proposed). Previously the map showed only the primary claim, silently hiding that a booth was contested. Verified live: 3 contested booths in Hall 1 & 2.
+- **Hall tally** now splits allocated into sold vs proposed for both booths and sqm (verified: 17 = 6 sold + 11 proposed; 152 = 54 + 98).
+- **Login page** shows the LowForce logo (180px) instead of the plain "LowForce Platform" text heading, on both the login form and the multi-company chooser.
+- Deployed and verified live on `lowforce.co`.
+
+**Still open / unresolved:**
+- Per-event ownership is built but the Exhibitor DETAIL screen still shows only the account-level salesperson — it now receives `event_assignments` from the API but doesn't render them yet. Worth adding so a rep can see/change per-event owners from the record itself.
+- Opportunities/Contracts still resolve their salesperson from `exhibitors.salesperson_id` (account level), not the per-event owner. That's deliberate for now (no behaviour change) but is the natural next step if per-event ownership should drive new deals too.
+- The Floor Plan sqm data gap persists (131 booths in Hall 1 & 2 with no sqm) — surfaced, not fixed.
+
+---
+
 ## 2026-08-04 (later)
 
 **Asked:** six items — (1) advice on multi-event / multi-company exhibitor scoping and role design; (2) event columns on the Exhibitor template; (3) cap attachments at 3MB; (4) Floor Plan hall header showing allocated vs total sqm/booths; (5) whether SSO can offer an account chooser; (6) a booth/sqm analysis report (local vs international, by country, by type).
