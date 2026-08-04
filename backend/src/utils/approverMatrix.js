@@ -80,4 +80,53 @@ function canActOnStep2(req, tier) {
   return tier.step2_approver_user_id ? tier.step2_approver_user_id === req.userId : tier.step2_approver_role_code === req.roleCode;
 }
 
-module.exports = { getRequiredApprover, canActOnTier, hasStep2, canActOnStep2 };
+// ---------------------------------------------------------------------------
+// Finance confirmation gates — Invoice Confirm, Credit Note Confirm, Payment
+// Record. Deliberately a SEPARATE, narrower path from the tiered matrix
+// above, not a reuse of getRequiredApprover/canActOnTier:
+//   - There is no dollar threshold to tier by — it's simply "who is allowed
+//     to do this at all" — so no threshold_value filtering.
+//   - canActOnTier grants Admin an automatic bypass on every tier
+//     ("Admin always can, regardless of tier"). These three actions were
+//     previously hardcoded as Finance-only with Admin explicitly EXCLUDED
+//     ("explicitly not even Admin/Management, per the user's own
+//     instruction" — see the old CAN_CONFIRM_ROLES comments this replaced).
+//     Reusing canActOnTier here would silently reintroduce an Admin
+//     override nobody asked for, so this gate has its own, stricter
+//     canActOnFinanceGate that never grants that bypass.
+// Falls back to the FIN role when nothing is configured, which is the exact
+// prior hardcoded behaviour — existing companies see no change until they
+// deliberately add a rule for one of these trigger types.
+async function getFinanceGateApprover(companyId, triggerType) {
+  const result = await pool.query(
+    `SELECT ar.approver_role_code, ar.approver_user_id, ar.backup_approver_user_id,
+            u.full_name AS approver_user_name, bu.full_name AS backup_approver_user_name
+     FROM approval_rules ar
+     LEFT JOIN users u ON u.id = ar.approver_user_id
+     LEFT JOIN users bu ON bu.id = ar.backup_approver_user_id
+     WHERE ar.company_id = $1 AND ar.trigger_type = $2 AND ar.is_active = TRUE
+     ORDER BY ar.sort_order LIMIT 1`,
+    [companyId, triggerType]
+  );
+  return result.rows[0] || null;
+}
+
+function canActOnFinanceGate(req, tier) {
+  if (!tier) return req.roleCode === 'FIN'; // unconfigured -> identical to the old hardcoded rule
+  if (tier.approver_user_id) {
+    if (tier.approver_user_id === req.userId) return true;
+  } else if (tier.approver_role_code === req.roleCode) {
+    return true;
+  }
+  return !!(tier.backup_approver_user_id && tier.backup_approver_user_id === req.userId);
+}
+
+function financeGateApproverLabel(tier) {
+  if (!tier) return 'Finance';
+  return tier.approver_user_name || tier.approver_role_code || 'Finance';
+}
+
+module.exports = {
+  getRequiredApprover, canActOnTier, hasStep2, canActOnStep2,
+  getFinanceGateApprover, canActOnFinanceGate, financeGateApproverLabel,
+};

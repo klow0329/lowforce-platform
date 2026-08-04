@@ -25,7 +25,17 @@ const emptyRuleForm = {
 // contract is just one flavour of POST_APPROVAL_EDIT, which already covers
 // it, so having both was redundant. Both are kept in TRIGGER_LABELS (not
 // this list) so any old rows still display correctly.
-const SELECTABLE_TRIGGERS = ['DISCOUNT_ABOVE_THRESHOLD', 'REVENUE_ABOVE_THRESHOLD', 'POST_APPROVAL_EDIT', 'CREDIT_NOTE_ISSUED', 'CONTRACT_REDUCTION', 'BUDGET_APPROVAL'];
+const SELECTABLE_TRIGGERS = [
+  'DISCOUNT_ABOVE_THRESHOLD', 'REVENUE_ABOVE_THRESHOLD', 'POST_APPROVAL_EDIT', 'CREDIT_NOTE_ISSUED', 'CONTRACT_REDUCTION', 'BUDGET_APPROVAL',
+  'INVOICE_CONFIRM', 'CREDIT_NOTE_CONFIRM', 'PAYMENT_RECORD',
+];
+// Trigger types with no threshold at all — "who is allowed to do this",
+// not "above what amount". Rendered without the threshold input, and
+// without the automatic Admin/Management bypass every threshold tier gets
+// (see backend/src/utils/approverMatrix.js's canActOnFinanceGate) — these
+// three were previously hardcoded to Finance only, Admin explicitly
+// excluded, and stay that strict even once configured here.
+const NO_THRESHOLD_TRIGGERS = ['INVOICE_CONFIRM', 'CREDIT_NOTE_CONFIRM', 'PAYMENT_RECORD'];
 const emptyProfileForm = {
   reg_no: '', tin_no: '', sst_no: '', address: '', phone: '', email: '',
   bank_name: '', bank_account_no: '', bank_swift: '', payment_instructions: '',
@@ -43,6 +53,9 @@ const TRIGGER_LABELS = {
   CREDIT_NOTE_ISSUED: 'Credit note above threshold',
   CONTRACT_REDUCTION: 'Contract value change above threshold',
   BUDGET_APPROVAL: 'Budget preparer & approver',
+  INVOICE_CONFIRM: 'Who can confirm an invoice',
+  CREDIT_NOTE_CONFIRM: 'Who can confirm a credit note',
+  PAYMENT_RECORD: 'Who can record/edit/remove a payment',
 };
 
 // Shown inline, only for whichever trigger is currently selected in the Add/
@@ -56,6 +69,9 @@ const TRIGGER_HELP = {
   CREDIT_NOTE_ISSUED: "Fires when a credit note issued against an invoice/contract exceeds the amount below.",
   CONTRACT_REDUCTION: "Fires when a Reduce Contract request's reduction amount (in MYR) exceeds the amount below — covers the whole request, including any Credit Note(s) it auto-generates against already-invoiced amounts, as one combined approval.",
   BUDGET_APPROVAL: 'A separate approval chain for the Budget module — a fixed named person to prepare, a fixed named person to approve, rather than a role or threshold. Admin can also always prepare or approve as a fallback.',
+  INVOICE_CONFIRM: "Controls who can confirm an invoice (and edit its number/date/amount/rate once issued) — this is the point an invoice becomes a real financial document. With no rule configured, only the Finance role can do this — not even Admin/Management, unless you add a rule here naming a different role or person. That exclusion stays in force even once a rule is added; there is no automatic Admin override for this one.",
+  CREDIT_NOTE_CONFIRM: "Controls who can confirm a credit note — the point it actually reduces its invoice's outstanding balance. Same rule as Invoice Confirm: defaults to Finance only, no automatic Admin override even once configured.",
+  PAYMENT_RECORD: "Controls who can record, edit or remove a payment. Same rule as Invoice Confirm: defaults to Finance only, no automatic Admin override even once configured.",
 };
 
 const TABS = [
@@ -2110,9 +2126,13 @@ export default function Admin({ user }) {
                   </label>
                 </div>
                 {ruleForm.approver_type === 'ROLE' ? (
+                  // Every role this company has actually defined, not a
+                  // fixed Admin/Management pair — a second company's role
+                  // set can look nothing like ExpoCO's (see CLAUDE.md rule
+                  // #2), and Invoice Confirm/Credit Note Confirm/Payment
+                  // Record specifically need Finance to be selectable here.
                   <select style={inputStyle} value={ruleForm.approver_role_code} onChange={(e) => setRuleForm({ ...ruleForm, approver_role_code: e.target.value })}>
-                    <option value="ADM">Admin</option>
-                    <option value="MGT">Management</option>
+                    {roles.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
                   </select>
                 ) : (
                   <select style={inputStyle} value={ruleForm.approver_user_id} onChange={(e) => setRuleForm({ ...ruleForm, approver_user_id: e.target.value })} required>
@@ -2163,8 +2183,7 @@ export default function Admin({ user }) {
                     </div>
                     {ruleForm.escalate_to_type === 'ROLE' ? (
                       <select style={inputStyle} value={ruleForm.escalate_to_role_code} onChange={(e) => setRuleForm({ ...ruleForm, escalate_to_role_code: e.target.value })}>
-                        <option value="ADM">Admin</option>
-                        <option value="MGT">Management</option>
+                        {roles.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
                       </select>
                     ) : (
                       <select style={inputStyle} value={ruleForm.escalate_to_user_id} onChange={(e) => setRuleForm({ ...ruleForm, escalate_to_user_id: e.target.value })} required>
@@ -2201,8 +2220,7 @@ export default function Admin({ user }) {
                         </div>
                         {ruleForm.step2_approver_type === 'ROLE' ? (
                           <select style={inputStyle} value={ruleForm.step2_approver_role_code} onChange={(e) => setRuleForm({ ...ruleForm, step2_approver_role_code: e.target.value })}>
-                            <option value="ADM">Admin</option>
-                            <option value="MGT">Management</option>
+                            {roles.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
                           </select>
                         ) : (
                           <select style={inputStyle} value={ruleForm.step2_approver_user_id} onChange={(e) => setRuleForm({ ...ruleForm, step2_approver_user_id: e.target.value })} required>

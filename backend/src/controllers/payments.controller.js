@@ -1,9 +1,13 @@
 const { pool } = require('../config/db');
+const { getFinanceGateApprover, canActOnFinanceGate, financeGateApproverLabel } = require('../utils/approverMatrix');
 
-// Recording, editing or removing a payment is Finance-only — not even
-// Admin/Management, matching the same strict rule already applied to
-// invoice confirmation (invoices.controller.js).
-const CAN_RECORD_PAYMENT_ROLES = ['FIN'];
+// Recording, editing or removing a payment is Finance-only by default, and
+// admin-configurable via the PAYMENT_RECORD approval rule — same mechanism
+// as invoice/CN confirmation, including no automatic Admin/Management
+// override.
+async function getPaymentGateTier(req) {
+  return getFinanceGateApprover(req.companyId, 'PAYMENT_RECORD');
+}
 
 // A payment is money actually received from a customer — it's no longer
 // tied to a single invoice. It gets allocated (in full, in part, or split
@@ -113,8 +117,9 @@ async function generateReceiptNo(client, companyId) {
 // it, since payment_allocations only carries one amount_foreign per line
 // and mixing currencies in a single receipt has no clean doc-currency total.
 async function createPayment(req, res) {
-  if (!CAN_RECORD_PAYMENT_ROLES.includes(req.roleCode)) {
-    return res.status(403).json({ error: 'Only Finance can record a payment.' });
+  const tier = await getPaymentGateTier(req);
+  if (!canActOnFinanceGate(req, tier)) {
+    return res.status(403).json({ error: `Only ${financeGateApproverLabel(tier)} can record a payment.` });
   }
   const { exhibitor_id, event_id, payment_date, currency, exchange_rate, amount_foreign, payment_method, bank_ref, allocations } = req.body;
 
@@ -260,8 +265,9 @@ async function deleteAllocation(req, res) {
 }
 
 async function updatePayment(req, res) {
-  if (!CAN_RECORD_PAYMENT_ROLES.includes(req.roleCode)) {
-    return res.status(403).json({ error: 'Only Finance can edit a payment.' });
+  const tier = await getPaymentGateTier(req);
+  if (!canActOnFinanceGate(req, tier)) {
+    return res.status(403).json({ error: `Only ${financeGateApproverLabel(tier)} can edit a payment.` });
   }
   const { amount_foreign, exchange_rate } = req.body;
   const fields = {};
@@ -326,8 +332,9 @@ async function updatePayment(req, res) {
 // so every invoice it touched reopens for that amount. Finance-only, same
 // gate as updatePayment above.
 async function deletePayment(req, res) {
-  if (!CAN_RECORD_PAYMENT_ROLES.includes(req.roleCode)) {
-    return res.status(403).json({ error: 'Only Finance can remove a payment.' });
+  const tier = await getPaymentGateTier(req);
+  if (!canActOnFinanceGate(req, tier)) {
+    return res.status(403).json({ error: `Only ${financeGateApproverLabel(tier)} can remove a payment.` });
   }
   const result = await pool.query(
     `DELETE FROM payments WHERE id = $1 AND company_id = $2 RETURNING id`,

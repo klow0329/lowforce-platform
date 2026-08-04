@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { financeVisibilityClause } = require('../utils/visibility');
+const { getFinanceGateApprover, canActOnFinanceGate, financeGateApproverLabel } = require('../utils/approverMatrix');
 
 async function listInvoices(req, res) {
   const { event_id, sales_order_id, exhibitor_id, search } = req.query;
@@ -265,17 +266,19 @@ async function issueScheduledInvoice(req, res) {
   }
 }
 
-// Confirming is Finance's call, and ONLY Finance's — explicitly not even
-// Admin/Management, per the user's own instruction. Enforced here too, not
-// just by hiding the button, since this is the same generic PUT used for
-// editing a draft's date/amount/rate.
-const CAN_CONFIRM_ROLES = ['FIN'];
-
+// Confirming is Finance's call by default, and admin-configurable via the
+// INVOICE_CONFIRM approval rule (Admin > Approval Rules) — deliberately NOT
+// a blanket Admin/Management override even when configured, per the user's
+// original instruction. See approverMatrix.js's canActOnFinanceGate.
 async function updateInvoice(req, res) {
   const { amount_foreign, exchange_rate } = req.body;
 
-  if (req.body.status === 'CONFIRMED' && !CAN_CONFIRM_ROLES.includes(req.roleCode)) {
-    return res.status(403).json({ error: 'Only Finance can confirm an invoice.' });
+  const confirmTier = req.body.status === 'CONFIRMED' || 'invoice_no' in req.body || 'invoice_date' in req.body || amount_foreign !== undefined || exchange_rate !== undefined
+    ? await getFinanceGateApprover(req.companyId, 'INVOICE_CONFIRM')
+    : null;
+
+  if (req.body.status === 'CONFIRMED' && !canActOnFinanceGate(req, confirmTier)) {
+    return res.status(403).json({ error: `Only ${financeGateApproverLabel(confirmTier)} can confirm an invoice.` });
   }
 
   // A SCHEDULED milestone isn't a real financial document yet — just a
@@ -299,8 +302,8 @@ async function updateInvoice(req, res) {
   // on the Aging report and stay open to anyone.
   const restrictedFields = ['invoice_no', 'invoice_date'];
   const touchesRestrictedFields = restrictedFields.some((f) => f in req.body) || amount_foreign !== undefined || exchange_rate !== undefined;
-  if (touchesRestrictedFields && !amountEditAllowedForSales && !CAN_CONFIRM_ROLES.includes(req.roleCode)) {
-    return res.status(403).json({ error: 'Only Finance can edit an invoice.' });
+  if (touchesRestrictedFields && !amountEditAllowedForSales && !canActOnFinanceGate(req, confirmTier)) {
+    return res.status(403).json({ error: `Only ${financeGateApproverLabel(confirmTier)} can edit an invoice.` });
   }
 
   const fields = {};

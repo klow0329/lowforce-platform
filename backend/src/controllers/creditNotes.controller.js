@@ -1,5 +1,5 @@
 const { pool } = require('../config/db');
-const { getRequiredApprover, canActOnTier } = require('../utils/approverMatrix');
+const { getRequiredApprover, canActOnTier, getFinanceGateApprover, canActOnFinanceGate, financeGateApproverLabel } = require('../utils/approverMatrix');
 const { recomputeTotals, calcLine } = require('./salesOrderItems.controller');
 const { releaseClaim } = require('../utils/floorPlanClaims');
 const { syncBoothFieldsAndMirror } = require('../utils/opportunitySync');
@@ -491,15 +491,16 @@ async function rejectCreditNote(req, res) {
   res.json({ success: true });
 }
 
-// Confirming is Finance's call, and ONLY Finance's — same rule and same
-// reasoning as invoice confirmation (invoices.controller.js). This is the
-// point a CN actually starts reducing its invoice's outstanding balance.
-// Gated on at least one attachment, same as issuing an Invoice.
-const CAN_CONFIRM_ROLES = ['FIN'];
-
+// Confirming is Finance's call by default, and admin-configurable via the
+// CREDIT_NOTE_CONFIRM approval rule — same mechanism and same reasoning as
+// invoice confirmation (invoices.controller.js), including no automatic
+// Admin/Management override. This is the point a CN actually starts
+// reducing its invoice's outstanding balance. Gated on at least one
+// attachment, same as issuing an Invoice.
 async function confirmCreditNote(req, res) {
-  if (!CAN_CONFIRM_ROLES.includes(req.roleCode)) {
-    return res.status(403).json({ error: 'Only Finance can confirm a credit note.' });
+  const tier = await getFinanceGateApprover(req.companyId, 'CREDIT_NOTE_CONFIRM');
+  if (!canActOnFinanceGate(req, tier)) {
+    return res.status(403).json({ error: `Only ${financeGateApproverLabel(tier)} can confirm a credit note.` });
   }
   const cnResult = await pool.query(`SELECT id, sales_order_id, amount_myr, status FROM credit_notes WHERE id = $1 AND company_id = $2`, [req.params.id, req.companyId]);
   const cn = cnResult.rows[0];
