@@ -6,6 +6,40 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04 (late night)
+
+**Asked:** (1) is the "One International Group with 4 other companies" text hardcoded, and how should group structure actually be managed? (2) As LowForce owner, should I register companies by company number via an admin console? (3) An accounting system (AP/AR, GL, bank rec, consolidated reporting) is the next major build — how does that affect Phases 2/3? Then: "go as per recommended."
+
+**Answered (verified, not assumed):**
+- **Not hardcoded** — grepped `"One International Group"` across all app code: zero occurrences. It reads `groups.name` and live-counts `companies.group_id`.
+- **But a real gap was found**: *zero* code paths created a group or a company. They existed only as migration seed data; the only way to add either was a direct SQL insert.
+- **Group/company registration belongs to the platform owner, not company Admins** — it's a privilege-escalation surface (group membership now grants cross-company visibility via migration 079) and a commercial act (licensing/billing).
+
+**Built — Platform-owner console (migration 080):**
+- **`platform_admins`** as a SEPARATE table, not a flag on `users`. Reasoning recorded in the migration: `users` is company-scoped, so a cross-tenant superuser living there would be a row some customer's Admin could see, deactivate or reassign — exactly the ownership-takeover risk raised earlier.
+- **Structural isolation, not conditional**: tenant routes require `req.session.user`; platform routes require `req.session.platformAdmin`. Neither key satisfies the other's middleware, so there's no flag to mis-check and no escalation path. Platform login calls `session.regenerate()` so both can never be held at once.
+- Registration identity added: `companies.reg_no/country_code/notes/registered_at`, `groups.reg_no/country_code/notes`.
+- Console at **`/platform`**, rendered outside the tenant app shell (no NavBar/event context/company branding): register groups (with parent-group nesting), register companies, link company→group inline, see per-tenant user/event/exhibitor counts, and create each tenant's **first** Admin.
+- Registering a company also creates its starter config (roles/stages/aging buckets/settings) — without the ADM role there'd be no role to give its first user.
+- **No delete endpoint** — companies deactivate via `is_active`, since `audit_log` correctly holds FK references (discovered during cleanup; the append-only audit trail working as intended).
+- First admin created by `node backend/scripts/create-platform-admin.js <email> "<Name>"`, which generates the password itself and prints it once — no credential hardcoded, committed, or passed as a shell argument.
+
+**Verified by live test:** tenant ADM → platform routes 401 (GET and POST); platform admin → `/exhibitors`, `/admin/users`, `/settings` all 401; platform admin → platform routes OK (all 5 tenants); newly provisioned tenant logs in, passes admin-gated routes, sees 0 other-company exhibitors; "Create first Admin" refuses on any company that already has users (no back door); group self-parent cycle rejected. Deployed; re-confirmed on `lowforce.co` that the tenant session is refused by the platform API.
+
+**Advice given on the accounting system (nothing built):**
+- The SAP identity/company-code split becomes **non-negotiable** once AP exists — a vendor carries payment terms, bank details, withholding status and credit limits, all per legal entity. Phase 2's "copy identity, blank financials, link via `master_*_id`" is therefore right for vendors too, and `company_group_sharing` already accepts `resource_type = 'VENDORS'` with no schema change.
+- **Consolidated reporting is not summing across companies** — intercompany revenue/expense must be *eliminated*, which needs each group company to exist as a counterparty in the others' books, transactions tagged intercompany, and an elimination step. This makes the `master_*_id` link infrastructure rather than a nicety.
+- A shared **group Chart of Accounts mapping** should be designed before the first GL line is written.
+- Recommended **holding Phase 3 (consolidated reporting)** until the accounting design exists — building it on CRM data now and rebuilding it on GL data later is wasted work.
+
+**Still open / unresolved:**
+- **No platform admin exists on Railway yet** — the user must run the create script themselves (I can't handle the credential). Until then `/platform` is unusable in production.
+- Phase 2 (adopt) still not built; now explicitly scoped to cover exhibitors *and* vendors.
+- Phase 3 deliberately deferred pending accounting design.
+- Platform console has no audit logging of its own actions yet — worth adding before it registers real customers.
+
+---
+
 ## 2026-08-04 (night)
 
 **Asked:** proceed with the 3-phase group resource sharing plan, **with each entity able to opt out of sharing its own data**. Noted that a future Vendor list (Operations invoicing) will follow the same concept.
