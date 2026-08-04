@@ -31,16 +31,26 @@ export const platformApi = {
   login: (email, password) => apiFetch('/platform/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => apiFetch('/platform/me'),
   logout: () => apiFetch('/platform/logout', { method: 'POST' }),
+  changePassword: (current_password, new_password) => apiFetch('/platform/me/password', {
+    method: 'PUT', body: JSON.stringify({ current_password, new_password }),
+  }),
   listGroups: () => apiFetch('/platform/groups'),
   createGroup: (body) => apiFetch('/platform/groups', { method: 'POST', body: JSON.stringify(body) }),
   updateGroup: (id, body) => apiFetch(`/platform/groups/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteGroup: (id) => apiFetch(`/platform/groups/${id}`, { method: 'DELETE' }),
   listCompanies: () => apiFetch('/platform/companies'),
   createCompany: (body) => apiFetch('/platform/companies', { method: 'POST', body: JSON.stringify(body) }),
   updateCompany: (id, body) => apiFetch(`/platform/companies/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteCompany: (id) => apiFetch(`/platform/companies/${id}`, { method: 'DELETE' }),
   createCompanyAdmin: (id, body) => apiFetch(`/platform/companies/${id}/admin-user`, { method: 'POST', body: JSON.stringify(body) }),
   setCompanySuspension: (id, isActive, reason) => apiFetch(`/platform/companies/${id}/suspension`, {
     method: 'PUT', body: JSON.stringify({ is_active: isActive, reason }),
   }),
+  listCompanyUsers: (id) => apiFetch(`/platform/companies/${id}/users`),
+  updateCompanyUser: (id, userId, body) => apiFetch(`/platform/companies/${id}/users/${userId}`, {
+    method: 'PUT', body: JSON.stringify(body),
+  }),
+  resetCompanyUserPassword: (id, userId) => apiFetch(`/platform/companies/${id}/users/${userId}/reset-password`, { method: 'POST' }),
   listAudit: () => apiFetch('/platform/audit'),
 };
 

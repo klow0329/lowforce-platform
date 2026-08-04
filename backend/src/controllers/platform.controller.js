@@ -67,6 +67,28 @@ function platformLogout(req, res) {
   req.session.destroy(() => res.json({ success: true }));
 }
 
+// Self-service password change for the LOGGED-IN platform admin. If you
+// forget it entirely (no session to change it from), the recovery path is
+// re-running backend/scripts/create-platform-admin.js with the same email —
+// it upserts on email, so it doubles as a reset.
+async function platformChangePassword(req, res) {
+  const { current_password, new_password } = req.body;
+  if (!current_password || !new_password) {
+    return res.status(400).json({ error: 'Current and new password are required.' });
+  }
+  if (new_password.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+  }
+  const result = await pool.query(`SELECT password_hash FROM platform_admins WHERE id = $1`, [req.platformAdmin.id]);
+  if (!(await verifyPassword(current_password, result.rows[0].password_hash))) {
+    return res.status(401).json({ error: 'Current password is incorrect.' });
+  }
+  const newHash = await hashPassword(new_password);
+  await pool.query(`UPDATE platform_admins SET password_hash = $1 WHERE id = $2`, [newHash, req.platformAdmin.id]);
+  await recordPlatformAudit(req, { action: 'PASSWORD_CHANGE' });
+  res.json({ success: true });
+}
+
 // ---------------------------------------------------------------------------
 // Groups
 // ---------------------------------------------------------------------------
@@ -139,7 +161,33 @@ async function updateGroup(req, res) {
     [req.params.id, ...cols.map((c) => fields[c])]
   );
   if (!result.rows[0]) return res.status(404).json({ error: 'Group not found.' });
+  await recordPlatformAudit(req, { action: 'GROUP_UPDATE', entityType: 'group', entityId: req.params.id, details: { changed: fields } });
   res.json({ group: { id: req.params.id } });
+}
+
+// Refuses if any company is still linked, or any other group still has this
+// one as its parent — both would otherwise orphan a live reference the
+// moment this row disappeared. Unlink companies (via updateCompany's
+// group_id) and reassign/detach child groups (via updateGroup's
+// parent_group_id) first; only an empty, childless group can be deleted.
+// No FK on groups from anything with its own audit trail, so a hard delete
+// here (unlike companies) doesn't risk breaking one.
+async function deleteGroup(req, res) {
+  const group = await pool.query(`SELECT name FROM groups WHERE id = $1`, [req.params.id]);
+  if (!group.rows[0]) return res.status(404).json({ error: 'Group not found.' });
+
+  const companies = await pool.query(`SELECT COUNT(*) FROM companies WHERE group_id = $1`, [req.params.id]);
+  if (Number(companies.rows[0].count) > 0) {
+    return res.status(409).json({ error: 'This group still has companies linked to it. Move or unlink them first (edit each company\'s Group).' });
+  }
+  const children = await pool.query(`SELECT COUNT(*) FROM groups WHERE parent_group_id = $1`, [req.params.id]);
+  if (Number(children.rows[0].count) > 0) {
+    return res.status(409).json({ error: 'This group still has child groups under it. Reassign or detach them first.' });
+  }
+
+  await pool.query(`DELETE FROM groups WHERE id = $1`, [req.params.id]);
+  await recordPlatformAudit(req, { action: 'GROUP_DELETE', entityType: 'group', entityId: req.params.id, details: { name: group.rows[0].name } });
+  res.json({ success: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +334,109 @@ async function setCompanySuspension(req, res) {
   res.json({ company: { id: req.params.id, is_active } });
 }
 
+// Only ever a hard delete for a company that was never actually used —
+// zero users, events, or exhibitors. Anything beyond that must be
+// suspended instead (setCompanySuspension), never deleted: audit_log
+// correctly FK-references companies, and a populated tenant's own history
+// must survive. This exists purely to clean up a company registered by
+// mistake before anyone touched it.
+async function deleteCompany(req, res) {
+  const company = await pool.query(
+    `SELECT c.name,
+            (SELECT COUNT(*) FROM users u WHERE u.company_id = c.id) AS user_count,
+            (SELECT COUNT(*) FROM events e WHERE e.company_id = c.id) AS event_count,
+            (SELECT COUNT(*) FROM exhibitors e WHERE e.company_id = c.id) AS exhibitor_count
+     FROM companies c WHERE c.id = $1`,
+    [req.params.id]
+  );
+  if (!company.rows[0]) return res.status(404).json({ error: 'Company not found.' });
+  const { user_count, event_count, exhibitor_count, name } = company.rows[0];
+  if (Number(user_count) > 0 || Number(event_count) > 0 || Number(exhibitor_count) > 0) {
+    return res.status(409).json({
+      error: 'This company has real data (users, events, or exhibitors) — suspend it instead of deleting. Deleting is only for a company registered by mistake that was never actually used.',
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const t of ['roles', 'sales_stages', 'aging_buckets', 'company_settings', 'approval_rules']) {
+      await client.query(`DELETE FROM ${t} WHERE company_id = $1`, [req.params.id]);
+    }
+    await client.query(`DELETE FROM companies WHERE id = $1`, [req.params.id]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await recordPlatformAudit(req, { action: 'COMPANY_DELETE', entityType: 'company', entityId: req.params.id, details: { name } });
+  res.json({ success: true });
+}
+
+// The company's own users, so the platform operator can see who to contact
+// and, if needed, fix a login — this is the recovery path for a tenant
+// whose only Admin is locked out, since there is no self-service "forgot
+// password" inside the tenant app itself (custom-built auth, per CLAUDE.md
+// rule #4 — no vendor to hand that off to).
+async function listCompanyUsers(req, res) {
+  const result = await pool.query(
+    `SELECT u.id, u.email, u.full_name, u.is_active, r.code AS role_code, r.name AS role_name
+     FROM users u LEFT JOIN roles r ON r.id = u.role_id
+     WHERE u.company_id = $1 ORDER BY u.full_name`,
+    [req.params.id]
+  );
+  res.json({ users: result.rows });
+}
+
+// Deliberately narrow: email and full_name only, not role or is_active —
+// those are the tenant's own Admin's call from inside Admin > Users. This
+// is for fixing a wrong login email or a name typo entered at registration,
+// not for platform-console user administration.
+async function updateCompanyUser(req, res) {
+  const { email, full_name } = req.body;
+  const fields = {};
+  if (email !== undefined) fields.email = String(email).trim().toLowerCase();
+  if (full_name !== undefined) fields.full_name = String(full_name).trim();
+  const cols = Object.keys(fields);
+  if (cols.length === 0) return res.json({ user: { id: req.params.userId } });
+
+  const setClause = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
+  const result = await pool.query(
+    `UPDATE users SET ${setClause} WHERE id = $1 AND company_id = $2 RETURNING id`,
+    [req.params.userId, req.params.id, ...cols.map((c) => fields[c])]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: 'User not found.' });
+  await recordPlatformAudit(req, {
+    action: 'TENANT_USER_UPDATE', entityType: 'user', entityId: req.params.userId, companyId: req.params.id,
+    details: { changed: fields },
+  });
+  res.json({ user: { id: req.params.userId } });
+}
+
+// The actual "forgot password" recovery mechanism for tenants: rather than
+// a self-service email-reset flow (more infrastructure, more attack
+// surface, and this product has no per-tenant outbound-email identity to
+// send it from convincingly), a locked-out company contacts the platform
+// operator, who resets it here — same one-time-password-in-the-response
+// pattern as createCompanyAdmin.
+async function resetCompanyUserPassword(req, res) {
+  const user = await pool.query(`SELECT email FROM users WHERE id = $1 AND company_id = $2`, [req.params.userId, req.params.id]);
+  if (!user.rows[0]) return res.status(404).json({ error: 'User not found.' });
+
+  const tempPassword = require('crypto').randomBytes(9).toString('base64').replace(/[+/=]/g, '').slice(0, 12) + '!1';
+  const passwordHash = await hashPassword(tempPassword);
+  await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, req.params.userId]);
+
+  await recordPlatformAudit(req, {
+    action: 'TENANT_USER_PASSWORD_RESET', entityType: 'user', entityId: req.params.userId, companyId: req.params.id,
+    details: { email: user.rows[0].email },
+  });
+  res.json({ user: { id: req.params.userId, email: user.rows[0].email, temp_password: tempPassword } });
+}
+
 async function listPlatformAudit(req, res) {
   const result = await pool.query(
     `SELECT l.id, l.admin_email, l.action, l.entity_type, l.entity_id, l.details, l.created_at,
@@ -341,7 +492,9 @@ async function createCompanyAdmin(req, res) {
 }
 
 module.exports = {
-  platformLogin, platformMe, platformLogout,
-  listGroups, createGroup, updateGroup,
-  listCompanies, createCompany, updateCompany, setCompanySuspension, createCompanyAdmin, listPlatformAudit,
+  platformLogin, platformMe, platformLogout, platformChangePassword,
+  listGroups, createGroup, updateGroup, deleteGroup,
+  listCompanies, createCompany, updateCompany, deleteCompany, setCompanySuspension, createCompanyAdmin,
+  listCompanyUsers, updateCompanyUser, resetCompanyUserPassword,
+  listPlatformAudit,
 };

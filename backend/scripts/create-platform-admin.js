@@ -4,9 +4,16 @@
 // Local database:
 //   node backend/scripts/create-platform-admin.js you@example.com "Your Name"
 //
-// Railway (production) — `railway run` injects the service's own variables,
-// so no credential is ever typed or left in shell history:
-//   railway run --service lowforce-platform node backend/scripts/create-platform-admin.js you@example.com "Your Name"
+// Railway (production) — use the Postgres SERVICE, not lowforce-platform:
+// only Postgres carries DATABASE_PUBLIC_URL (the app service only has the
+// internal-only DATABASE_URL, unreachable from a laptop). `railway run`
+// injects it as an env var, so no credential is ever typed or left in
+// shell history:
+//   railway run --service Postgres node backend/scripts/create-platform-admin.js you@example.com "Your Name"
+//
+// Also doubles as a password RESET for an existing email (ON CONFLICT
+// below upserts) — this is the recovery path if you forget your own
+// platform password.
 //
 // A strong random password is generated and printed ONCE. It is never
 // stored in plain text, never committed, and never passed as an argument.

@@ -13,8 +13,8 @@ const input = { width: '100%', padding: 8, boxSizing: 'border-box' };
 const th = { textAlign: 'left', borderBottom: '1px solid #e2e5ec', padding: '6px 8px', fontSize: 12, color: '#5c6070' };
 const td = { padding: '6px 8px', borderBottom: '1px solid #f0f2f5', fontSize: 13 };
 
-const emptyCompany = { name: '', reg_no: '', country_code: '', group_id: '', notes: '' };
-const emptyGroup = { name: '', reg_no: '', country_code: '', parent_group_id: '', notes: '' };
+const emptyCompany = { id: null, name: '', reg_no: '', country_code: '', group_id: '', notes: '' };
+const emptyGroup = { id: null, name: '', reg_no: '', country_code: '', parent_group_id: '', notes: '' };
 
 export default function PlatformConsole() {
   const [admin, setAdmin] = useState(null);
@@ -28,8 +28,13 @@ export default function PlatformConsole() {
   const [companies, setCompanies] = useState([]);
   const [groupForm, setGroupForm] = useState(emptyGroup);
   const [companyForm, setCompanyForm] = useState(emptyCompany);
-  const [adminFor, setAdminFor] = useState(null);
+  const [usersFor, setUsersFor] = useState(null); // company object, or null when the panel is closed
+  const [companyUsers, setCompanyUsers] = useState([]);
   const [adminForm, setAdminForm] = useState({ email: '', full_name: '' });
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [userEditForm, setUserEditForm] = useState({ email: '', full_name: '' });
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [pwForm, setPwForm] = useState({ current_password: '', new_password: '', confirm: '' });
   const [audit, setAudit] = useState([]);
   const [busy, setBusy] = useState(false);
 
@@ -47,6 +52,13 @@ export default function PlatformConsole() {
   }
 
   useEffect(() => { if (admin) load(); }, [admin]);
+
+  function openUsersFor(company) {
+    setUsersFor(company);
+    setAdminForm({ email: '', full_name: '' });
+    setEditingUserId(null);
+    platformApi.listCompanyUsers(company.id).then(({ users }) => setCompanyUsers(users)).catch((e) => setError(e.message));
+  }
 
   async function handleLogin(e) {
     e.preventDefault();
@@ -103,8 +115,41 @@ export default function PlatformConsole() {
             <div style={{ fontSize: 12, color: '#5c6070' }}>{admin.full_name} · {admin.email}</div>
           </div>
         </div>
-        <button type="button" onClick={() => platformApi.logout().then(() => setAdmin(null))}>Log out</button>
+        <div>
+          <button type="button" onClick={() => setShowChangePassword(!showChangePassword)} style={{ marginRight: 8 }}>
+            {showChangePassword ? 'Cancel' : 'Change password'}
+          </button>
+          <button type="button" onClick={() => platformApi.logout().then(() => setAdmin(null))}>Log out</button>
+        </div>
       </div>
+
+      {showChangePassword && (
+        <form
+          style={{ ...box, borderColor: '#185FA5', maxWidth: 360 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (pwForm.new_password !== pwForm.confirm) { setError('New password and confirmation do not match.'); return; }
+            run(async () => {
+              await platformApi.changePassword(pwForm.current_password, pwForm.new_password);
+              setPwForm({ current_password: '', new_password: '', confirm: '' });
+              setShowChangePassword(false);
+            }, 'Password changed.');
+          }}
+        >
+          <strong style={{ fontSize: 13 }}>Change your password</strong>
+          <p style={{ fontSize: 12, color: '#5c6070' }}>
+            Forgot it entirely and can&rsquo;t log in to change it here? Re-run the bootstrap script with your same
+            email — it resets the password (see backend/scripts/create-platform-admin.js).
+          </p>
+          <label style={label}>Current password</label>
+          <input style={input} type="password" value={pwForm.current_password} onChange={(e) => setPwForm({ ...pwForm, current_password: e.target.value })} required />
+          <label style={label}>New password</label>
+          <input style={input} type="password" value={pwForm.new_password} onChange={(e) => setPwForm({ ...pwForm, new_password: e.target.value })} required minLength={8} />
+          <label style={label}>Confirm new password</label>
+          <input style={input} type="password" value={pwForm.confirm} onChange={(e) => setPwForm({ ...pwForm, confirm: e.target.value })} required minLength={8} />
+          <button type="submit" disabled={busy} style={{ marginTop: 10 }}>Save new password</button>
+        </form>
+      )}
 
       {error && <p style={{ color: '#B23A3A', fontSize: 13 }}>{error}</p>}
       {notice && <p style={{ color: '#2a7a2a', fontSize: 13 }}>{notice}</p>}
@@ -112,15 +157,32 @@ export default function PlatformConsole() {
       <h3>Groups</h3>
       <div style={box}>
         <table width="100%" style={{ borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Group</th><th style={th}>Reg No</th><th style={th}>Parent</th><th style={th}>Companies</th></tr></thead>
+          <thead><tr><th style={th}>Group</th><th style={th}>Reg No</th><th style={th}>Parent</th><th style={th}>Companies</th><th style={th}></th></tr></thead>
           <tbody>
-            {groups.length === 0 && <tr><td style={td} colSpan={4}>No groups yet.</td></tr>}
+            {groups.length === 0 && <tr><td style={td} colSpan={5}>No groups yet.</td></tr>}
             {groups.map((g) => (
               <tr key={g.id}>
                 <td style={td}>{g.name}</td>
                 <td style={td}>{g.reg_no || '—'}</td>
                 <td style={td}>{g.parent_group_name || '—'}</td>
                 <td style={td}>{g.company_count}</td>
+                <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button
+                    type="button" style={{ fontSize: 12, padding: '3px 8px' }}
+                    onClick={() => setGroupForm({ id: g.id, name: g.name, reg_no: g.reg_no || '', country_code: g.country_code || '', parent_group_id: g.parent_group_id || '', notes: g.notes || '' })}
+                  >
+                    Edit
+                  </button>{' '}
+                  <button
+                    type="button" style={{ fontSize: 12, padding: '3px 8px' }}
+                    onClick={() => {
+                      if (!window.confirm(`Delete group "${g.name}"? This only works if it has no companies and no child groups — otherwise it will be refused.`)) return;
+                      run(() => platformApi.deleteGroup(g.id), `${g.name} deleted.`);
+                    }}
+                  >
+                    Delete
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -128,7 +190,7 @@ export default function PlatformConsole() {
       </div>
 
       <div style={box}>
-        <strong style={{ fontSize: 13 }}>Register a group</strong>
+        <strong style={{ fontSize: 13 }}>{groupForm.id ? `Edit ${groupForm.name}` : 'Register a group'}</strong>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 200px' }}>
             <label style={label}>Group name *</label>
@@ -140,18 +202,28 @@ export default function PlatformConsole() {
           </div>
           <div style={{ flex: '1 1 140px' }}>
             <label style={label}>Parent group</label>
-            <select style={input} value={groupForm.parent_group_id} onChange={(e) => setGroupForm({ ...groupForm, parent_group_id: e.target.value })}>
+            <select style={input} value={groupForm.parent_group_id || ''} onChange={(e) => setGroupForm({ ...groupForm, parent_group_id: e.target.value })}>
               <option value="">— None (top level) —</option>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              {groups.filter((g) => g.id !== groupForm.id).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </div>
         </div>
-        <button
-          type="button" disabled={busy || !groupForm.name.trim()} style={{ marginTop: 10 }}
-          onClick={() => run(() => platformApi.createGroup(groupForm).then(() => setGroupForm(emptyGroup)), 'Group registered.')}
-        >
-          Register Group
-        </button>
+        <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+          <button
+            type="button" disabled={busy || !groupForm.name.trim()}
+            onClick={() => {
+              const payload = { name: groupForm.name, reg_no: groupForm.reg_no, country_code: groupForm.country_code, notes: groupForm.notes, parent_group_id: groupForm.parent_group_id || null };
+              if (groupForm.id) {
+                run(() => platformApi.updateGroup(groupForm.id, payload).then(() => setGroupForm(emptyGroup)), 'Group updated.');
+              } else {
+                run(() => platformApi.createGroup(payload).then(() => setGroupForm(emptyGroup)), 'Group registered.');
+              }
+            }}
+          >
+            {groupForm.id ? 'Save Changes' : 'Register Group'}
+          </button>
+          {groupForm.id && <button type="button" onClick={() => setGroupForm(emptyGroup)}>Cancel</button>}
+        </div>
       </div>
 
       <h3 style={{ marginTop: 28 }}>Companies (tenants)</h3>
@@ -189,10 +261,25 @@ export default function PlatformConsole() {
                 <td style={td}>{c.user_count}</td>
                 <td style={td}>{c.event_count}</td>
                 <td style={td}>{c.exhibitor_count}</td>
-                <td style={td}>
-                  {Number(c.user_count) === 0 && (
-                    <button type="button" style={{ fontSize: 12, padding: '3px 8px', marginRight: 6 }} onClick={() => { setAdminFor(c); setAdminForm({ email: '', full_name: '' }); }}>
-                      Create first Admin
+                <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                  <button type="button" style={{ fontSize: 12, padding: '3px 8px', marginRight: 6 }} onClick={() => openUsersFor(c)}>
+                    Users
+                  </button>
+                  <button
+                    type="button" style={{ fontSize: 12, padding: '3px 8px', marginRight: 6 }}
+                    onClick={() => setCompanyForm({ id: c.id, name: c.name, reg_no: c.reg_no || '', country_code: c.country_code || '', group_id: c.group_id || '', notes: c.notes || '' })}
+                  >
+                    Edit
+                  </button>
+                  {Number(c.user_count) === 0 && Number(c.event_count) === 0 && Number(c.exhibitor_count) === 0 && (
+                    <button
+                      type="button" style={{ fontSize: 12, padding: '3px 8px', marginRight: 6 }}
+                      onClick={() => {
+                        if (!window.confirm(`Delete "${c.name}"? This company has no users, events or exhibitors, so this is a real, unrecoverable delete — not a suspend.`)) return;
+                        run(() => platformApi.deleteCompany(c.id), `${c.name} deleted.`);
+                      }}
+                    >
+                      Delete
                     </button>
                   )}
                   {c.is_active ? (
@@ -225,41 +312,109 @@ export default function PlatformConsole() {
         </table>
       </div>
 
-      {adminFor && (
+      {usersFor && (
         <div style={{ ...box, borderColor: '#185FA5' }}>
-          <strong style={{ fontSize: 13 }}>First Admin for {adminFor.name}</strong>
-          <p style={{ fontSize: 12, color: '#5c6070' }}>
-            Creates this tenant&rsquo;s first Admin account and shows a one-time temporary password.
-            Everyone else is added by that Admin from inside the company.
-          </p>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 200px' }}>
-              <label style={label}>Email *</label>
-              <input style={input} value={adminForm.email} onChange={(e) => setAdminForm({ ...adminForm, email: e.target.value })} />
-            </div>
-            <div style={{ flex: '1 1 200px' }}>
-              <label style={label}>Full name *</label>
-              <input style={input} value={adminForm.full_name} onChange={(e) => setAdminForm({ ...adminForm, full_name: e.target.value })} />
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <strong style={{ fontSize: 13 }}>Users at {usersFor.name}</strong>
+            <button type="button" onClick={() => setUsersFor(null)}>Close</button>
           </div>
-          <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+
+          {companyUsers.length > 0 && (
+            <table width="100%" style={{ borderCollapse: 'collapse', marginTop: 8 }}>
+              <thead><tr><th style={th}>Name</th><th style={th}>Email</th><th style={th}>Role</th><th style={th}></th></tr></thead>
+              <tbody>
+                {companyUsers.map((u) => (
+                  <tr key={u.id}>
+                    {editingUserId === u.id ? (
+                      <>
+                        <td style={td}><input style={{ ...input, padding: 4 }} value={userEditForm.full_name} onChange={(e) => setUserEditForm({ ...userEditForm, full_name: e.target.value })} /></td>
+                        <td style={td}><input style={{ ...input, padding: 4 }} value={userEditForm.email} onChange={(e) => setUserEditForm({ ...userEditForm, email: e.target.value })} /></td>
+                        <td style={td}>{u.role_name || '—'}</td>
+                        <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                          <button
+                            type="button" style={{ fontSize: 12, padding: '3px 8px' }}
+                            onClick={() => run(async () => {
+                              await platformApi.updateCompanyUser(usersFor.id, u.id, userEditForm);
+                              setEditingUserId(null);
+                              openUsersFor(usersFor);
+                            }, 'User updated.')}
+                          >
+                            Save
+                          </button>{' '}
+                          <button type="button" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => setEditingUserId(null)}>Cancel</button>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td style={td}>{u.full_name}{!u.is_active && <span style={{ color: '#B23A3A', fontSize: 11 }}> (inactive)</span>}</td>
+                        <td style={td}>{u.email}</td>
+                        <td style={td}>{u.role_name || '—'}</td>
+                        <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                          <button
+                            type="button" style={{ fontSize: 12, padding: '3px 8px' }}
+                            onClick={() => { setEditingUserId(u.id); setUserEditForm({ email: u.email, full_name: u.full_name }); }}
+                          >
+                            Edit
+                          </button>{' '}
+                          <button
+                            type="button" style={{ fontSize: 12, padding: '3px 8px' }}
+                            onClick={() => {
+                              if (!window.confirm(`Reset the password for ${u.email}? This is the "forgot password" recovery path — they'll need the new temporary password from you.`)) return;
+                              run(async () => {
+                                const { user } = await platformApi.resetCompanyUserPassword(usersFor.id, u.id);
+                                window.alert(`Password reset for ${user.email}\n\nTemporary password: ${user.temp_password}\n\nSave this now — it is not shown again.`);
+                              });
+                            }}
+                          >
+                            Reset Password
+                          </button>
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #f0f2f5' }}>
+            <strong style={{ fontSize: 13 }}>
+              {companyUsers.length === 0 ? 'Create first Admin' : 'Add another Admin'}
+            </strong>
+            {companyUsers.length === 0 && (
+              <p style={{ fontSize: 12, color: '#5c6070' }}>
+                Creates this tenant&rsquo;s first Admin account and shows a one-time temporary password.
+                Everyone else is normally added by that Admin from inside the company — use this again only if
+                every Admin account here is locked out.
+              </p>
+            )}
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 200px' }}>
+                <label style={label}>Email *</label>
+                <input style={input} value={adminForm.email} onChange={(e) => setAdminForm({ ...adminForm, email: e.target.value })} />
+              </div>
+              <div style={{ flex: '1 1 200px' }}>
+                <label style={label}>Full name *</label>
+                <input style={input} value={adminForm.full_name} onChange={(e) => setAdminForm({ ...adminForm, full_name: e.target.value })} />
+              </div>
+            </div>
             <button
-              type="button" disabled={busy || !adminForm.email.trim() || !adminForm.full_name.trim()}
+              type="button" disabled={busy || !adminForm.email.trim() || !adminForm.full_name.trim()} style={{ marginTop: 10 }}
               onClick={() => run(async () => {
-                const { user } = await platformApi.createCompanyAdmin(adminFor.id, adminForm);
-                window.alert(`Admin created for ${adminFor.name}\n\nEmail: ${user.email}\nTemporary password: ${user.temp_password}\n\nSave this now — it is not shown again.`);
-                setAdminFor(null);
+                const { user } = await platformApi.createCompanyAdmin(usersFor.id, adminForm);
+                window.alert(`Admin created for ${usersFor.name}\n\nEmail: ${user.email}\nTemporary password: ${user.temp_password}\n\nSave this now — it is not shown again.`);
+                setAdminForm({ email: '', full_name: '' });
+                openUsersFor(usersFor);
               })}
             >
               Create Admin
             </button>
-            <button type="button" onClick={() => setAdminFor(null)}>Cancel</button>
           </div>
         </div>
       )}
 
       <div style={box}>
-        <strong style={{ fontSize: 13 }}>Register a company</strong>
+        <strong style={{ fontSize: 13 }}>{companyForm.id ? `Edit ${companyForm.name}` : 'Register a company'}</strong>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 200px' }}>
             <label style={label}>Company name *</label>
@@ -277,16 +432,27 @@ export default function PlatformConsole() {
             </select>
           </div>
         </div>
-        <p style={{ fontSize: 12, color: '#5c6070', marginBottom: 0 }}>
-          Registering also creates the starter setup every company needs — default roles, sales stages, aging buckets
-          and settings — which the company then edits for itself.
-        </p>
-        <button
-          type="button" disabled={busy || !companyForm.name.trim()} style={{ marginTop: 10 }}
-          onClick={() => run(() => platformApi.createCompany(companyForm).then(() => setCompanyForm(emptyCompany)), 'Company registered.')}
-        >
-          Register Company
-        </button>
+        {!companyForm.id && (
+          <p style={{ fontSize: 12, color: '#5c6070', marginBottom: 0 }}>
+            Registering also creates the starter setup every company needs — default roles, sales stages, aging buckets
+            and settings — which the company then edits for itself.
+          </p>
+        )}
+        <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+          <button
+            type="button" disabled={busy || !companyForm.name.trim()}
+            onClick={() => {
+              if (companyForm.id) {
+                run(() => platformApi.updateCompany(companyForm.id, companyForm).then(() => setCompanyForm(emptyCompany)), 'Company updated.');
+              } else {
+                run(() => platformApi.createCompany(companyForm).then(() => setCompanyForm(emptyCompany)), 'Company registered.');
+              }
+            }}
+          >
+            {companyForm.id ? 'Save Changes' : 'Register Company'}
+          </button>
+          {companyForm.id && <button type="button" onClick={() => setCompanyForm(emptyCompany)}>Cancel</button>}
+        </div>
       </div>
 
       <h3 style={{ marginTop: 28 }}>Platform Activity</h3>
