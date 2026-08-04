@@ -6,6 +6,31 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-04 (past midnight)
+
+**Asked:** (1) how to change/reset the platform console password, and what's the recovery path for both systems. (2) Add edit/delete for group and company in the console; concretely: remove Catcha Group and One International Group, leave ExpoCO with no group; allow editing a company's admin login/name too. (3) SSO still missing from both systems. (4) What does "Add to my event" do on the Exhibitor list.
+
+**(1) Built:** platform admin self-service password change (in-console panel). Forgot-entirely recovery unchanged and now documented in the panel itself: re-run `create-platform-admin.js` with the same email, it upserts. Also fixed that script's own Railway instructions — `railway run --service lowforce-platform` does NOT carry `DATABASE_PUBLIC_URL` (that variable lives on the Postgres service, not the app service); corrected to `railway run --service Postgres`, verified working.
+
+**(2) Built and executed exactly as asked:**
+- Group edit/delete, company edit/delete, all added to the console with safety guards (group delete refuses while linked/has children; company delete refuses unless zero users/events/exhibitors — real tenants stay suspend-only, never delete).
+- New: company Users panel (list, edit name/login email, reset password) — this is now the actual "forgot password" recovery story for a tenant whose only Admin is locked out, since the product has no self-service email-reset flow.
+- **Executed on production**: unlinked all 5 companies from "One International Group," deleted "One International Group" and "Catcha Group." ExpoCO now stands alone with no group, ready for the user to create a fresh group and assign it whenever they choose.
+- **Found and fixed a real bug mid-test**: deleting a company 500'd the moment it had ANY platform-audit history (the FK had no ON DELETE clause). Fixed via migration 082 to `ON DELETE SET NULL` rather than deleting the audit rows — each row's own `details` JSON already captured the company name, so history survives a delete.
+
+**(3) SSO scoped, not built.** User approved Google + Microsoft both, with dual login (password or SSO) and an account-chooser dropdown for multi-email devices. Real blocker: Claude cannot create the OAuth Client ID/Secret in Google Cloud Console or the App Registration in Microsoft Entra ID — that's the user's own action first. Documented as CLAUDE.md rule #13, to build once those credentials exist.
+
+**Bundled into this same request**: password policy tightened to min 8 chars + upper/lower/digit/special, applied through one shared validator everywhere a password is set (tenant, Admin-reset, platform admin), and one shared strong-password generator everywhere the system creates a temp password. Existing passwords keep working until next changed — not retroactive.
+
+**(4) Explained, not changed** — "Add to my event" (`ExhibitorsList.jsx` / `claimExhibitorForEvent`) is the cross-event handover for an exhibitor account that already exists under a different event: if AgriFood's salesperson finds an exhibitor active under MIFB but not yet part of AgriFood, this button adds an `exhibitor_events` row for AgriFood and assigns it to that salesperson, additive-only — it never touches the exhibitor's ownership under MIFB or any other event.
+
+**Still open / unresolved:**
+- SSO build blocked on the user creating OAuth credentials in Google Cloud Console and Microsoft Entra ID.
+- Accounting module remains on hold per the user's earlier explicit instruction.
+- Phase 2 (adopt) of Group Resource Sharing still not built.
+
+---
+
 ## 2026-08-04 (very late night)
 
 **Asked:** (1) still can't log in to `lowforce.co/platform` with the tenant password. (2) Audit the system for seeded/hardcoded rules that run without any admin setup — approval matrix (contract, CN) and Finance routing (invoice/CN confirm, payment) specifically named as suspected examples — and make everything admin-configurable, no premade defaults; show the current live routing for ExpoCO so it can be checked against reality. (3) Document all of this before context is lost.
