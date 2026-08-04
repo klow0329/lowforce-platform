@@ -30,6 +30,7 @@ const emptyProfileForm = {
   reg_no: '', tin_no: '', sst_no: '', address: '', phone: '', email: '',
   bank_name: '', bank_account_no: '', bank_swift: '', payment_instructions: '',
   budget_preparer_user_id: '', budget_approver_user_id: '', contract_terms: '', event_name: '',
+  stamp_duty_enabled: false, stamp_duty_rate_pct: '0.5', stamp_duty_round_to: '5', stamp_duty_minimum: '10',
 };
 const emptyExpenseCodeForm = { id: null, code: '', description: '', type: 'EXPENSE' };
 
@@ -600,6 +601,10 @@ export default function Admin({ user }) {
         budget_approver_user_id: settings.budget_approver_user_id || '',
         contract_terms: settings.contract_terms || '',
         event_name: settings.event_name || '',
+        stamp_duty_enabled: settings.stamp_duty_enabled || false,
+        stamp_duty_rate_pct: settings.stamp_duty_rate_pct ?? '0.5',
+        stamp_duty_round_to: settings.stamp_duty_round_to ?? '5',
+        stamp_duty_minimum: settings.stamp_duty_minimum ?? '10',
       });
       setBranding({
         logo: settings.has_logo, letterhead: settings.has_letterhead, footer: settings.has_footer,
@@ -1406,6 +1411,51 @@ export default function Admin({ user }) {
             value={profileForm.contract_terms}
             onChange={(e) => setProfileForm({ ...profileForm, contract_terms: e.target.value })}
           />
+
+          <h4 style={{ marginBottom: 4, marginTop: 24 }}>Stamp Duty</h4>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Off by default. When on, Sales can optionally add a Stamp Duty line to an Opportunity/Contract's billing —
+            computed as a % of the contract's total value (before tax), rounded up/down to the nearest amount below,
+            with a minimum charge. <strong>The default rate/rounding/minimum below are a starting point, not verified
+            against LHDN</strong> — confirm the correct figures for your own jurisdiction before relying on this for a
+            real invoice.
+          </p>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={profileForm.stamp_duty_enabled}
+              onChange={(e) => setProfileForm({ ...profileForm, stamp_duty_enabled: e.target.checked })}
+            />
+            Enable Stamp Duty for this company
+          </label>
+          {profileForm.stamp_duty_enabled && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 140px' }}>
+                <label style={label}>Rate (%)</label>
+                <input
+                  type="number" step="0.01" min="0" style={inputStyle}
+                  value={profileForm.stamp_duty_rate_pct}
+                  onChange={(e) => setProfileForm({ ...profileForm, stamp_duty_rate_pct: e.target.value })}
+                />
+              </div>
+              <div style={{ flex: '1 1 140px' }}>
+                <label style={label}>Round to nearest (RM)</label>
+                <input
+                  type="number" step="0.01" min="0" style={inputStyle}
+                  value={profileForm.stamp_duty_round_to}
+                  onChange={(e) => setProfileForm({ ...profileForm, stamp_duty_round_to: e.target.value })}
+                />
+              </div>
+              <div style={{ flex: '1 1 140px' }}>
+                <label style={label}>Minimum charge (RM)</label>
+                <input
+                  type="number" step="0.01" min="0" style={inputStyle}
+                  value={profileForm.stamp_duty_minimum}
+                  onChange={(e) => setProfileForm({ ...profileForm, stamp_duty_minimum: e.target.value })}
+                />
+              </div>
+            </div>
+          )}
 
           <button type="submit" disabled={savingProfile} style={{ marginTop: 12 }}>{savingProfile ? 'Saving...' : 'Save Profile'}</button>
         </form>

@@ -112,6 +112,7 @@ export default function SalesOrderDetail({ user }) {
   const [creditTerms, setCreditTerms] = useState([]);
   const [taxCodes, setTaxCodes] = useState([]);
   const [lodPct, setLodPct] = useState(15);
+  const [stampDuty, setStampDuty] = useState(null);
 
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -271,7 +272,15 @@ export default function SalesOrderDetail({ user }) {
     api.listTaxCodes().then(({ taxCodes }) => setTaxCodes(taxCodes));
     api.listStages().then(({ stages }) => setStages(stages));
     api.listCnReasonCodes().then(({ reasonCodes }) => setReasonCodes(reasonCodes));
-    api.getSettings().then(({ settings }) => setLodPct(settings?.lod_pct_of_bas ?? 15));
+    api.getSettings().then(({ settings }) => {
+      setLodPct(settings?.lod_pct_of_bas ?? 15);
+      setStampDuty({
+        enabled: settings?.stamp_duty_enabled || false,
+        rate_pct: settings?.stamp_duty_rate_pct ?? 0.5,
+        round_to: settings?.stamp_duty_round_to ?? 5,
+        minimum: settings?.stamp_duty_minimum ?? 10,
+      });
+    });
   }, []);
 
   // Loads the record fresh — UNLESS a draft was stashed in sessionStorage
@@ -1442,6 +1451,7 @@ export default function SalesOrderDetail({ user }) {
             priceList={priceList}
             taxCodes={taxCodes}
             lodPct={lodPct}
+            stampDuty={stampDuty}
             onSaved={() => { loadItems(); loadSalesOrder(); loadApprovalLog(); }}
             readOnly={isLocked}
             rightActions={canRequestReduction && (
@@ -1497,6 +1507,7 @@ export default function SalesOrderDetail({ user }) {
                   priceList={priceList}
                   taxCodes={taxCodes}
                   lodPct={lodPct}
+                  stampDuty={stampDuty}
                   showSaveButton={false}
                   onSaved={() => {}}
                   onTotalChange={(total) => setReductionAdjustedTotal(total)}

@@ -656,6 +656,7 @@ const PROFILE_FIELDS = [
   'reg_no', 'tin_no', 'sst_no', 'address', 'phone', 'email',
   'bank_name', 'bank_account_no', 'bank_swift', 'payment_instructions',
   'budget_preparer_user_id', 'budget_approver_user_id', 'contract_terms', 'event_name',
+  'stamp_duty_enabled', 'stamp_duty_rate_pct', 'stamp_duty_round_to', 'stamp_duty_minimum',
 ];
 
 async function getSettings(req, res) {
@@ -665,6 +666,7 @@ async function getSettings(req, res) {
             cs.contract_terms, cs.event_name,
             cs.budget_preparer_user_id, cs.budget_approver_user_id,
             up.full_name AS budget_preparer_name, ua.full_name AS budget_approver_name,
+            cs.stamp_duty_enabled, cs.stamp_duty_rate_pct, cs.stamp_duty_round_to, cs.stamp_duty_minimum,
             (cs.logo_filename IS NOT NULL) AS has_logo,
             (cs.letterhead_filename IS NOT NULL) AS has_letterhead,
             (cs.footer_filename IS NOT NULL) AS has_footer,

@@ -70,6 +70,7 @@ export default function OpportunityDetail({ user }) {
   const [creditTerms, setCreditTerms] = useState([]);
   const [taxCodes, setTaxCodes] = useState([]);
   const [lodPct, setLodPct] = useState(15);
+  const [stampDuty, setStampDuty] = useState(null);
   const [items, setItems] = useState([]);
   const [original, setOriginal] = useState(null);
   const [editing, setEditing] = useState(isNew);
@@ -118,7 +119,15 @@ export default function OpportunityDetail({ user }) {
       setTaxCodes(tc.taxCodes);
       setForm((f) => (f.stage_id ? f : { ...f, stage_id: st.stages[0]?.id || '' }));
     });
-    api.getSettings().then(({ settings }) => setLodPct(settings?.lod_pct_of_bas ?? 15));
+    api.getSettings().then(({ settings }) => {
+      setLodPct(settings?.lod_pct_of_bas ?? 15);
+      setStampDuty({
+        enabled: settings?.stamp_duty_enabled || false,
+        rate_pct: settings?.stamp_duty_rate_pct ?? 0.5,
+        round_to: settings?.stamp_duty_round_to ?? 5,
+        minimum: settings?.stamp_duty_minimum ?? 10,
+      });
+    });
   }, []);
 
   // Loads the record fresh (or, for a brand-new one, just leaves the default
@@ -778,6 +787,7 @@ export default function OpportunityDetail({ user }) {
             priceList={priceList}
             taxCodes={taxCodes}
             lodPct={lodPct}
+            stampDuty={stampDuty}
             onSaved={loadItems}
             showSaveButton={false}
           />

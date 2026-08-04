@@ -27,7 +27,7 @@ export const TEMPLATE_CODES = ['BAS', ...UPGRADE_CODES, ...FIXED_ROW_CODES];
 
 export const FIXED_LABELS = {
   BAS: 'BARE SPACE', COR: 'CORNER CHARGE', LOD: 'LOADING', MEP: 'MARKETING EXPOSURE PACKAGE',
-  BAD: 'BADGE', SPO: 'SPONSORSHIP', OTH: 'OTHER',
+  BAD: 'BADGE', SPO: 'SPONSORSHIP', OTH: 'OTHER', STAMP: 'STAMP DUTY',
   SSS: 'SHELL SCHEME', ESS: 'ENHANCED SHELL', WOP: 'WALK ON PACKAGE', CUB: 'CUSTOM BUILD',
 };
 
@@ -113,6 +113,16 @@ function subtotalOf(row) {
   return (Number(row.qty) || 0) * (Number(row.unit_price) || 0);
 }
 
+// Subtotal net of discount, but BEFORE tax — what Stamp Duty's own base is
+// computed from (Malaysian stamp duty is charged on the value excluding
+// GST/SST, per the user's explicit spec), as distinct from calcLineTotal
+// below which is tax-INCLUSIVE (what actually prints as the row's Total).
+function taxableOf(row) {
+  const subtotal = subtotalOf(row);
+  const discountAmount = subtotal * (Number(row.discount_value) || 0) / 100;
+  return subtotal - discountAmount;
+}
+
 function calcLineTotal(row, taxCodes) {
   const subtotal = subtotalOf(row);
   const discountAmount = subtotal * (Number(row.discount_value) || 0) / 100;
@@ -179,14 +189,14 @@ function fmtTotal(n) {
 // userEdited can never be set true again for these rows, so sync can never
 // silently break). MEP/BAD stay manually toggleable — they're optional
 // add-ons Sales chooses per deal, not tied to any booth's physical type.
-function NarrowRow({ code, checked, onToggle, row, onField, priceList, currency, bookingType, taxCodes, basUnitPrice, lodPct, qtyLocked }) {
+function NarrowRow({ code, checked, onToggle, row, onField, priceList, currency, bookingType, taxCodes, basUnitPrice, lodPct, qtyLocked, checkboxLocked = qtyLocked }) {
   const display = row.included ? row : { ...row, ...computeDefaults(code, priceList, currency, bookingType, basUnitPrice, lodPct) };
   const total = row.included ? calcLineTotal(row, taxCodes) : 0;
   const lockTitle = 'Controlled by the Floor Plan booth selection — pick booths (and their type) there to change this.';
   return (
     <tr style={{ borderBottom: '1px solid #eee' }}>
       <td style={{ width: COL.checkbox }}>
-        <input type="checkbox" checked={checked} disabled={qtyLocked} title={qtyLocked ? lockTitle : undefined} onChange={(e) => onToggle(e.target.checked)} />
+        <input type="checkbox" checked={checked} disabled={checkboxLocked} title={checkboxLocked ? lockTitle : undefined} onChange={(e) => onToggle(e.target.checked)} />
       </td>
       <td style={{ width: COL.code, fontWeight: 600 }}>{code}</td>
       <td>
@@ -288,7 +298,7 @@ function WideRow({ code, checked, onToggle, row, onField, priceList, currency, b
 // only happens after the parent's own create call returns) instead of this
 // component making its own API calls on its own button.
 const BillingTemplate = forwardRef(function BillingTemplate(
-  { parentType, parentId, currency, bookingType, items, priceList, taxCodes, onSaved, showSaveButton = true, readOnly = false, rightActions, onTotalChange, lodPct = 15 }, ref
+  { parentType, parentId, currency, bookingType, items, priceList, taxCodes, onSaved, showSaveButton = true, readOnly = false, rightActions, onTotalChange, lodPct = 15, stampDuty }, ref
 ) {
   const { add: apiAdd, update: apiUpdate, remove: apiRemove } = ENDPOINTS[parentType];
 
@@ -350,7 +360,10 @@ const BillingTemplate = forwardRef(function BillingTemplate(
 
   useEffect(() => {
     const byCode = {};
-    const allKnownCodes = [primaryBaseCode, ...upgradeCodes, ...addonCodes, ...wideRowCodes];
+    // STAMP is included here even though it's not in addonCodes (it isn't a
+    // Price List item at all — see the stampDuty prop/section below) so a
+    // previously-saved Stamp Duty line still reloads correctly.
+    const allKnownCodes = [primaryBaseCode, ...upgradeCodes, ...addonCodes, ...wideRowCodes, 'STAMP'];
     for (const it of items) {
       if (allKnownCodes.includes(it.sales_item_code)) byCode[it.sales_item_code] = it;
     }
@@ -362,7 +375,7 @@ const BillingTemplate = forwardRef(function BillingTemplate(
       ? upgradeItems.map((it) => ({ rowKey: `saved-${it.id}`, ...rowFromItem(it) }))
       : [blankUpgradeRow()]);
 
-    setFixedRows(Object.fromEntries([...addonCodes, ...wideRowCodes].map((c) => [c, byCode[c] ? rowFromItem(byCode[c]) : blankRow(c)])));
+    setFixedRows(Object.fromEntries([...addonCodes, ...wideRowCodes, 'STAMP'].map((c) => [c, byCode[c] ? rowFromItem(byCode[c]) : blankRow(c)])));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, primaryBaseCode]);
 
@@ -432,6 +445,38 @@ const BillingTemplate = forwardRef(function BillingTemplate(
     onTotalChange?.(liveTotal);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveTotal]);
+
+  // Stamp Duty is deliberately NOT booth-driven (unlike Corner/Loading) —
+  // it's a document-level charge on the contract's whole value, opted into
+  // manually via its own checkbox (see toggleFixed('STAMP', ...) below), and
+  // recomputed here whenever anything ELSE on the sheet changes. Uses
+  // taxableOf (NOT calcLineTotal) since the base is the value excluding
+  // GST/SST, per the user's explicit spec. Excluded from its own base so
+  // toggling it on/off doesn't change what it's a percentage of. No
+  // userEdited gate here (unlike COR/LOD) — its rate is always read-only
+  // (see NarrowRow), so there's no manual override to protect; toggleFixed
+  // still flips userEdited=true on the checkbox click itself, but that flag
+  // is simply unused for this row.
+  const stampDutyBase = allRows
+    .filter((row) => row.code !== 'STAMP')
+    .reduce((sum, row) => sum + (row.included ? taxableOf(row) : 0), 0);
+  useEffect(() => {
+    if (!stampDuty?.enabled) return;
+    const stampRow = fixedRows.STAMP;
+    if (!stampRow?.included) return;
+    const rate = Number(stampDuty.rate_pct) || 0;
+    const roundTo = Number(stampDuty.round_to) || 0;
+    const minimum = Number(stampDuty.minimum) || 0;
+    const raw = stampDutyBase * rate / 100;
+    const rounded = roundTo > 0 ? Math.round(raw / roundTo) * roundTo : raw;
+    const amount = Math.max(rounded, minimum).toFixed(2);
+    if (stampRow.unit_price === amount && stampRow.qty === 1) return;
+    setFixedRows((rows) => ({
+      ...rows,
+      STAMP: { ...(rows.STAMP || blankRow('STAMP')), code: 'STAMP', description: FIXED_LABELS.STAMP, unit_price: amount, qty: 1, included: true },
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stampDutyBase, stampDuty, fixedRows.STAMP?.included]);
 
   // The actual sync-to-server logic, parameterized by the target parent id
   // rather than reading the parentId prop directly — a brand-new record has
@@ -744,6 +789,17 @@ const BillingTemplate = forwardRef(function BillingTemplate(
                 qtyLocked={priceList.some((p) => p.sales_item_code === code && p.is_booth_related)}
               />
             ))}
+            {stampDuty?.enabled && (
+              <NarrowRow
+                code="STAMP" checked={fixedRows.STAMP?.included} onToggle={(checked) => toggleFixed('STAMP', checked)}
+                row={fixedRows.STAMP || blankRow('STAMP')} onField={(field, value) => setFixedField('STAMP', field, value)}
+                priceList={priceList} currency={currency} bookingType={bookingType} taxCodes={taxCodes}
+                basUnitPrice={currentBasRate()}
+                lodPct={lodPct}
+                qtyLocked
+                checkboxLocked={false}
+              />
+            )}
             {wideRowCodes.map((code) => (
               <WideRow
                 key={code} code={code} checked={fixedRows[code]?.included} onToggle={(checked) => toggleFixed(code, checked)}
