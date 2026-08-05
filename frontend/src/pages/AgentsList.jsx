@@ -176,9 +176,15 @@ export default function AgentsList({ user }) {
 
       {showAgentForm && (
         <form onSubmit={handleSaveAgent} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-          <label style={label}>Agent Name *</label>
+          <label style={label}>Short Name *</label>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            The abbreviation used everywhere in lists and dropdowns (e.g. "TRADEXPO").
+          </p>
           <input style={inputStyle} value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} required />
-          <label style={label}>Alt Name</label>
+          <label style={label}>Full Name</label>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            The agent's full legal/company name, for documents where the abbreviation isn't enough (e.g. "TRADEXPO SDN BHD").
+          </p>
           <input style={inputStyle} value={agentForm.name_alt} onChange={(e) => setAgentForm({ ...agentForm, name_alt: e.target.value })} />
 
           <label style={label}>Address</label>
@@ -241,7 +247,7 @@ export default function AgentsList({ user }) {
         <table width="100%" cellPadding="6">
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              <th>Name</th><th>Country</th><th>Salesperson</th><th>Status</th><th></th>
+              <th>Short Name</th><th>Full Name</th><th>Country</th><th>Salesperson</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -249,6 +255,7 @@ export default function AgentsList({ user }) {
               <>
               <tr key={a.id} style={{ borderBottom: '1px solid #eee', opacity: a.is_active ? 1 : 0.5 }}>
                 <td>{a.name}</td>
+                <td>{a.name_alt || '—'}</td>
                 <td>{a.country_name || '—'}</td>
                 <td>{a.salesperson_name || '—'}</td>
                 <td>{a.is_active ? 'Active' : 'Inactive'}</td>
@@ -278,7 +285,7 @@ export default function AgentsList({ user }) {
               </tr>
               {commissionAgentId === a.id && (
                 <tr>
-                  <td colSpan={5} style={{ background: '#F5F6FA', padding: 12 }}>
+                  <td colSpan={6} style={{ background: '#F5F6FA', padding: 12 }}>
                     <p style={{ fontSize: 12, color: '#5c6070', margin: '0 0 8px' }}>
                       Commission rate for {a.name} — pick any billing item (or "ALL REVENUE" as a catch-all) and a
                       rate for repeat-from-last-year vs new exhibitors. A specific item's rate wins over ALL REVENUE
@@ -359,7 +366,7 @@ export default function AgentsList({ user }) {
               )}
               </>
             ))}
-            {agents.length === 0 && <tr><td colSpan={5} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
+            {agents.length === 0 && <tr><td colSpan={6} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
           </tbody>
         </table>
       </div>
