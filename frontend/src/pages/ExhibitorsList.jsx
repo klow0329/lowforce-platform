@@ -58,8 +58,14 @@ export default function ExhibitorsList({ user }) {
   // Not in the selected event yet — the cross-event handover case. Claiming
   // adds this event's participation row and assigns it to you, without
   // touching whoever owns it in any other event.
-  function claimable(r) {
-    return !r.in_selected_event && !!selectedEventId;
+  // Hidden for now (2026-08-05, user request) — with Group Resource Sharing
+  // meaning multiple companies under one group can soon see each other's
+  // exhibitors, this button needs to distinguish "claim across events
+  // within my own company" from "claim from another group company," which
+  // it doesn't yet. Re-enable by restoring `!r.in_selected_event &&
+  // !!selectedEventId` once that distinction is built.
+  function claimable() {
+    return false;
   }
 
   async function handleClaim(r) {

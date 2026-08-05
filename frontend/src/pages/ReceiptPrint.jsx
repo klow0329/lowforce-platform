@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
-import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
+import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmt = (n, ccy = 'MYR') => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -40,6 +40,9 @@ export default function ReceiptPrint() {
           <BrandLogo company={company} height={44} />
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{payment.event_name}</div>
+        </div>
+        <div style={{ textAlign: 'center', alignSelf: 'center' }}>
+          <EventBrandLogo company={company} height={44} style={{ margin: '0 auto' }} />
         </div>
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0 }}>OFFICIAL RECEIPT</h2>

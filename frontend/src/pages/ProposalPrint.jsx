@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
-import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
+import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmt = (n, ccy = 'MYR') => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -88,6 +88,9 @@ export default function ProposalPrint() {
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{opportunity.event_name}</div>
         </div>
+        <div style={{ textAlign: 'center', alignSelf: 'center' }}>
+          <EventBrandLogo company={company} height={44} style={{ margin: '0 auto' }} />
+        </div>
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0 }}>PROPOSAL</h2>
           <div style={{ fontSize: 13 }}>No: {proposalNo}</div>
@@ -158,8 +161,7 @@ export default function ProposalPrint() {
 
       <p style={{ fontSize: 12, color: '#5c6070', marginTop: 24 }}>
         This is a proposal for reference purposes only and is not a tax invoice, proforma invoice or receipt.
-        Pricing is subject to change until a signed Contract is issued. Please quote {proposalNo} in any correspondence
-        about this proposal.
+        Please quote {proposalNo} in any correspondence about this proposal.
       </p>
       <FooterBand company={company} />
       </div>

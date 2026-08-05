@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf } from '../utils/pdf';
 import { amountInWords } from '../utils/amountInWords';
-import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
+import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -134,6 +134,9 @@ export default function InvoicePrint() {
             {(company.phone || company.email) && (
               <div style={{ color: '#5c6070' }}>{[company.phone, company.email].filter(Boolean).join(' | ')}</div>
             )}
+          </div>
+          <div style={{ textAlign: 'center', alignSelf: 'center' }}>
+            <EventBrandLogo company={company} height={44} style={{ margin: '0 auto' }} />
           </div>
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: '0 0 8px' }}>TAX INVOICE</h2>
