@@ -16,6 +16,31 @@ async function listAgents(req, res) {
 }
 
 // Segment Main + Sub, nested, so the form can group sub-segments under their parent.
+// Read-only, everyone can see it — which Main events (brands, e.g. "MIFB")
+// exist, used to populate Agent's Main-event multi-select. Creating a Main
+// itself stays Admin-only (Admin > Events).
+async function listMainEvents(req, res) {
+  const result = await pool.query(
+    `SELECT id, name FROM events WHERE company_id = $1 AND tier = 'MAIN' AND is_active = TRUE ORDER BY name`,
+    [req.companyId]
+  );
+  res.json({ mainEvents: result.rows });
+}
+
+// Read-only, everyone can see it — used to populate the Category dropdown
+// on Exhibitor's per-event participation and Agent's Main-event assignment.
+// Creating/editing the tags themselves stays Admin-only (admin.controller.js).
+async function listEventCategories(req, res) {
+  const result = await pool.query(
+    `SELECT ec.id, ec.main_event_id, ec.code, ec.name
+     FROM event_categories ec
+     WHERE ec.company_id = $1 AND ec.is_active = TRUE
+     ORDER BY ec.sort_order, ec.code`,
+    [req.companyId]
+  );
+  res.json({ eventCategories: result.rows });
+}
+
 async function listSegments(req, res) {
   const result = await pool.query(
     `SELECT sm.id AS main_id, sm.code AS main_code, sm.name AS main_name,
@@ -62,8 +87,10 @@ async function listEvents(req, res) {
   const accessibleIds = await getAccessibleEventIds(req.userId, req.companyId);
   if (accessibleIds.length === 0) return res.json({ events: [] });
   const result = await pool.query(
-    `SELECT e.id, e.code, e.name, e.event_year, e.parent_event_id, e.tier
+    `SELECT e.id, e.code, e.name, e.event_year, e.parent_event_id, e.tier,
+            m.id AS main_event_id, m.name AS main_event_name
      FROM events e
+     LEFT JOIN events m ON m.id = e.parent_event_id AND m.tier = 'MAIN'
      WHERE e.company_id = $1 AND e.is_active = TRUE AND e.tier != 'MAIN' AND e.id = ANY($2::uuid[])
      ORDER BY e.event_year DESC, e.name`,
     [req.companyId, accessibleIds]
@@ -141,4 +168,4 @@ async function listCnReasonCodes(req, res) {
   res.json({ reasonCodes: result.rows });
 }
 
-module.exports = { listCountries, listAgents, listSegments, listSalespeople, listEvents, listStages, getCompany, listCnReasonCodes };
+module.exports = { listCountries, listAgents, listSegments, listSalespeople, listEvents, listEventCategories, listMainEvents, listStages, getCompany, listCnReasonCodes };

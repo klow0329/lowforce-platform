@@ -49,6 +49,7 @@ const emptyForm = {
   billing_email: '',
   segments: [],
   event_ids: [],
+  event_categories: {}, // { [event_id]: category_id } — optional Sub-event tag per Edition participation (2026-08-05)
 };
 
 const section = { marginBottom: 24 };
@@ -105,10 +106,12 @@ export default function ExhibitorDetail({ user }) {
   const [billingExhibitorName, setBillingExhibitorName] = useState('');
   const [billingSearch, setBillingSearch] = useState('');
   const [billingResults, setBillingResults] = useState([]);
+  const [eventCategories, setEventCategories] = useState([]);
 
   useEffect(() => {
-    Promise.all([api.listCountries(), api.listAgents(), api.listSalespeople(), api.listSegments()]).then(
-      ([c, a, s, seg]) => {
+    Promise.all([api.listCountries(), api.listAgents(), api.listSalespeople(), api.listSegments(), api.listEventCategories()]).then(
+      ([c, a, s, seg, cat]) => {
+        setEventCategories(cat.eventCategories);
         setCountries(c.countries);
         setAgents(a.agents);
         setSalespeople(s.salespeople);
@@ -124,6 +127,12 @@ export default function ExhibitorDetail({ user }) {
       for (const key of Object.keys(emptyForm)) {
         if (exhibitor[key] !== null && exhibitor[key] !== undefined) loaded[key] = exhibitor[key];
       }
+      // event_assignments carries this exhibitor's own category_id per
+      // Edition — collapse it into the { event_id: category_id } shape the
+      // form/checkboxes use.
+      loaded.event_categories = Object.fromEntries(
+        (exhibitor.event_assignments || []).filter((a) => a.category_id).map((a) => [a.event_id, a.category_id])
+      );
       setForm(loaded);
       setOriginal(loaded);
       setBillingExhibitorName(exhibitor.billing_exhibitor_name || '');
@@ -192,12 +201,20 @@ export default function ExhibitorDetail({ user }) {
   }
 
   function toggleEventParticipation(eventId) {
-    setForm((f) => ({
-      ...f,
-      event_ids: f.event_ids.includes(eventId)
-        ? f.event_ids.filter((e) => e !== eventId)
-        : [...f.event_ids, eventId],
-    }));
+    setForm((f) => {
+      const removing = f.event_ids.includes(eventId);
+      const nextCategories = { ...f.event_categories };
+      if (removing) delete nextCategories[eventId]; // no participation -> no sub-event tag for it either
+      return {
+        ...f,
+        event_ids: removing ? f.event_ids.filter((e) => e !== eventId) : [...f.event_ids, eventId],
+        event_categories: nextCategories,
+      };
+    });
+  }
+
+  function setEventCategory(eventId, categoryId) {
+    setForm((f) => ({ ...f, event_categories: { ...f.event_categories, [eventId]: categoryId || undefined } }));
   }
 
   const changes = computeChanges(original, form);
@@ -557,33 +574,43 @@ export default function ExhibitorDetail({ user }) {
         <div style={section}>
           <h3>Event Participation</h3>
           <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
-            Which events (and sub-events) this exhibitor takes part in.
+            Which Editions (a specific year, e.g. "MIFB 2027") this exhibitor takes part in, grouped by Main event —
+            and optionally, which Sub-event (e.g. "MYFT") applies to that specific year's participation.
           </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {events
-              .filter((ev) => !ev.parent_event_id)
-              .map((main) => (
-                <div key={main.id}>
-                  <label style={{ fontSize: 13, fontWeight: 600 }}>
-                    <input
-                      type="checkbox"
-                      checked={form.event_ids.includes(main.id)}
-                      onChange={() => toggleEventParticipation(main.id)}
-                    />
-                    {' '}{main.name}
-                  </label>
-                  {events.filter((ev) => ev.parent_event_id === main.id).map((sub) => (
-                    <label key={sub.id} style={{ fontSize: 13, fontWeight: 400, display: 'block', marginLeft: 24 }}>
-                      <input
-                        type="checkbox"
-                        checked={form.event_ids.includes(sub.id)}
-                        onChange={() => toggleEventParticipation(sub.id)}
-                      />
-                      {' '}{sub.name} <span style={{ color: '#5c6070' }}>(sub-event)</span>
-                    </label>
-                  ))}
-                </div>
-              ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {Object.entries(
+              events.reduce((groups, ev) => {
+                const key = ev.main_event_name || '(No Main event)';
+                (groups[key] = groups[key] || []).push(ev);
+                return groups;
+              }, {})
+            ).map(([mainName, editions]) => (
+              <div key={mainName}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{mainName}</div>
+                {editions.map((ev) => {
+                  const checked = form.event_ids.includes(ev.id);
+                  const catOptions = eventCategories.filter((c) => c.main_event_id === ev.main_event_id);
+                  return (
+                    <div key={ev.id} style={{ marginLeft: 16, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <label style={{ fontSize: 13, fontWeight: 400 }}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleEventParticipation(ev.id)} />
+                        {' '}{ev.name}
+                      </label>
+                      {checked && catOptions.length > 0 && (
+                        <select
+                          style={{ fontSize: 12, padding: '2px 6px' }}
+                          value={form.event_categories[ev.id] || ''}
+                          onChange={(e) => setEventCategory(ev.id, e.target.value)}
+                        >
+                          <option value="">— Sub-event (optional) —</option>
+                          {catOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
 

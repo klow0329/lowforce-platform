@@ -229,7 +229,12 @@ const AGENT_FIELDS = [
 
 async function listAgentsAdmin(req, res) {
   const result = await pool.query(
-    `SELECT ag.*, u.full_name AS salesperson_name, cy.name AS country_name
+    `SELECT ag.*, u.full_name AS salesperson_name, cy.name AS country_name,
+            (SELECT COALESCE(STRING_AGG(m.name, ', ' ORDER BY m.name), '')
+               FROM agent_main_events ame JOIN events m ON m.id = ame.main_event_id
+              WHERE ame.agent_id = ag.id) AS main_event_names,
+            (SELECT COALESCE(ARRAY_AGG(ame.main_event_id), ARRAY[]::uuid[])
+               FROM agent_main_events ame WHERE ame.agent_id = ag.id) AS main_event_ids
      FROM agents ag
      LEFT JOIN users u ON u.id = ag.salesperson_id
      LEFT JOIN countries cy ON cy.code = ag.country_code
@@ -237,6 +242,45 @@ async function listAgentsAdmin(req, res) {
     [req.companyId]
   );
   res.json({ agents: result.rows });
+}
+
+// Standing fact about the agent (2026-08-05), not per-year — an agent can
+// be linked to MULTIPLE Main events ("imagine like SIAL international,
+// which [runs] across the region with different events" — user's own
+// example). Replace-all on save, same pattern as saveAgentCommissionRates
+// below — simpler than diffing adds/removes for a small set.
+async function setAgentMainEvents(req, res) {
+  const { main_event_ids } = req.body;
+  if (!Array.isArray(main_event_ids)) return res.status(400).json({ error: 'main_event_ids must be an array.' });
+
+  const agent = await pool.query(`SELECT id FROM agents WHERE id = $1 AND company_id = $2`, [req.params.id, req.companyId]);
+  if (!agent.rows[0]) return res.status(404).json({ error: 'Agent not found.' });
+
+  if (main_event_ids.length > 0) {
+    const valid = await pool.query(
+      `SELECT id FROM events WHERE id = ANY($1::uuid[]) AND company_id = $2 AND tier = 'MAIN'`,
+      [main_event_ids, req.companyId]
+    );
+    if (valid.rows.length !== main_event_ids.length) {
+      return res.status(400).json({ error: 'One or more selected events are not Main-tier events.' });
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM agent_main_events WHERE agent_id = $1`, [req.params.id]);
+    for (const mainEventId of main_event_ids) {
+      await client.query(`INSERT INTO agent_main_events (agent_id, main_event_id) VALUES ($1, $2)`, [req.params.id, mainEventId]);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+  res.json({ success: true });
 }
 
 async function createAgent(req, res) {
@@ -330,21 +374,44 @@ async function importAgents(req, res) {
       [req.companyId, name]
     );
     const cols = Object.keys(fields);
+    let agentId;
     if (existing.rows[0]) {
+      agentId = existing.rows[0].id;
       if (cols.length > 0) {
         const setClause = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
         await pool.query(
           `UPDATE agents SET ${setClause} WHERE id = $1 AND company_id = $2`,
-          [existing.rows[0].id, req.companyId, ...cols.map((c) => fields[c])]
+          [agentId, req.companyId, ...cols.map((c) => fields[c])]
         );
       }
       updated += 1;
     } else {
-      await pool.query(
-        `INSERT INTO agents (company_id, name, ${cols.join(', ')}) VALUES ($1, $2, ${cols.map((_, i) => `$${i + 3}`).join(', ')})`,
+      const inserted = await pool.query(
+        `INSERT INTO agents (company_id, name, ${cols.join(', ')}) VALUES ($1, $2, ${cols.map((_, i) => `$${i + 3}`).join(', ')}) RETURNING id`,
         [req.companyId, name, ...cols.map((c) => fields[c])]
       );
+      agentId = inserted.rows[0].id;
       created += 1;
+    }
+
+    // Which Main event(s) this agent represents (2026-08-05), comma-
+    // separated Main event NAMES (e.g. "MIFB, AgriFood World") — matched
+    // like Salesperson Email above. Additive: a name not listed is left
+    // alone, so a partial import can't silently unlink an existing one.
+    const mainEventNames = cleanText(row.main_events).split(',').map((s) => s.trim()).filter(Boolean);
+    for (const mainName of mainEventNames) {
+      const m = await pool.query(
+        `SELECT id FROM events WHERE company_id = $1 AND tier = 'MAIN' AND UPPER(TRIM(name)) = UPPER($2)`,
+        [req.companyId, mainName]
+      );
+      if (!m.rows[0]) {
+        skipped.push(`${name}: Main event "${mainName}" not found (agent still saved, that Main not linked)`);
+        continue;
+      }
+      await pool.query(
+        `INSERT INTO agent_main_events (agent_id, main_event_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [agentId, m.rows[0].id]
+      );
     }
   }
 
@@ -824,7 +891,7 @@ async function updateGroupSharing(req, res) {
 module.exports = {
   listTaxCodes, createTaxCode, updateTaxCode,
   listExpenseCodes, createExpenseCode, updateExpenseCode, importExpenseCodes,
-  listAgentsAdmin, createAgent, updateAgent, importAgents,
+  listAgentsAdmin, createAgent, updateAgent, importAgents, setAgentMainEvents,
   listAgentCommissionRates, saveAgentCommissionRates,
   listAgentCommissionBonusTiers, saveAgentCommissionBonusTiers,
   createSegmentMain, updateSegmentMain, deleteSegmentMain,

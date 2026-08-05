@@ -226,7 +226,7 @@ async function getExhibitor(req, res) {
     [exhibitor.id]
   );
   const eventsResult = await pool.query(
-    `SELECT ee.event_id, ee.salesperson_id, u.full_name AS salesperson_name
+    `SELECT ee.event_id, ee.salesperson_id, u.full_name AS salesperson_name, ee.category_id
      FROM exhibitor_events ee
      LEFT JOIN users u ON u.id = ee.salesperson_id
      WHERE ee.exhibitor_id = $1`,
@@ -271,7 +271,7 @@ async function createExhibitor(req, res) {
   const exhibitorId = result.rows[0].id;
   await replaceSegments(exhibitorId, req.body.segments);
   if ('event_ids' in req.body) {
-    await replaceEventParticipation(exhibitorId, req.body.event_ids, req.userId, req.companyId);
+    await replaceEventParticipation(exhibitorId, req.body.event_ids, req.userId, req.companyId, req.body.event_categories || {});
   }
 
   res.status(201).json({ exhibitor: { id: exhibitorId } });
@@ -302,7 +302,7 @@ async function updateExhibitor(req, res) {
     await replaceSegments(req.params.id, req.body.segments);
   }
   if ('event_ids' in req.body) {
-    await replaceEventParticipation(req.params.id, req.body.event_ids, req.userId, req.companyId);
+    await replaceEventParticipation(req.params.id, req.body.event_ids, req.userId, req.companyId, req.body.event_categories || {});
   }
 
   res.json({ exhibitor: { id: req.params.id } });
@@ -337,7 +337,13 @@ async function replaceSegments(exhibitorId, segments) {
 // Replaces event participation, but only within the events this user can
 // see — participation in events outside their access is left untouched, so
 // a sales user can't silently wipe a sub-event they don't work on.
-async function replaceEventParticipation(exhibitorId, eventIds, userId, companyId) {
+//
+// categoryByEvent (2026-08-05, optional): { [event_id]: category_id } — the
+// exhibitor's optional Sub-event tag (event_categories) for that specific
+// Edition's participation. A tag not year-specific itself (e.g. "MYFT"), but
+// WHERE it applies is recorded per participation, since revenue/sqm/booth
+// analysis needs to know which year's contract it belongs to.
+async function replaceEventParticipation(exhibitorId, eventIds, userId, companyId, categoryByEvent = {}) {
   if (!Array.isArray(eventIds)) return;
   const accessible = await getAccessibleEventIds(userId, companyId);
   const allowed = eventIds.filter((id) => accessible.includes(id));
@@ -347,11 +353,12 @@ async function replaceEventParticipation(exhibitorId, eventIds, userId, companyI
     await client.query('BEGIN');
     // This function replaces participation wholesale (delete-then-insert),
     // which would otherwise WIPE each row's per-event salesperson_id
-    // (migration 078) every time someone saved the Exhibitor form — a
-    // silent loss of assignment data. Snapshot the existing owners first
-    // and restore them for any event that survives the replace.
+    // (migration 078) and category_id every time someone saved the
+    // Exhibitor form — a silent loss of assignment/classification data.
+    // Snapshot the existing values first and restore them for any event
+    // that survives the replace, or apply the newly submitted category.
     const priorRows = await client.query(
-      `SELECT event_id, salesperson_id, assigned_at FROM exhibitor_events WHERE exhibitor_id = $1`,
+      `SELECT event_id, salesperson_id, assigned_at, category_id FROM exhibitor_events WHERE exhibitor_id = $1`,
       [exhibitorId]
     );
     const priorByEvent = Object.fromEntries(priorRows.rows.map((r) => [r.event_id, r]));
@@ -362,11 +369,12 @@ async function replaceEventParticipation(exhibitorId, eventIds, userId, companyI
     );
     for (const eventId of allowed) {
       const prior = priorByEvent[eventId];
+      const categoryId = eventId in categoryByEvent ? (categoryByEvent[eventId] || null) : (prior?.category_id || null);
       await client.query(
-        `INSERT INTO exhibitor_events (exhibitor_id, event_id, salesperson_id, assigned_at)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO exhibitor_events (exhibitor_id, event_id, salesperson_id, assigned_at, category_id)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT DO NOTHING`,
-        [exhibitorId, eventId, prior?.salesperson_id || null, prior?.assigned_at || null]
+        [exhibitorId, eventId, prior?.salesperson_id || null, prior?.assigned_at || null, categoryId]
       );
     }
     await client.query('COMMIT');
@@ -532,25 +540,44 @@ async function importExhibitors(req, res) {
       created += 1;
     }
 
-    // Which main/sub events this exhibitor takes part in, given as a
-    // comma-separated list of event CODES (e.g. "MIFB27, MYFT26") — matched
-    // by name the same way Agent/Salesperson/Billing Company are above.
-    // Additive: an unlisted event is NOT removed, so a partial import can't
-    // silently wipe participation the sheet simply didn't mention. Blank
-    // leaves everything as-is.
-    const eventCodes = cleanText(row.event_codes).split(',').map((c) => c.trim()).filter(Boolean);
-    for (const code of eventCodes) {
+    // Which Editions this exhibitor takes part in, given as a comma-
+    // separated list of event codes, each optionally followed by
+    // ":SUBEVENTCODE" for that Edition's optional Sub-event tag (2026-08-05)
+    // — e.g. "MIFB27:MYFT, MIFB26:MCE, MIFB27" (last one has no sub-event).
+    // Matched by code the same way Agent/Salesperson/Billing Company are
+    // above. Additive: an unlisted event is NOT removed, so a partial
+    // import can't silently wipe participation the sheet simply didn't
+    // mention. Blank leaves everything as-is.
+    const eventEntries = cleanText(row.event_codes).split(',').map((c) => c.trim()).filter(Boolean);
+    for (const entry of eventEntries) {
+      const [code, subCode] = entry.split(':').map((s) => s.trim());
       const ev = await pool.query(
         `SELECT id FROM events WHERE company_id = $1 AND UPPER(TRIM(code)) = $2`,
-        [req.companyId, code]
+        [req.companyId, code.toUpperCase()]
       );
       if (!ev.rows[0]) {
         skipped.push(`${companyName}: event code "${code}" not found (exhibitor still saved, that event not linked)`);
         continue;
       }
+      let categoryId = null;
+      if (subCode) {
+        const cat = await pool.query(
+          `SELECT ec.id FROM event_categories ec
+           JOIN events ev2 ON ev2.id = ec.main_event_id
+           WHERE ec.company_id = $1 AND UPPER(TRIM(ec.code)) = $2
+             AND ev2.id = (SELECT parent_event_id FROM events WHERE id = $3)`,
+          [req.companyId, subCode.toUpperCase(), ev.rows[0].id]
+        );
+        if (!cat.rows[0]) {
+          skipped.push(`${companyName}: sub-event code "${subCode}" not found under ${code}'s Main event (event still linked, without that tag)`);
+        } else {
+          categoryId = cat.rows[0].id;
+        }
+      }
       await pool.query(
-        `INSERT INTO exhibitor_events (exhibitor_id, event_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-        [exhibitorId, ev.rows[0].id]
+        `INSERT INTO exhibitor_events (exhibitor_id, event_id, category_id) VALUES ($1, $2, $3)
+         ON CONFLICT (exhibitor_id, event_id) DO UPDATE SET category_id = COALESCE(EXCLUDED.category_id, exhibitor_events.category_id)`,
+        [exhibitorId, ev.rows[0].id, categoryId]
       );
     }
   }

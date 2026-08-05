@@ -10,6 +10,7 @@ const section = { marginBottom: 40 };
 
 const emptyUserForm = { email: '', full_name: '', role_id: '', temp_password: '' };
 const emptyEventForm = { id: null, code: '', name: '', event_year: '', start_date: '', end_date: '', parent_event_id: '', tier: 'EDITION', venue: '' };
+const emptyCategoryForm = { id: null, main_event_id: '', code: '', name: '' };
 const emptyTaxCodeForm = { id: null, code: '', name: '', rate_pct: '' };
 const emptyRuleForm = {
   id: null, trigger_type: 'DISCOUNT_ABOVE_THRESHOLD', threshold_type: '', threshold_value: '',
@@ -145,6 +146,9 @@ export default function Admin({ user }) {
   const [showUserForm, setShowUserForm] = useState(false);
   const [eventForm, setEventForm] = useState(emptyEventForm);
   const [showEventForm, setShowEventForm] = useState(false);
+  const [eventCategories, setEventCategories] = useState([]);
+  const [categoryForm, setCategoryForm] = useState(emptyCategoryForm);
+  const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [error, setError] = useState('');
 
   const [taxCodes, setTaxCodes] = useState([]);
@@ -367,7 +371,9 @@ export default function Admin({ user }) {
         '199901012345', 'C1234567890', 'W10-1234-56789012', 'https://acme-exhibitions.example.com', '60312345679',
         'JANE TAN', 'MARKETING MANAGER', '60123456789', 'jane.tan@acme-exhibitions.example.com',
         'AHMAD FAIZAL', 'FINANCE EXECUTIVE', '60129876543', 'ahmad.faizal@acme-exhibitions.example.com',
-        'salesperson@example.com', 'ACME TRAVEL & EVENTS', '', events.map((ev) => ev.code).slice(0, 2).join(', ') || 'MIFB27',
+        'salesperson@example.com', 'ACME TRAVEL & EVENTS', '',
+        (events.filter((ev) => ev.tier === 'EDITION')[0]?.code || 'MIFB27')
+          + (eventCategories[0] ? `:${eventCategories[0].code}` : ''),
       ],
       [
         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
@@ -375,8 +381,11 @@ export default function Admin({ user }) {
           + 'must be digits only (no +, spaces, or dashes — required for WhatsApp links). Everything is trimmed and '
           + 'converted to UPPERCASE on import except Website and email addresses. Salesperson Email / Agent Name / '
           + 'Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable. '
-          + 'Event Codes: which main and/or sub events this exhibitor takes part in, comma-separated — '
-          + `valid codes for this company: ${events.map((ev) => ev.code).join(', ') || '(none set up yet — add Events first)'}. `
+          + 'Event Codes: which Edition(s) (e.g. "MIFB27") this exhibitor takes part in, comma-separated. Optionally add '
+          + '":SUBEVENTCODE" after an Edition code to also tag that year\'s participation with a Sub-event, '
+          + 'e.g. "MIFB27:MYFT, MIFB26" (second one has no sub-event) — '
+          + `valid Edition codes: ${events.filter((ev) => ev.tier === 'EDITION').map((ev) => ev.code).join(', ') || '(none set up yet — add Events first)'}; `
+          + `valid Sub-event codes: ${eventCategories.map((c) => c.code).join(', ') || '(none set up yet)'}. `
           + 'Leave blank to leave existing event participation untouched.',
       ],
     ]);
@@ -433,9 +442,21 @@ export default function Admin({ user }) {
 
   function handleDownloadAgentTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Salesperson Email'],
-      ['ACME TRAVEL & EVENTS', 'ACME T&E', 'MY', '8 JALAN BUKIT BINTANG', '55100', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR', '199801098765', 'C9876543210', 'W10-9876-54321098', 'https://acme-travel.example.com', '60323456780', 'salesperson@example.com'],
-      ['', '', '', '', '', '', '', '', '', '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Trimmed and converted to UPPERCASE on import except Website. Salesperson Email is matched by exact text against existing Users — leave blank if not applicable.'],
+      ['Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Salesperson Email', 'Main Events'],
+      [
+        'ACME TRAVEL & EVENTS', 'ACME T&E', 'MY', '8 JALAN BUKIT BINTANG', '55100', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR',
+        '199801098765', 'C9876543210', 'W10-9876-54321098', 'https://acme-travel.example.com', '60323456780',
+        'salesperson@example.com', events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name)[0] || 'MIFB',
+      ],
+      [
+        '', '', '', '', '', '', '', '', '', '', '', '', '',
+        '* = mandatory. Delete the sample row above before importing your real data. Trimmed and converted to '
+          + 'UPPERCASE on import except Website. Salesperson Email is matched by exact text against existing Users — '
+          + 'leave blank if not applicable. Main Events: which Main event(s) this agent represents, comma-separated '
+          + `(e.g. "MIFB, AgriFood World") — valid names: `
+          + `${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name).join(', ') || '(none set up yet — add a Main event first)'}. `
+          + 'Leave blank to leave existing Main event links untouched.',
+      ],
     ]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, 'Agents');
@@ -466,6 +487,7 @@ export default function Admin({ user }) {
         website: r['Website'] ?? r['website'] ?? '',
         fax: r['Fax'] ?? r['fax'] ?? '',
         salesperson_email: r['Salesperson Email'] ?? r['salesperson_email'] ?? '',
+        main_events: r['Main Events'] ?? r['main_events'] ?? '',
       })).filter((r) => r.name);
       const result = await api.importAgents(rows);
       setAgentImportResult(result);
@@ -610,6 +632,39 @@ export default function Admin({ user }) {
   function loadAll() {
     api.adminListUsers().then(({ users }) => setUsers(users));
     api.adminListEvents().then(({ events }) => setEvents(events));
+    api.adminListEventCategories().then(({ eventCategories }) => setEventCategories(eventCategories));
+  }
+
+  async function handleSaveCategory(e) {
+    e.preventDefault();
+    setError('');
+    try {
+      if (categoryForm.id) {
+        await api.adminUpdateEventCategory(categoryForm.id, { code: categoryForm.code, name: categoryForm.name });
+      } else {
+        await api.adminCreateEventCategory(categoryForm);
+      }
+      setCategoryForm(emptyCategoryForm);
+      setShowCategoryForm(false);
+      loadAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function startEditCategory(cat) {
+    setCategoryForm({ id: cat.id, main_event_id: cat.main_event_id, code: cat.code, name: cat.name });
+    setShowCategoryForm(true);
+  }
+
+  async function handleToggleCategoryActive(cat) {
+    setError('');
+    try {
+      await api.adminUpdateEventCategory(cat.id, { is_active: !cat.is_active });
+      loadAll();
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   function loadCurrencyAndApprovals() {
@@ -1375,6 +1430,58 @@ export default function Admin({ user }) {
         <p style={{ fontSize: 12, color: '#5c6070' }}>
           The event dropdown in the top bar picks up event changes on the next page reload.
         </p>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 28 }}>
+          <h3>Sub-events</h3>
+          <button onClick={() => { setCategoryForm(emptyCategoryForm); setShowCategoryForm(!showCategoryForm); }}>
+            {showCategoryForm ? 'Cancel' : '+ Add Sub-event'}
+          </button>
+        </div>
+        <p style={{ fontSize: 13, color: '#5c6070' }}>
+          Reusable tags under a Main event (e.g. "MYFT", "MCE" under "MIFB") — created once, applied to an
+          exhibitor's participation for whichever year it's relevant, instead of recreating a new event every year.
+        </p>
+        {showCategoryForm && (
+          <form onSubmit={handleSaveCategory} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+            <label style={label}>Main event</label>
+            <select
+              style={inputStyle} value={categoryForm.main_event_id} disabled={!!categoryForm.id} required
+              onChange={(e) => setCategoryForm({ ...categoryForm, main_event_id: e.target.value })}
+            >
+              <option value="">— Select —</option>
+              {events.filter((ev) => ev.tier === 'MAIN').map((ev) => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+            </select>
+            <label style={label}>Code (short, e.g. MYFT)</label>
+            <input style={inputStyle} value={categoryForm.code} onChange={(e) => setCategoryForm({ ...categoryForm, code: e.target.value })} required />
+            <label style={label}>Name</label>
+            <input style={inputStyle} value={categoryForm.name} onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })} required />
+            <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>
+              {categoryForm.id ? 'Save Changes' : 'Add Sub-event'}
+            </button>
+          </form>
+        )}
+        <table width="100%" cellPadding="6">
+          <thead>
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
+              <th>Code</th><th>Name</th><th>Main Event</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {eventCategories.length === 0 && <tr><td colSpan={5} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
+            {eventCategories.map((cat) => (
+              <tr key={cat.id} style={{ borderBottom: '1px solid #eee', opacity: cat.is_active ? 1 : 0.5 }}>
+                <td>{cat.code}</td>
+                <td>{cat.name}</td>
+                <td>{cat.main_event_name}</td>
+                <td>{cat.is_active ? 'Active' : 'Inactive'}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button onClick={() => startEditCategory(cat)}>Edit</button>{' '}
+                  <button onClick={() => handleToggleCategoryActive(cat)}>{cat.is_active ? 'Deactivate' : 'Activate'}</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
       )}
 

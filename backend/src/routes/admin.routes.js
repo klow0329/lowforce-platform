@@ -7,6 +7,7 @@ const {
   listUsers, createUser, importUsers, sendUserInviteEmail, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
   createRole, updateRole, deleteRole,
   listEvents, createEvent, updateEvent,
+  listEventCategories, createEventCategory, updateEventCategory,
 } = require('../controllers/admin.controller');
 const { archiveRecord, restoreRecord, listArchived } = require('../controllers/archive.controller');
 
@@ -29,6 +30,10 @@ router.delete('/roles/:id', asyncHandler(deleteRole));
 router.get('/events', asyncHandler(listEvents));
 router.post('/events', asyncHandler(createEvent));
 router.put('/events/:id', asyncHandler(updateEvent));
+
+router.get('/event-categories', asyncHandler(listEventCategories));
+router.post('/event-categories', asyncHandler(createEventCategory));
+router.put('/event-categories/:id', asyncHandler(updateEventCategory));
 
 // Reversible archive/delete — :type is one of exhibitor/opportunity/
 // contract/invoice/creditnote/payment (see archive.controller.js's ENTITIES).

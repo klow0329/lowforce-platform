@@ -6,7 +6,7 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const {
   listTaxCodes, createTaxCode, updateTaxCode,
   listExpenseCodes, createExpenseCode, updateExpenseCode, importExpenseCodes,
-  listAgentsAdmin, createAgent, updateAgent, importAgents,
+  listAgentsAdmin, createAgent, updateAgent, importAgents, setAgentMainEvents,
   listAgentCommissionRates, saveAgentCommissionRates,
   listAgentCommissionBonusTiers, saveAgentCommissionBonusTiers,
   createSegmentMain, updateSegmentMain, deleteSegmentMain,
@@ -48,6 +48,7 @@ router.get('/agents/:agentId/commission-rates', asyncHandler(listAgentCommission
 router.put('/agents/:agentId/commission-rates', asyncHandler(saveAgentCommissionRates));
 router.get('/agents/:agentId/commission-bonus-tiers', asyncHandler(listAgentCommissionBonusTiers));
 router.put('/agents/:agentId/commission-bonus-tiers', asyncHandler(saveAgentCommissionBonusTiers));
+router.put('/agents/:id/main-events', requireAdmin, asyncHandler(setAgentMainEvents));
 
 // Reads live under /api/reference/segments (open to everyone — needed by
 // exhibitor forms); these are the Admin-only writes.

@@ -523,8 +523,70 @@ async function updateEvent(req, res) {
   res.json({ event: { id: req.params.id } });
 }
 
+// ---------------------------------------------------------------------------
+// Event Categories ("sub-events" — 2026-08-05) — reusable, year-independent
+// tags scoped to a Main (e.g. "MYFT", "MCE" under "MIFB"), applied per
+// participation/contract rather than recreated as a new event every year.
+// Company-configurable, standing rule #2 — a second company's sub-event
+// names have nothing to do with ExpoCO's.
+// ---------------------------------------------------------------------------
+async function listEventCategories(req, res) {
+  const result = await pool.query(
+    `SELECT ec.id, ec.main_event_id, m.name AS main_event_name, ec.code, ec.name, ec.is_active, ec.sort_order
+     FROM event_categories ec
+     JOIN events m ON m.id = ec.main_event_id
+     WHERE ec.company_id = $1
+     ORDER BY m.name, ec.sort_order, ec.code`,
+    [req.companyId]
+  );
+  res.json({ eventCategories: result.rows });
+}
+
+async function createEventCategory(req, res) {
+  const { main_event_id, code, name } = req.body;
+  if (!main_event_id || !code || !name) {
+    return res.status(400).json({ error: 'main_event_id, code and name are required.' });
+  }
+  const main = await pool.query(`SELECT tier FROM events WHERE id = $1 AND company_id = $2`, [main_event_id, req.companyId]);
+  if (!main.rows[0] || main.rows[0].tier !== 'MAIN') {
+    return res.status(400).json({ error: 'main_event_id must reference a Main event.' });
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO event_categories (company_id, main_event_id, code, name) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [req.companyId, main_event_id, code.trim().toUpperCase(), name.trim()]
+    );
+    res.status(201).json({ eventCategory: { id: result.rows[0].id } });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: `"${code}" already exists under this Main event.` });
+    throw err;
+  }
+}
+
+async function updateEventCategory(req, res) {
+  const fields = {};
+  for (const f of ['code', 'name', 'is_active', 'sort_order']) {
+    if (f in req.body) fields[f] = f === 'code' ? String(req.body[f]).trim().toUpperCase() : req.body[f];
+  }
+  const cols = Object.keys(fields);
+  if (cols.length === 0) return res.json({ eventCategory: { id: req.params.id } });
+  const setClause = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
+  try {
+    const result = await pool.query(
+      `UPDATE event_categories SET ${setClause} WHERE id = $1 AND company_id = $2 RETURNING id`,
+      [req.params.id, req.companyId, ...cols.map((c) => fields[c])]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Sub-event not found.' });
+    res.json({ eventCategory: { id: req.params.id } });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'That code already exists under this Main event.' });
+    throw err;
+  }
+}
+
 module.exports = {
   listUsers, createUser, importUsers, sendUserInviteEmail, updateUser, resetPassword, listRoles, setUserEventAccess, setUserRoles,
   createRole, updateRole, deleteRole, MODULE_NAMES, PERMISSION_LEVELS,
   listEvents, createEvent, updateEvent,
+  listEventCategories, createEventCategory, updateEventCategory,
 };

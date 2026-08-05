@@ -61,6 +61,38 @@ export default function AgentsList({ user }) {
   const [bonusRows, setBonusRows] = useState([]);
   const [bonusBusy, setBonusBusy] = useState(false);
 
+  // Main event(s) an agent is linked to (2026-08-05) — a standing fact
+  // about the agent, not per-year, and can be MORE THAN ONE: "imagine like
+  // SIAL international, which [runs] across the region with different
+  // events" (user's own example).
+  const [mainEvents, setMainEvents] = useState([]);
+  const [mainEventsAgentId, setMainEventsAgentId] = useState(null);
+  const [selectedMainEventIds, setSelectedMainEventIds] = useState([]);
+  const [mainEventsBusy, setMainEventsBusy] = useState(false);
+
+  function openMainEventsEditor(agent) {
+    setMainEventsAgentId(agent.id);
+    setSelectedMainEventIds(agent.main_event_ids || []);
+  }
+
+  function toggleMainEvent(id) {
+    setSelectedMainEventIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
+
+  async function handleSaveMainEvents() {
+    setMainEventsBusy(true);
+    setError('');
+    try {
+      await api.setAgentMainEvents(mainEventsAgentId, selectedMainEventIds);
+      setMainEventsAgentId(null);
+      loadAgents();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setMainEventsBusy(false);
+    }
+  }
+
   function loadAgents() {
     api.listAgentsAdmin().then(({ agents }) => setAgents(agents));
   }
@@ -133,6 +165,7 @@ export default function AgentsList({ user }) {
     loadAgents();
     api.listCountries().then(({ countries }) => setCountries(countries));
     api.listSalespeople().then(({ salespeople }) => setSalespeople(salespeople));
+    api.listMainEvents().then(({ mainEvents }) => setMainEvents(mainEvents));
   }, []);
 
   async function handleSaveAgent(e) {
@@ -247,7 +280,7 @@ export default function AgentsList({ user }) {
         <table width="100%" cellPadding="6">
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              <th>Short Name</th><th>Full Name</th><th>Country</th><th>Salesperson</th><th>Status</th><th></th>
+              <th>Short Name</th><th>Full Name</th><th>Country</th><th>Salesperson</th><th>Main Event(s)</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -258,6 +291,7 @@ export default function AgentsList({ user }) {
                 <td>{a.name_alt || '—'}</td>
                 <td>{a.country_name || '—'}</td>
                 <td>{a.salesperson_name || '—'}</td>
+                <td>{a.main_event_names || '—'}</td>
                 <td>{a.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {canEditAgent(a) && (
@@ -278,14 +312,39 @@ export default function AgentsList({ user }) {
                       <button onClick={() => handleToggleAgentActive(a)}>{a.is_active ? 'Deactivate' : 'Activate'}</button>{' '}
                       <button onClick={() => (commissionAgentId === a.id ? setCommissionAgentId(null) : openCommissionEditor(a))}>
                         {commissionAgentId === a.id ? 'Close' : 'Commission Rates'}
-                      </button>
+                      </button>{' '}
+                      {isAdmin && (
+                        <button onClick={() => (mainEventsAgentId === a.id ? setMainEventsAgentId(null) : openMainEventsEditor(a))}>
+                          {mainEventsAgentId === a.id ? 'Close' : 'Main Events'}
+                        </button>
+                      )}
                     </>
                   )}
                 </td>
               </tr>
+              {mainEventsAgentId === a.id && (
+                <tr>
+                  <td colSpan={7} style={{ background: '#F5F6FA', padding: 12 }}>
+                    <p style={{ fontSize: 12, color: '#5c6070', margin: '0 0 8px' }}>
+                      Which Main event(s) {a.name} represents — a standing fact about the agent, not per-year. Select
+                      more than one if this agent brings exhibitors to several of your event brands.
+                    </p>
+                    {mainEvents.length === 0 && <p style={{ fontSize: 12, color: '#5c6070' }}>No Main events set up yet — see Admin &gt; Events.</p>}
+                    {mainEvents.map((m) => (
+                      <label key={m.id} style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
+                        <input type="checkbox" checked={selectedMainEventIds.includes(m.id)} onChange={() => toggleMainEvent(m.id)} />
+                        {' '}{m.name}
+                      </label>
+                    ))}
+                    <button type="button" disabled={mainEventsBusy} onClick={handleSaveMainEvents} style={{ marginTop: 8 }}>
+                      {mainEventsBusy ? 'Saving...' : 'Save Main Events'}
+                    </button>
+                  </td>
+                </tr>
+              )}
               {commissionAgentId === a.id && (
                 <tr>
-                  <td colSpan={6} style={{ background: '#F5F6FA', padding: 12 }}>
+                  <td colSpan={7} style={{ background: '#F5F6FA', padding: 12 }}>
                     <p style={{ fontSize: 12, color: '#5c6070', margin: '0 0 8px' }}>
                       Commission rate for {a.name} — pick any billing item (or "ALL REVENUE" as a catch-all) and a
                       rate for repeat-from-last-year vs new exhibitors. A specific item's rate wins over ALL REVENUE
@@ -366,7 +425,7 @@ export default function AgentsList({ user }) {
               )}
               </>
             ))}
-            {agents.length === 0 && <tr><td colSpan={6} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
+            {agents.length === 0 && <tr><td colSpan={7} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
           </tbody>
         </table>
       </div>

@@ -81,6 +81,11 @@ export const api = {
   listSegments: () => apiFetch('/reference/segments'),
   listSalespeople: () => apiFetch('/reference/salespeople'),
   listEvents: () => apiFetch('/reference/events'),
+  listEventCategories: () => apiFetch('/reference/event-categories'),
+  listMainEvents: () => apiFetch('/reference/main-events'),
+  setAgentMainEvents: (agentId, mainEventIds) => apiFetch(`/settings/agents/${agentId}/main-events`, {
+    method: 'PUT', body: JSON.stringify({ main_event_ids: mainEventIds }),
+  }),
   listStages: () => apiFetch('/reference/stages'),
   getCompany: (eventId) => apiFetch(`/reference/company${eventId ? `?event_id=${eventId}` : ''}`),
 
@@ -357,6 +362,11 @@ export const api = {
     apiFetch('/admin/events', { method: 'POST', body: JSON.stringify(payload) }),
   adminUpdateEvent: (id, payload) =>
     apiFetch(`/admin/events/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  adminListEventCategories: () => apiFetch('/admin/event-categories'),
+  adminCreateEventCategory: (payload) =>
+    apiFetch('/admin/event-categories', { method: 'POST', body: JSON.stringify(payload) }),
+  adminUpdateEventCategory: (id, payload) =>
+    apiFetch(`/admin/event-categories/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   archiveRecord: (type, id, reason) =>
     apiFetch(`/admin/archive/${type}/${id}`, { method: 'POST', body: JSON.stringify({ reason }) }),
   restoreRecord: (type, id) =>
