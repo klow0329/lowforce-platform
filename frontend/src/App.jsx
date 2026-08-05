@@ -28,6 +28,8 @@ import Management from './pages/Management';
 import Budget from './pages/Budget';
 import StatementPrint from './pages/StatementPrint';
 import TaxDetailForm from './pages/TaxDetailForm';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import About from './pages/About';
 import PlatformConsole from './pages/PlatformConsole';
 import NavBar from './components/NavBar';
@@ -86,6 +88,16 @@ export default function App() {
   // it (and before the session lookup even matters).
   if (window.location.pathname.startsWith('/tax-details/')) {
     return <TaxDetailForm />;
+  }
+
+  // Self-service password reset (2026-08-05) — reached before login (no
+  // account/session to speak of yet), same bypass pattern as the tax detail
+  // link above.
+  if (window.location.pathname === '/forgot-password') {
+    return <ForgotPassword />;
+  }
+  if (window.location.pathname.startsWith('/reset-password/')) {
+    return <ResetPassword />;
   }
 
   // The platform-owner console is not part of any tenant — it has its own

@@ -364,8 +364,9 @@ export default function PlatformConsole() {
                             onClick={() => {
                               if (!window.confirm(`Reset the password for ${u.email}? This is the "forgot password" recovery path — they'll need the new temporary password from you.`)) return;
                               run(async () => {
-                                const { user } = await platformApi.resetCompanyUserPassword(usersFor.id, u.id);
-                                window.alert(`Password reset for ${user.email}\n\nTemporary password: ${user.temp_password}\n\nSave this now — it is not shown again.`);
+                                const { user, email_sent, email_error } = await platformApi.resetCompanyUserPassword(usersFor.id, u.id);
+                                const status = email_sent ? `An email with the new password was sent to ${user.email}.` : `The email could NOT be sent (${email_error || 'unknown reason'}) — you'll need to tell them directly.`;
+                                window.alert(`Password reset for ${user.email}\n\n${status}\n\nTemporary password (fallback): ${user.temp_password}\n\nSave this now — it is not shown again.`);
                               });
                             }}
                           >

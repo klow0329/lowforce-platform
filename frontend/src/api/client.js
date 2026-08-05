@@ -333,8 +333,8 @@ export const api = {
   sendUserInviteEmail: (user) => apiFetch('/admin/users/send-invite-email', { method: 'POST', body: JSON.stringify(user) }),
   adminUpdateUser: (id, payload) =>
     apiFetch(`/admin/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
-  adminResetPassword: (id, payload) =>
-    apiFetch(`/admin/users/${id}/reset-password`, { method: 'POST', body: JSON.stringify(payload) }),
+  adminResetPassword: (id) =>
+    apiFetch(`/admin/users/${id}/reset-password`, { method: 'POST' }),
   adminSetUserEvents: (id, payload) =>
     apiFetch(`/admin/users/${id}/events`, { method: 'PUT', body: JSON.stringify(payload) }),
   adminSetUserRoles: (id, roleIds) =>

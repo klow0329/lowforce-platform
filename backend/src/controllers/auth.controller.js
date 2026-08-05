@@ -1,7 +1,17 @@
+const crypto = require('crypto');
 const { pool } = require('../config/db');
 const { verifyPassword, hashPassword } = require('../utils/password');
 const { passwordPolicyError } = require('../utils/passwordPolicy');
 const { recordAudit } = require('../utils/auditLog');
+const { sendMail } = require('../utils/mailer');
+const { fillTemplate, DEFAULT_FORGOT_PASSWORD_SUBJECT, DEFAULT_FORGOT_PASSWORD_BODY } = require('../utils/emailTemplate');
+
+// Self-service "Forgot Password" (2026-08-05) — the real recovery path for
+// a user who can't reach an Admin (or is the only Admin) and is stuck
+// waiting on SSO. Token lifetime is short (60 min, not the tax-detail
+// link's 5 days) since a password reset link is a higher-value target if
+// intercepted.
+const RESET_TOKEN_LIFETIME_MINUTES = 60;
 
 async function getAvailableRoles(userId) {
   const result = await pool.query(
@@ -119,6 +129,147 @@ async function login(req, res) {
   res.json({ user: req.session.user, availableRoles });
 }
 
+// PUBLIC — no login (that's the point). Same email + optional company_id
+// disambiguation as login itself, and the same multi-company picker shape
+// (requiresCompanySelection), so a user with accounts at more than one
+// company sees a consistent flow either way.
+//
+// Always responds with the same generic success message regardless of
+// whether the email matched anything — an attacker probing emails learns
+// nothing from the response. The one exception, matching login's own
+// existing tradeoff: if the email has MORE than one active company, the
+// requiresCompanySelection response does reveal that much (which login
+// already does today) — not a new leak this feature introduces.
+async function forgotPassword(req, res) {
+  const { email, company_id } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email is required.' });
+
+  const result = await pool.query(
+    `SELECT u.id, u.email, u.full_name, u.is_active, u.company_id, c.name AS company_name, c.is_active AS company_is_active
+     FROM users u
+     JOIN companies c ON c.id = u.company_id
+     WHERE LOWER(u.email) = LOWER($1)
+       AND ($2::uuid IS NULL OR u.company_id = $2)`,
+    [email, company_id || null]
+  );
+  const active = result.rows.filter((u) => u.is_active && u.company_is_active);
+
+  if (!company_id && active.length > 1) {
+    return res.json({
+      requiresCompanySelection: true,
+      companies: active.map((u) => ({ id: u.company_id, name: u.company_name })),
+    });
+  }
+
+  const user = active[0];
+  const genericResponse = { success: true, message: 'If that email has an account, a password reset link has been sent to it.' };
+
+  if (!user) return res.json(genericResponse);
+
+  // Throttle: a live, unused token issued in the last 2 minutes means
+  // don't issue (or email) another one — stops accidental double-clicks or
+  // deliberate spam from flooding the inbox, without needing a full
+  // rate-limiter for what's otherwise a low-traffic endpoint.
+  const recent = await pool.query(
+    `SELECT 1 FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL AND created_at > now() - interval '2 minutes'`,
+    [user.id]
+  );
+  if (recent.rows[0]) return res.json(genericResponse);
+
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, now() + interval '${RESET_TOKEN_LIFETIME_MINUTES} minutes')`,
+    [user.id, token]
+  );
+
+  const resetUrl = `${req.protocol}://${req.get('host')}/reset-password/${token}`;
+  const tpl = await pool.query(
+    `SELECT subject, body FROM email_templates WHERE company_id = $1 AND template_key = 'FORGOT_PASSWORD'`,
+    [user.company_id]
+  );
+  const vars = { full_name: user.full_name, email: user.email, company_name: user.company_name, reset_url: resetUrl, expires_minutes: RESET_TOKEN_LIFETIME_MINUTES };
+  const subject = fillTemplate(tpl.rows[0]?.subject || DEFAULT_FORGOT_PASSWORD_SUBJECT, vars);
+  const body = fillTemplate(tpl.rows[0]?.body || DEFAULT_FORGOT_PASSWORD_BODY, vars);
+  await sendMail({ to: user.email, subject, text: body });
+
+  recordAudit({
+    companyId: user.company_id, userId: user.id, userName: user.full_name, roleCode: null,
+    action: 'FORGOT_PASSWORD_REQUESTED', entityType: 'auth', entityId: user.id, details: { email },
+  });
+
+  res.json(genericResponse);
+}
+
+// PUBLIC — lets the reset-password PAGE check a token is real/live before
+// showing the form, without yet consuming it (only the actual submit does).
+async function getResetTokenInfo(req, res) {
+  const result = await pool.query(
+    `SELECT prt.expires_at, prt.used_at, u.email
+     FROM password_reset_tokens prt JOIN users u ON u.id = prt.user_id
+     WHERE prt.token = $1`,
+    [req.params.token]
+  );
+  const row = result.rows[0];
+  if (!row) return res.status(404).json({ error: 'This link is invalid.' });
+  if (row.used_at) return res.status(410).json({ error: 'This link has already been used.' });
+  if (new Date(row.expires_at) < new Date()) return res.status(410).json({ error: 'This link has expired — request a new one.' });
+  res.json({ email: row.email });
+}
+
+// PUBLIC — the actual reset. FOR UPDATE row lock, same pattern as
+// tax_detail_links' submitLink, so two near-simultaneous submits of the
+// same token can't both succeed.
+async function resetPasswordWithToken(req, res) {
+  const { new_password } = req.body;
+  const policyError = passwordPolicyError(new_password);
+  if (policyError) return res.status(400).json({ error: policyError });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token = $1 FOR UPDATE`,
+      [req.params.token]
+    );
+    const row = result.rows[0];
+    if (!row) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'This link is invalid.' }); }
+    if (row.used_at) { await client.query('ROLLBACK'); return res.status(410).json({ error: 'This link has already been used.' }); }
+    if (new Date(row.expires_at) < new Date()) {
+      await client.query('ROLLBACK');
+      return res.status(410).json({ error: 'This link has expired — request a new one.' });
+    }
+
+    // Re-check the account/company are still active — a token issued
+    // before a suspension (or deactivation) must not be usable to bypass
+    // it, even if the token itself hasn't technically expired yet.
+    const user = await client.query(
+      `SELECT u.company_id, u.full_name, u.is_active, c.is_active AS company_is_active FROM users u JOIN companies c ON c.id = u.company_id WHERE u.id = $1`,
+      [row.user_id]
+    );
+    if (!user.rows[0] || !user.rows[0].is_active || !user.rows[0].company_is_active) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'This account is no longer active.' });
+    }
+
+    const passwordHash = await hashPassword(new_password);
+    await client.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, row.user_id]);
+    await client.query(`UPDATE password_reset_tokens SET used_at = now() WHERE id = $1`, [row.id]);
+    await client.query('COMMIT');
+
+    recordAudit({
+      companyId: user.rows[0].company_id, userId: row.user_id, userName: user.rows[0].full_name, roleCode: null,
+      action: 'PASSWORD_RESET_VIA_TOKEN', entityType: 'auth', entityId: row.user_id, details: {},
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  res.json({ success: true });
+}
+
 function logout(req, res) {
   const user = req.session && req.session.user;
   if (user) {
@@ -222,4 +373,4 @@ async function changePassword(req, res) {
   res.json({ success: true });
 }
 
-module.exports = { login, logout, me, switchRole, changePassword };
+module.exports = { login, logout, me, switchRole, changePassword, forgotPassword, getResetTokenInfo, resetPasswordWithToken };

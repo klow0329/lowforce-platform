@@ -83,6 +83,7 @@ export default function Login({ onLoggedIn }) {
       <button type="submit" disabled={submitting} style={{ width: '100%', padding: 8 }}>
         {submitting ? 'Logging in...' : 'Log in'}
       </button>
+      <a href="/forgot-password" style={{ display: 'block', textAlign: 'center', marginTop: 12, fontSize: 13 }}>Forgot password?</a>
     </form>
   );
 }

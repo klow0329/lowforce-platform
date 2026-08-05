@@ -3,6 +3,8 @@ const { pool } = require('../config/db');
 const { hashPassword } = require('../utils/password');
 const { passwordPolicyError, generateStrongPassword } = require('../utils/passwordPolicy');
 const { cleanText, cleanLower } = require('../utils/importNormalize');
+const { fillTemplate, DEFAULT_PASSWORD_RESET_SUBJECT, DEFAULT_PASSWORD_RESET_BODY } = require('../utils/emailTemplate');
+const { sendMail } = require('../utils/mailer');
 
 // ---------------------------------------------------------------------------
 // Users
@@ -194,12 +196,20 @@ async function updateUser(req, res) {
   res.json({ user: { id: req.params.id } });
 }
 
+// System-generates the new password (rather than the admin typing one) and
+// emails it to the user directly — 2026-08-05, per the user's own report
+// that resetting a password showed a temp password on-screen but never
+// actually emailed the person it belongs to. Falls back to showing the
+// Admin the password on screen (same as before) if email isn't configured
+// or the send fails, so this is never a dead end even without RESEND_API_KEY.
 async function resetPassword(req, res) {
-  const { new_password } = req.body;
-  const policyError = passwordPolicyError(new_password);
-  if (policyError) return res.status(400).json({ error: policyError });
+  const user = await pool.query(`SELECT email, full_name FROM users WHERE id = $1 AND company_id = $2`, [req.params.id, req.companyId]);
+  if (!user.rows[0]) {
+    return res.status(404).json({ error: 'User not found.' });
+  }
 
-  const passwordHash = await hashPassword(new_password);
+  const tempPassword = generateStrongPassword();
+  const passwordHash = await hashPassword(tempPassword);
   const result = await pool.query(
     `UPDATE users SET password_hash = $1
      WHERE id = $2 AND company_id = $3
@@ -211,7 +221,25 @@ async function resetPassword(req, res) {
     return res.status(404).json({ error: 'User not found.' });
   }
 
-  res.json({ success: true });
+  const company = await pool.query(`SELECT name FROM companies WHERE id = $1`, [req.companyId]);
+  const tpl = await pool.query(
+    `SELECT subject, body FROM email_templates WHERE company_id = $1 AND template_key = 'PASSWORD_RESET'`,
+    [req.companyId]
+  );
+  const vars = { full_name: user.rows[0].full_name, email: user.rows[0].email, temp_password: tempPassword, company_name: company.rows[0]?.name || '' };
+  const subject = fillTemplate(tpl.rows[0]?.subject || DEFAULT_PASSWORD_RESET_SUBJECT, vars);
+  const body = fillTemplate(tpl.rows[0]?.body || DEFAULT_PASSWORD_RESET_BODY, vars);
+  const emailResult = await sendMail({ to: user.rows[0].email, subject, text: body });
+
+  res.json({
+    success: true,
+    // Always returned, not just on email failure — a genuine fallback if
+    // email isn't configured/fails, not a security leak (the Admin doing
+    // this is already authorized to know it; they set it a moment ago).
+    temp_password: tempPassword,
+    email_sent: emailResult.sent,
+    email_error: emailResult.sent ? null : emailResult.reason,
+  });
 }
 
 // Bulk-create users from Admin > Data Import > Users. Add-only by design —
@@ -288,10 +316,6 @@ async function importUsers(req, res) {
 // mailer.js). Only usable right after an import/reset where the caller
 // still has the plaintext temp password in hand (never stored, so it can't
 // be re-sent later without generating a new one).
-function fillTemplate(text, vars) {
-  return text.replace(/\{\{(\w+)\}\}/g, (m, k) => (vars[k] || m));
-}
-
 async function sendUserInviteEmail(req, res) {
   const { email, full_name, temp_password } = req.body;
   if (!email || !full_name || !temp_password) {
@@ -311,7 +335,6 @@ async function sendUserInviteEmail(req, res) {
     company_name: companyResult.rows[0]?.name || '',
     sender_name: senderResult.rows[0]?.full_name || '',
   };
-  const { sendMail } = require('../utils/mailer');
   const result = await sendMail({
     to: email,
     subject: fillTemplate(tplResult.rows[0].subject, vars),

@@ -1,6 +1,8 @@
 const { pool } = require('../config/db');
 const { verifyPassword, hashPassword } = require('../utils/password');
 const { passwordPolicyError, generateStrongPassword } = require('../utils/passwordPolicy');
+const { fillTemplate, DEFAULT_PASSWORD_RESET_SUBJECT, DEFAULT_PASSWORD_RESET_BODY } = require('../utils/emailTemplate');
+const { sendMail } = require('../utils/mailer');
 
 // Platform actions are logged to their own table (see migration 081) —
 // audit_log's company_id is NOT NULL, and these actions often have no
@@ -423,18 +425,35 @@ async function updateCompanyUser(req, res) {
 // operator, who resets it here — same one-time-password-in-the-response
 // pattern as createCompanyAdmin.
 async function resetCompanyUserPassword(req, res) {
-  const user = await pool.query(`SELECT email FROM users WHERE id = $1 AND company_id = $2`, [req.params.userId, req.params.id]);
+  const user = await pool.query(`SELECT email, full_name FROM users WHERE id = $1 AND company_id = $2`, [req.params.userId, req.params.id]);
   if (!user.rows[0]) return res.status(404).json({ error: 'User not found.' });
 
   const tempPassword = generateStrongPassword();
   const passwordHash = await hashPassword(tempPassword);
   await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, req.params.userId]);
 
+  // Same email as the tenant Admin's own Reset Password action, and the
+  // same fallback logic — this is the platform-operator-assisted version
+  // of the same recovery, so it should behave identically from the
+  // recipient's point of view.
+  const company = await pool.query(`SELECT name FROM companies WHERE id = $1`, [req.params.id]);
+  const tpl = await pool.query(
+    `SELECT subject, body FROM email_templates WHERE company_id = $1 AND template_key = 'PASSWORD_RESET'`,
+    [req.params.id]
+  );
+  const vars = { full_name: user.rows[0].full_name, email: user.rows[0].email, temp_password: tempPassword, company_name: company.rows[0]?.name || '' };
+  const subject = fillTemplate(tpl.rows[0]?.subject || DEFAULT_PASSWORD_RESET_SUBJECT, vars);
+  const body = fillTemplate(tpl.rows[0]?.body || DEFAULT_PASSWORD_RESET_BODY, vars);
+  const emailResult = await sendMail({ to: user.rows[0].email, subject, text: body });
+
   await recordPlatformAudit(req, {
     action: 'TENANT_USER_PASSWORD_RESET', entityType: 'user', entityId: req.params.userId, companyId: req.params.id,
-    details: { email: user.rows[0].email },
+    details: { email: user.rows[0].email, email_sent: emailResult.sent },
   });
-  res.json({ user: { id: req.params.userId, email: user.rows[0].email, temp_password: tempPassword } });
+  res.json({
+    user: { id: req.params.userId, email: user.rows[0].email, temp_password: tempPassword },
+    email_sent: emailResult.sent, email_error: emailResult.sent ? null : emailResult.reason,
+  });
 }
 
 async function listPlatformAudit(req, res) {

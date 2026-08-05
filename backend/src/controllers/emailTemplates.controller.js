@@ -1,6 +1,6 @@
 const { pool } = require('../config/db');
 
-const TEMPLATE_KEYS = ['TAX_DETAIL_LINK', 'STATEMENT_OF_ACCOUNT', 'OUTSTANDING_REMINDER', 'USER_INVITE'];
+const TEMPLATE_KEYS = ['TAX_DETAIL_LINK', 'STATEMENT_OF_ACCOUNT', 'OUTSTANDING_REMINDER', 'USER_INVITE', 'PASSWORD_RESET', 'FORGOT_PASSWORD'];
 
 // Only Admin/Management may change the company's own wording — everyone
 // else (Sales drafting a tax-detail email, Finance drafting a reminder)

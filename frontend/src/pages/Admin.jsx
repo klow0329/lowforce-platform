@@ -96,8 +96,17 @@ const EMAIL_TEMPLATE_LABELS = {
   STATEMENT_OF_ACCOUNT: 'Statement of Account',
   OUTSTANDING_REMINDER: 'Outstanding Payment Reminder',
   USER_INVITE: 'New User Invite (Data Import > Users)',
+  PASSWORD_RESET: 'Password Reset by Admin (Users > Reset Password)',
+  FORGOT_PASSWORD: 'Forgot Password (self-service, login page)',
 };
 const EMAIL_TEMPLATE_KEYS = Object.keys(EMAIL_TEMPLATE_LABELS);
+// Per-template placeholder hints — shown only for the keys whose
+// placeholders differ from the general exhibitor-facing ones (Tax Detail
+// Link etc.), which the screen-level note above already covers.
+const EMAIL_TEMPLATE_HINTS = {
+  PASSWORD_RESET: 'Available: {{full_name}}, {{email}}, {{temp_password}}, {{company_name}}. Works out of the box even if you never set this up — this is only the customized wording.',
+  FORGOT_PASSWORD: 'Available: {{full_name}}, {{email}}, {{company_name}}, {{reset_url}}, {{expires_minutes}}. Works out of the box even if you never set this up — this is only the customized wording.',
+};
 
 // Matches backend/src/middleware/modulePermission.js's ACTION_RANK and
 // admin.controller.js's MODULE_NAMES — the small, bounded set of modules
@@ -1068,13 +1077,21 @@ export default function Admin({ user }) {
     }
   }
 
+  // System generates the new password now (not the admin typing one) and
+  // emails it straight to the user — 2026-08-05, per the user's own report
+  // that a reset never actually reached the person it was for. The temp
+  // password is still shown here too, as a fallback for when email isn't
+  // configured or the send fails (email_sent tells you which happened).
   async function handleResetPassword(u) {
-    const newPassword = window.prompt(`New temporary password for ${u.full_name} (min 8 characters, with upper/lowercase, a number, and a special character):`);
-    if (!newPassword) return;
+    if (!window.confirm(`Reset ${u.full_name}'s password? A new temporary password will be generated and emailed to ${u.email}.`)) return;
     setError('');
     try {
-      await api.adminResetPassword(u.id, { new_password: newPassword });
-      window.alert(`Password reset. Tell ${u.full_name} to log in with it and change it.`);
+      const result = await api.adminResetPassword(u.id);
+      if (result.email_sent) {
+        window.alert(`Password reset for ${u.full_name}. A new temporary password was emailed to ${u.email}.\n\nTemporary password (fallback, in case the email doesn't arrive): ${result.temp_password}`);
+      } else {
+        window.alert(`Password reset for ${u.full_name}, but the email could NOT be sent (${result.email_error || 'unknown reason'}).\n\nTell them this temporary password directly: ${result.temp_password}`);
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -2674,6 +2691,7 @@ export default function Admin({ user }) {
             return (
               <div key={key} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
                 <h4 style={{ marginTop: 0 }}>{EMAIL_TEMPLATE_LABELS[key]}</h4>
+                {EMAIL_TEMPLATE_HINTS[key] && <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>{EMAIL_TEMPLATE_HINTS[key]}</p>}
                 <label style={label}>Subject</label>
                 <input
                   style={inputStyle} value={draft.subject}
