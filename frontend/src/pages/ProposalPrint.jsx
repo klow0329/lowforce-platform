@@ -89,7 +89,7 @@ export default function ProposalPrint() {
           <div style={{ fontSize: 14, color: '#5c6070' }}>{opportunity.event_name}</div>
         </div>
         <div style={{ textAlign: 'center', alignSelf: 'center' }}>
-          <EventBrandLogo company={company} height={44} style={{ margin: '0 auto' }} />
+          <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
         </div>
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0 }}>PROPOSAL</h2>

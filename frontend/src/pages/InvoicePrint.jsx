@@ -136,7 +136,7 @@ export default function InvoicePrint() {
             )}
           </div>
           <div style={{ textAlign: 'center', alignSelf: 'center' }}>
-            <EventBrandLogo company={company} height={44} style={{ margin: '0 auto' }} />
+            <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
           </div>
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: '0 0 8px' }}>TAX INVOICE</h2>
