@@ -540,36 +540,47 @@ async function importExhibitors(req, res) {
       created += 1;
     }
 
-    // Which Editions this exhibitor takes part in, given as a comma-
-    // separated list of event codes, each optionally followed by
-    // ":SUBEVENTCODE" for that Edition's optional Sub-event tag (2026-08-05)
-    // — e.g. "MIFB27:MYFT, MIFB26:MCE, MIFB27" (last one has no sub-event).
-    // Matched by code the same way Agent/Salesperson/Billing Company are
-    // above. Additive: an unlisted event is NOT removed, so a partial
-    // import can't silently wipe participation the sheet simply didn't
-    // mention. Blank leaves everything as-is.
-    const eventEntries = cleanText(row.event_codes).split(',').map((c) => c.trim()).filter(Boolean);
-    for (const entry of eventEntries) {
-      const [code, subCode] = entry.split(':').map((s) => s.trim());
-      const ev = await pool.query(
-        `SELECT id FROM events WHERE company_id = $1 AND UPPER(TRIM(code)) = $2`,
-        [req.companyId, code.toUpperCase()]
+    // Which Main event(s) this exhibitor takes part in, by NAME (2026-08-05
+    // — simplified from requiring an exact Edition code, since most bulk
+    // imports are "add these exhibitors to what we're setting up now", not
+    // a specific past year). Each Main resolves to its own most recent/
+    // latest Edition (by event_year). Sub Event(s) is optional and lines up
+    // POSITION-BY-POSITION with Main Event(s) — e.g. Main "MIFB, AgriFood
+    // World" + Sub "MYFT, " tags only the first. Matched by NAME the same
+    // way Agent/Salesperson/Billing Company are above. Additive: an
+    // unlisted Main is NOT removed, so a partial import can't silently wipe
+    // participation the sheet simply didn't mention. Blank leaves
+    // everything as-is.
+    const mainNames = cleanText(row.main_events).split(',').map((s) => s.trim()).filter(Boolean);
+    const subNames = cleanText(row.sub_events).split(',').map((s) => s.trim());
+    for (let i = 0; i < mainNames.length; i++) {
+      const mainName = mainNames[i];
+      const subName = subNames[i];
+      const main = await pool.query(
+        `SELECT id FROM events WHERE company_id = $1 AND tier = 'MAIN' AND UPPER(TRIM(name)) = UPPER($2)`,
+        [req.companyId, mainName]
       );
-      if (!ev.rows[0]) {
-        skipped.push(`${companyName}: event code "${code}" not found (exhibitor still saved, that event not linked)`);
+      if (!main.rows[0]) {
+        skipped.push(`${companyName}: Main event "${mainName}" not found (exhibitor still saved, not linked to it)`);
+        continue;
+      }
+      const edition = await pool.query(
+        `SELECT id FROM events WHERE company_id = $1 AND tier = 'EDITION' AND parent_event_id = $2
+         ORDER BY event_year DESC NULLS LAST LIMIT 1`,
+        [req.companyId, main.rows[0].id]
+      );
+      if (!edition.rows[0]) {
+        skipped.push(`${companyName}: Main event "${mainName}" has no Edition set up yet (exhibitor still saved, not linked to it)`);
         continue;
       }
       let categoryId = null;
-      if (subCode) {
+      if (subName) {
         const cat = await pool.query(
-          `SELECT ec.id FROM event_categories ec
-           JOIN events ev2 ON ev2.id = ec.main_event_id
-           WHERE ec.company_id = $1 AND UPPER(TRIM(ec.code)) = $2
-             AND ev2.id = (SELECT parent_event_id FROM events WHERE id = $3)`,
-          [req.companyId, subCode.toUpperCase(), ev.rows[0].id]
+          `SELECT id FROM event_categories WHERE company_id = $1 AND main_event_id = $2 AND UPPER(TRIM(name)) = UPPER($3)`,
+          [req.companyId, main.rows[0].id, subName]
         );
         if (!cat.rows[0]) {
-          skipped.push(`${companyName}: sub-event code "${subCode}" not found under ${code}'s Main event (event still linked, without that tag)`);
+          skipped.push(`${companyName}: Sub-event "${subName}" not found under "${mainName}" (event still linked, without that tag)`);
         } else {
           categoryId = cat.rows[0].id;
         }
@@ -577,7 +588,7 @@ async function importExhibitors(req, res) {
       await pool.query(
         `INSERT INTO exhibitor_events (exhibitor_id, event_id, category_id) VALUES ($1, $2, $3)
          ON CONFLICT (exhibitor_id, event_id) DO UPDATE SET category_id = COALESCE(EXCLUDED.category_id, exhibitor_events.category_id)`,
-        [exhibitorId, ev.rows[0].id, categoryId]
+        [exhibitorId, edition.rows[0].id, categoryId]
       );
     }
   }

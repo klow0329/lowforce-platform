@@ -364,7 +364,7 @@ export default function Admin({ user }) {
         'Reg No', 'TIN No', 'SST No', 'Website', 'Fax',
         'Contact 1 Name', 'Contact 1 Job Title', 'Contact 1 Phone', 'Contact 1 Email',
         'Contact 2 Name', 'Contact 2 Job Title', 'Contact 2 Phone', 'Contact 2 Email',
-        'Salesperson Email', 'Agent Name', 'Billing Company', 'Event Codes',
+        'Salesperson Email', 'Agent Name', 'Billing Company', 'Main Event(s)', 'Sub Event(s)',
       ],
       [
         'ACME EXHIBITIONS SDN BHD', 'ACME EXPO', 'MY', '12 JALAN AMPANG', '50450', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR',
@@ -372,21 +372,23 @@ export default function Admin({ user }) {
         'JANE TAN', 'MARKETING MANAGER', '60123456789', 'jane.tan@acme-exhibitions.example.com',
         'AHMAD FAIZAL', 'FINANCE EXECUTIVE', '60129876543', 'ahmad.faizal@acme-exhibitions.example.com',
         'salesperson@example.com', 'ACME TRAVEL & EVENTS', '',
-        (events.filter((ev) => ev.tier === 'EDITION')[0]?.code || 'MIFB27')
-          + (eventCategories[0] ? `:${eventCategories[0].code}` : ''),
+        events.filter((ev) => ev.tier === 'MAIN')[0]?.name || 'MIFB',
+        eventCategories[0]?.name || '',
       ],
       [
         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-        '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Contact/phone numbers '
+        '', '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Contact/phone numbers '
           + 'must be digits only (no +, spaces, or dashes — required for WhatsApp links). Everything is trimmed and '
           + 'converted to UPPERCASE on import except Website and email addresses. Salesperson Email / Agent Name / '
           + 'Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable. '
-          + 'Event Codes: which Edition(s) (e.g. "MIFB27") this exhibitor takes part in, comma-separated. Optionally add '
-          + '":SUBEVENTCODE" after an Edition code to also tag that year\'s participation with a Sub-event, '
-          + 'e.g. "MIFB27:MYFT, MIFB26" (second one has no sub-event) — '
-          + `valid Edition codes: ${events.filter((ev) => ev.tier === 'EDITION').map((ev) => ev.code).join(', ') || '(none set up yet — add Events first)'}; `
-          + `valid Sub-event codes: ${eventCategories.map((c) => c.code).join(', ') || '(none set up yet)'}. `
-          + 'Leave blank to leave existing event participation untouched.',
+          + 'Main Event(s): which Main event(s) this exhibitor takes part in, comma-separated by NAME (not code) — adds them '
+          + "to that Main's most recent/latest Edition (by year). To target an older year precisely instead, add that "
+          + 'participation from the Exhibitor\'s own page afterward. Sub Event(s): optional, comma-separated, lined up '
+          + 'position-by-position with Main Event(s) — leave an entry blank to skip a sub-event for that particular Main '
+          + '(e.g. Main Event(s) "MIFB, AgriFood World" with Sub Event(s) "MYFT, " tags only the MIFB one). '
+          + `Valid Main event names: ${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name).join(', ') || '(none set up yet — add one under Admin > Events first)'}. `
+          + `Valid Sub-event names: ${eventCategories.map((c) => c.name).join(', ') || '(none set up yet)'}. `
+          + 'Leave both blank to leave existing event participation untouched.',
       ],
     ]);
     const book = XLSX.utils.book_new();
@@ -428,7 +430,8 @@ export default function Admin({ user }) {
         salesperson_email: r['Salesperson Email'] ?? r['salesperson_email'] ?? '',
         agent_name: r['Agent Name'] ?? r['agent_name'] ?? '',
         billing_company_name: r['Billing Company'] ?? r['billing_company_name'] ?? '',
-        event_codes: r['Event Codes'] ?? r['event_codes'] ?? '',
+        main_events: r['Main Event(s)'] ?? r['Main Events'] ?? r['main_events'] ?? '',
+        sub_events: r['Sub Event(s)'] ?? r['Sub Events'] ?? r['sub_events'] ?? '',
       })).filter((r) => r.company_name);
       const result = await api.importExhibitors(rows);
       setExhibitorImportResult(result);
@@ -1263,18 +1266,37 @@ export default function Admin({ user }) {
                   {['ADM', 'MGT'].includes(u.role_code) ? (
                     <span style={{ fontSize: 12, color: '#5c6070' }}>All events</span>
                   ) : (
-                    // Access is granted at main-event level — a grant covers
-                    // the main event and all of its sub-events.
-                    events.filter((ev) => !ev.parent_event_id).map((ev) => (
-                      <label key={ev.id} style={{ fontSize: 12, marginRight: 8, whiteSpace: 'nowrap' }}>
-                        <input
-                          type="checkbox"
-                          checked={u.event_ids.includes(ev.id)}
-                          onChange={() => handleToggleEventAccess(u, ev.id)}
-                        />
-                        {' '}{ev.code}
-                      </label>
-                    ))
+                    // A grant CASCADES down the full hierarchy — checking a
+                    // Main covers every Edition (and Category) under it, so
+                    // it's shown here alongside each Edition individually
+                    // for finer-grained access (e.g. "this user sees MIFB26
+                    // only, not MIFB27") without needing the whole Main.
+                    // Was `events.filter(ev => !ev.parent_event_id)` before
+                    // the Main tier existed, which silently regressed to
+                    // ONLY showing Main rows once Editions gained a parent
+                    // (their new Main) — caught by the user 2026-08-05.
+                    <>
+                      {events.filter((ev) => ev.tier === 'MAIN').map((main) => (
+                        <div key={main.id} style={{ marginBottom: 4 }}>
+                          <label style={{ fontSize: 12, marginRight: 8, whiteSpace: 'nowrap', fontWeight: 600 }}>
+                            <input type="checkbox" checked={u.event_ids.includes(main.id)} onChange={() => handleToggleEventAccess(u, main.id)} />
+                            {' '}{main.code}
+                          </label>
+                          {events.filter((ev) => ev.tier === 'EDITION' && ev.parent_event_id === main.id).map((ed) => (
+                            <label key={ed.id} style={{ fontSize: 12, marginRight: 8, marginLeft: 12, whiteSpace: 'nowrap' }}>
+                              <input type="checkbox" checked={u.event_ids.includes(ed.id)} onChange={() => handleToggleEventAccess(u, ed.id)} />
+                              {' '}{ed.code}
+                            </label>
+                          ))}
+                        </div>
+                      ))}
+                      {events.filter((ev) => ev.tier === 'EDITION' && !ev.parent_event_id).map((ed) => (
+                        <label key={ed.id} style={{ fontSize: 12, marginRight: 8, whiteSpace: 'nowrap' }}>
+                          <input type="checkbox" checked={u.event_ids.includes(ed.id)} onChange={() => handleToggleEventAccess(u, ed.id)} />
+                          {' '}{ed.code}
+                        </label>
+                      ))}
+                    </>
                   )}
                 </td>
                 <td>
