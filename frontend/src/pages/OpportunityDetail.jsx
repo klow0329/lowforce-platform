@@ -699,10 +699,17 @@ export default function OpportunityDetail({ user }) {
               }}
             >
               <option value="">— Select —</option>
-              <option value="PUBLISHED RATE">Published Rate</option>
-              <option value="EARLY BIRD">Early Bird</option>
-              <option value="ONSITE REBOOKING">Onsite Rebooking</option>
-              <option value="CONTRA">Contra</option>
+              {/* Derived from the event's own Price List (same pattern as
+                  PriceList.jsx's own tier list) — was a hardcoded 4-option
+                  list before, which kept showing "Onsite Rebooking" even
+                  for a company/event whose Price List doesn't have that
+                  tier at all (caught live in production, 2026-08-05). */}
+              {/* 'ALL TIERS' is a per-item wildcard (see BillingTemplate.jsx —
+                  Badge/Loading/Others/etc. price the same on every real
+                  tier), not itself a bookable tier a contract can be on. */}
+              {[...new Set(priceList.map((p) => p.booth_type))].filter((t) => t && t !== 'ALL TIERS').map((tier) => (
+                <option key={tier} value={tier}>{tier}</option>
+              ))}
             </select>
           </div>
           <div style={{ flex: 1 }}>

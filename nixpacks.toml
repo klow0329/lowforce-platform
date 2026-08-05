@@ -1,0 +1,8 @@
+# Floor Plan's PDF-to-image conversion and booth auto-detection shell out to
+# poppler-utils (pdftoppm, pdftotext) — see backend/src/utils/pdfFloorPlan.js.
+# Neither Node nor Railway's default Nixpacks build installs this; it works
+# locally only because the developer machine has poppler on PATH separately.
+# Declaring it here makes the built image carry it too, so "PDF conversion
+# requires poppler-utils..." stops happening in production.
+[phases.setup]
+nixPkgs = ["poppler_utils"]

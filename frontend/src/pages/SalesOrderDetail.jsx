@@ -1306,10 +1306,13 @@ export default function SalesOrderDetail({ user }) {
           }}
         >
           <option value="">— Select —</option>
-          <option value="PUBLISHED RATE">Published Rate</option>
-          <option value="EARLY BIRD">Early Bird</option>
-          <option value="ONSITE REBOOKING">Onsite Rebooking</option>
-          <option value="CONTRA">Contra</option>
+          {/* Derived from the event's own Price List, same as PriceList.jsx
+              and OpportunityDetail.jsx — was hardcoded before, which kept
+              offering "Onsite Rebooking" even for a Price List that
+              doesn't have that tier (caught live in production, 2026-08-05). */}
+          {[...new Set(priceList.map((p) => p.booth_type))].filter((t) => t && t !== 'ALL TIERS').map((tier) => (
+            <option key={tier} value={tier}>{tier}</option>
+          ))}
         </select>
 
         <label style={label}>Credit Terms</label>
@@ -1490,10 +1493,9 @@ export default function SalesOrderDetail({ user }) {
                 onChange={(e) => { setReductionBookingType(e.target.value); reductionBillingRef.current?.repriceAll(undefined, e.target.value); }}
               >
                 <option value="">— Select —</option>
-                <option value="PUBLISHED RATE">Published Rate</option>
-                <option value="EARLY BIRD">Early Bird</option>
-                <option value="ONSITE REBOOKING">Onsite Rebooking</option>
-                <option value="CONTRA">Contra</option>
+                {[...new Set(priceList.map((p) => p.booth_type))].filter((t) => t && t !== 'ALL TIERS').map((tier) => (
+                  <option key={tier} value={tier}>{tier}</option>
+                ))}
               </select>
 
               <div style={{ marginTop: 16 }}>

@@ -1450,14 +1450,21 @@ export default function Admin({ user }) {
                 <td>{ev.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {ev.tier === 'MAIN' && (
-                    ev.has_logo ? (
-                      <button onClick={() => handleDeleteEventLogo(ev)} style={{ fontSize: 12, padding: '3px 8px', marginRight: 6 }}>Remove Logo</button>
-                    ) : (
-                      <label style={{ fontSize: 12, padding: '3px 8px', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', marginRight: 6, display: 'inline-block' }}>
-                        Upload Logo
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 6 }}>
+                      {ev.has_logo && (
+                        <img
+                          src={api.eventLogoUrl(ev.id)} alt=""
+                          style={{ height: 28, maxWidth: 60, objectFit: 'contain', border: '1px solid #e2e5ec', borderRadius: 4, background: '#fff' }}
+                        />
+                      )}
+                      <label style={{ fontSize: 12, padding: '3px 8px', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', display: 'inline-block' }}>
+                        {ev.has_logo ? 'Replace' : 'Upload Logo'}
                         <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => e.target.files[0] && handleUploadEventLogo(ev, e.target.files[0])} />
                       </label>
-                    )
+                      {ev.has_logo && (
+                        <button onClick={() => handleDeleteEventLogo(ev)} style={{ fontSize: 12, padding: '3px 8px' }}>Remove</button>
+                      )}
+                    </span>
                   )}
                   <button onClick={() => startEditEvent(ev)}>Edit</button>{' '}
                   <button onClick={() => handleToggleEventActive(ev)}>{ev.is_active ? 'Deactivate' : 'Activate'}</button>

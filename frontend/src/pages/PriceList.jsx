@@ -282,12 +282,14 @@ export default function PriceList({ user }) {
       ))}
       {items.length === 0 && <p>No price list for this event yet.{isAdmin ? ' Use + Add Item to start.' : ''}</p>}
 
-      <CreditTermsSection selectedEventId={selectedEventId} isAdmin={isAdmin} />
+      {/* 'ALL TIERS' is a per-item wildcard (Badge/Loading/etc. price the
+          same regardless of tier), not itself a bookable tier a credit
+          term's default could sensibly point at. */}
+      <CreditTermsSection selectedEventId={selectedEventId} isAdmin={isAdmin} tiers={tiers.filter((t) => t !== 'ALL TIERS')} />
     </div>
   );
 }
 
-const TIERS = ['PUBLISHED RATE', 'EARLY BIRD', 'ONSITE REBOOKING', 'CONTRA'];
 const BASIS_LABELS = {
   FIXED_DATE: 'Fixed date',
   DAYS_AFTER_SIGNING: 'Days after signing',
@@ -319,7 +321,7 @@ function describeLine(l) {
 // Scheduled Invoices split screen instead of a blank form every time.
 // Lives on this same page as Price List since both are per-event admin
 // configuration a Sales rep never edits, only selects from.
-function CreditTermsSection({ selectedEventId, isAdmin }) {
+function CreditTermsSection({ selectedEventId, isAdmin, tiers }) {
   const [terms, setTerms] = useState([]);
   const [form, setForm] = useState(emptyTermForm);
   const [showForm, setShowForm] = useState(false);
@@ -414,7 +416,7 @@ function CreditTermsSection({ selectedEventId, isAdmin }) {
               <label style={label}>Default for Tier</label>
               <select style={inputStyle} value={form.default_for_tier} onChange={(e) => setForm({ ...form, default_for_tier: e.target.value })}>
                 <option value="">— None —</option>
-                {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+                {tiers.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
           </div>
