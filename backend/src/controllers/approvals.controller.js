@@ -37,7 +37,7 @@ async function getPendingTriggerType(salesOrderId) {
 
 async function listRules(req, res) {
   const result = await pool.query(
-    `SELECT ar.*, ev.name AS event_name, u.full_name AS approver_user_name,
+    `SELECT ar.*, ev.code AS event_name, u.full_name AS approver_user_name,
             bu.full_name AS backup_approver_user_name, eu.full_name AS escalate_to_user_name,
             s2u.full_name AS step2_approver_user_name
      FROM approval_rules ar

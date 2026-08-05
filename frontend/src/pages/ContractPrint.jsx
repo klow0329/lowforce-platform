@@ -124,8 +124,10 @@ export default function ContractPrint() {
       <div id="pdf-doc" style={{ fontSize: 12.5, lineHeight: 1.4 }}>
       <LetterheadBand company={company} />
       <div style={{ textAlign: 'center', marginBottom: 16 }}>
-        <EventBrandLogo company={company} height={44} style={{ margin: '0 auto 6px' }} />
-        <BrandLogo company={company} height={44} style={{ margin: '0 auto 6px' }} />
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 24, marginBottom: 6 }}>
+          <EventBrandLogo company={company} height={44} style={{ margin: 0 }} />
+          <BrandLogo company={company} height={44} style={{ margin: 0 }} />
+        </div>
         <div style={{ fontSize: 18, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
         <div style={{ fontSize: 13, color: '#5c6070' }}>{company.event_name || salesOrder.event_name}</div>
         <h2 style={{ marginTop: 12, marginBottom: 0, fontSize: 18 }}>{docTitle}</h2>

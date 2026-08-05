@@ -231,7 +231,7 @@ const AGENT_FIELDS = [
 async function listAgentsAdmin(req, res) {
   const result = await pool.query(
     `SELECT ag.*, u.full_name AS salesperson_name, cy.name AS country_name,
-            (SELECT COALESCE(STRING_AGG(m.name, ', ' ORDER BY m.name), '')
+            (SELECT COALESCE(STRING_AGG(m.code, ', ' ORDER BY m.code), '')
                FROM agent_main_events ame JOIN events m ON m.id = ame.main_event_id
               WHERE ame.agent_id = ag.id) AS main_event_names,
             (SELECT COALESCE(ARRAY_AGG(ame.main_event_id), ARRAY[]::uuid[])
@@ -398,18 +398,19 @@ async function importAgents(req, res) {
       created += 1;
     }
 
-    // Which Main event(s) this agent represents (2026-08-05), comma-
-    // separated Main event NAMES (e.g. "MIFB, AgriFood World") — matched
-    // like Salesperson Email above. Additive: a name not listed is left
-    // alone, so a partial import can't silently unlink an existing one.
-    const mainEventNames = cleanText(row.main_events).split(',').map((s) => s.trim()).filter(Boolean);
-    for (const mainName of mainEventNames) {
+    // Which Main event(s) this agent represents, comma-separated Main event
+    // CODES (e.g. "MIFB, AGRIFOOD") — short/unambiguous for a spreadsheet
+    // cell, matching how event names are shown as codes everywhere else in
+    // the app. Additive: a code not listed is left alone, so a partial
+    // import can't silently unlink an existing one.
+    const mainEventCodes = cleanText(row.main_events).split(',').map((s) => s.trim()).filter(Boolean);
+    for (const mainCode of mainEventCodes) {
       const m = await pool.query(
-        `SELECT id FROM events WHERE company_id = $1 AND tier = 'MAIN' AND UPPER(TRIM(name)) = UPPER($2)`,
-        [req.companyId, mainName]
+        `SELECT id FROM events WHERE company_id = $1 AND tier = 'MAIN' AND UPPER(TRIM(code)) = UPPER($2)`,
+        [req.companyId, mainCode]
       );
       if (!m.rows[0]) {
-        skipped.push(`${name}: Main event "${mainName}" not found (agent still saved, that Main not linked)`);
+        skipped.push(`${name}: Main event "${mainCode}" not found (agent still saved, that Main not linked)`);
         continue;
       }
       await pool.query(

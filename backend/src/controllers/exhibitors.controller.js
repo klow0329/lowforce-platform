@@ -540,28 +540,30 @@ async function importExhibitors(req, res) {
       created += 1;
     }
 
-    // Which Main event(s) this exhibitor takes part in, by NAME (2026-08-05
-    // — simplified from requiring an exact Edition code, since most bulk
-    // imports are "add these exhibitors to what we're setting up now", not
-    // a specific past year). Each Main resolves to its own most recent/
-    // latest Edition (by event_year). Sub Event(s) is optional and lines up
-    // POSITION-BY-POSITION with Main Event(s) — e.g. Main "MIFB, AgriFood
-    // World" + Sub "MYFT, " tags only the first. Matched by NAME the same
-    // way Agent/Salesperson/Billing Company are above. Additive: an
-    // unlisted Main is NOT removed, so a partial import can't silently wipe
-    // participation the sheet simply didn't mention. Blank leaves
-    // everything as-is.
-    const mainNames = cleanText(row.main_events).split(',').map((s) => s.trim()).filter(Boolean);
-    const subNames = cleanText(row.sub_events).split(',').map((s) => s.trim());
-    for (let i = 0; i < mainNames.length; i++) {
-      const mainName = mainNames[i];
-      const subName = subNames[i];
+    // Which Main event(s) this exhibitor takes part in, by CODE (2026-08-05
+    // — switched from full NAME, per the user's own explicit preference:
+    // codes are short/unambiguous for a spreadsheet cell, matching how
+    // event names are now shown as codes everywhere else in the app, e.g.
+    // "MIFB" not "Malaysian International Food & Beverage Trade Fair").
+    // Each Main resolves to its own most recent/latest Edition (by
+    // event_year) — imports don't target a specific past year, since most
+    // bulk imports are "add these exhibitors to what we're setting up
+    // now". Sub Event(s) is optional and lines up POSITION-BY-POSITION with
+    // Main Event(s) — e.g. Main "MIFB, AGRIFOOD" + Sub "MYFT, " tags only
+    // the first. Additive: an unlisted Main is NOT removed, so a partial
+    // import can't silently wipe participation the sheet simply didn't
+    // mention. Blank leaves everything as-is.
+    const mainCodes = cleanText(row.main_events).split(',').map((s) => s.trim()).filter(Boolean);
+    const subCodes = cleanText(row.sub_events).split(',').map((s) => s.trim());
+    for (let i = 0; i < mainCodes.length; i++) {
+      const mainCode = mainCodes[i];
+      const subCode = subCodes[i];
       const main = await pool.query(
-        `SELECT id FROM events WHERE company_id = $1 AND tier = 'MAIN' AND UPPER(TRIM(name)) = UPPER($2)`,
-        [req.companyId, mainName]
+        `SELECT id FROM events WHERE company_id = $1 AND tier = 'MAIN' AND UPPER(TRIM(code)) = UPPER($2)`,
+        [req.companyId, mainCode]
       );
       if (!main.rows[0]) {
-        skipped.push(`${companyName}: Main event "${mainName}" not found (exhibitor still saved, not linked to it)`);
+        skipped.push(`${companyName}: Main event "${mainCode}" not found (exhibitor still saved, not linked to it)`);
         continue;
       }
       const edition = await pool.query(
@@ -570,17 +572,17 @@ async function importExhibitors(req, res) {
         [req.companyId, main.rows[0].id]
       );
       if (!edition.rows[0]) {
-        skipped.push(`${companyName}: Main event "${mainName}" has no Edition set up yet (exhibitor still saved, not linked to it)`);
+        skipped.push(`${companyName}: Main event "${mainCode}" has no Edition set up yet (exhibitor still saved, not linked to it)`);
         continue;
       }
       let categoryId = null;
-      if (subName) {
+      if (subCode) {
         const cat = await pool.query(
-          `SELECT id FROM event_categories WHERE company_id = $1 AND main_event_id = $2 AND UPPER(TRIM(name)) = UPPER($3)`,
-          [req.companyId, main.rows[0].id, subName]
+          `SELECT id FROM event_categories WHERE company_id = $1 AND main_event_id = $2 AND UPPER(TRIM(code)) = UPPER($3)`,
+          [req.companyId, main.rows[0].id, subCode]
         );
         if (!cat.rows[0]) {
-          skipped.push(`${companyName}: Sub-event "${subName}" not found under "${mainName}" (event still linked, without that tag)`);
+          skipped.push(`${companyName}: Sub-event "${subCode}" not found under "${mainCode}" (event still linked, without that tag)`);
         } else {
           categoryId = cat.rows[0].id;
         }

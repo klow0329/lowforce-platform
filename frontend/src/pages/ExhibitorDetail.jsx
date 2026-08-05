@@ -580,7 +580,7 @@ export default function ExhibitorDetail({ user }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {Object.entries(
               events.reduce((groups, ev) => {
-                const key = ev.main_event_name || '(No Main event)';
+                const key = ev.main_event_code || '(No Main event)';
                 (groups[key] = groups[key] || []).push(ev);
                 return groups;
               }, {})
@@ -594,7 +594,7 @@ export default function ExhibitorDetail({ user }) {
                     <div key={ev.id} style={{ marginLeft: 16, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <label style={{ fontSize: 13, fontWeight: 400 }}>
                         <input type="checkbox" checked={checked} onChange={() => toggleEventParticipation(ev.id)} />
-                        {' '}{ev.name}
+                        {' '}{ev.code}
                       </label>
                       {checked && catOptions.length > 0 && (
                         <select

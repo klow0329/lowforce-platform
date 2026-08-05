@@ -19,7 +19,7 @@ async function listOpportunities(req, res) {
   const result = await pool.query(
     `SELECT o.id, o.exhibitor_id, ex.company_name AS exhibitor_name, ex.country_code AS exhibitor_country,
             ag.name AS agent_name,
-            o.event_id, ev.name AS event_name,
+            o.event_id, ev.code AS event_name,
             o.salesperson_id, u.full_name AS salesperson_name,
             o.stage_id, st.code AS stage_code, st.name AS stage_name,
             st.probability_pct, st.is_won, st.is_lost,

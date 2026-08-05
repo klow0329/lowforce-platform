@@ -159,6 +159,7 @@ export default function Admin({ user }) {
   const [eventCategories, setEventCategories] = useState([]);
   const [categoryForm, setCategoryForm] = useState(emptyCategoryForm);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [countries, setCountries] = useState([]);
   const [error, setError] = useState('');
 
   const [taxCodes, setTaxCodes] = useState([]);
@@ -382,23 +383,36 @@ export default function Admin({ user }) {
         'JANE TAN', 'MARKETING MANAGER', '60123456789', 'jane.tan@acme-exhibitions.example.com',
         'AHMAD FAIZAL', 'FINANCE EXECUTIVE', '60129876543', 'ahmad.faizal@acme-exhibitions.example.com',
         'salesperson@example.com', 'ACME TRAVEL & EVENTS', '',
-        events.filter((ev) => ev.tier === 'MAIN')[0]?.name || 'MIFB',
-        eventCategories[0]?.name || '',
+        events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.code).join(', ') || 'MIFB',
+        eventCategories.map((c) => c.code).join(', ') || 'MYFT',
+      ],
+      [
+        'GLOBAL PACKAGING SOLUTIONS SDN BHD', '', 'SG', '', '', '', '',
+        '', '', '', '', '',
+        'LI WEI', '', '65 91234567', 'liwei@globalpackaging.example.com',
+        '', '', '', '',
+        '', '', '',
+        events.filter((ev) => ev.tier === 'MAIN')[0]?.code || 'MIFB', '',
       ],
       [
         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-        '', '', '', '', '* = mandatory. Delete the sample row above before importing your real data. Contact/phone numbers '
+        '', '', '', '', '* = mandatory. Delete the sample rows above before importing your real data. Contact/phone numbers '
           + 'must be digits only (no +, spaces, or dashes — required for WhatsApp links). Everything is trimmed and '
-          + 'converted to UPPERCASE on import except Website and email addresses. Salesperson Email / Agent Name / '
-          + 'Billing Company are matched by exact text against existing Users/Agents/Exhibitors — leave blank if not applicable. '
-          + 'Main Event(s): which Main event(s) this exhibitor takes part in, comma-separated by NAME (not code) — adds them '
-          + "to that Main's most recent/latest Edition (by year). To target an older year precisely instead, add that "
-          + 'participation from the Exhibitor\'s own page afterward. Sub Event(s): optional, comma-separated, lined up '
-          + 'position-by-position with Main Event(s) — leave an entry blank to skip a sub-event for that particular Main '
-          + '(e.g. Main Event(s) "MIFB, AgriFood World" with Sub Event(s) "MYFT, " tags only the MIFB one). '
-          + `Valid Main event names: ${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name).join(', ') || '(none set up yet — add one under Admin > Events first)'}. `
-          + `Valid Sub-event names: ${eventCategories.map((c) => c.name).join(', ') || '(none set up yet)'}. `
-          + 'Leave both blank to leave existing event participation untouched.',
+          + 'converted to UPPERCASE on import except Website and email addresses. '
+          + `Country Code: 2-letter code (e.g. MY, SG, US) — full reference list at Admin > Data Import below. `
+          + 'Salesperson Email / Agent Name (use the agent\'s short/abbreviated name, e.g. "TRADEXPO" not its full legal '
+          + 'name) / Billing Company are matched by exact text against your existing Users/Agents/Exhibitors — leave '
+          + 'blank if not applicable. '
+          + 'Main Event(s) / Sub Event(s): both by CODE (not full name), comma-separated in the same cell to list more '
+          + 'than one, and lined up POSITION-BY-POSITION with each other — the 1st Sub Event code applies to the 1st '
+          + 'Main Event code, the 2nd to the 2nd, and so on. Leave a position blank (but keep its comma) to skip a '
+          + 'sub-event for just that one Main. Example for a company with two Main events set up ("MIFB" and '
+          + '"AGRIFOOD"): Main Event(s) = "MIFB, AGRIFOOD", Sub Event(s) = "MYFT, " tags MIFB with the MYFT sub-event '
+          + 'and leaves AGRIFOOD untagged. Each Main Event resolves to its own most recent/latest Edition (by year); '
+          + 'to target an older year precisely instead, add that participation from the Exhibitor\'s own page '
+          + 'afterward. Leave both columns blank to leave existing event participation untouched. '
+          + `Valid Main Event codes: ${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.code).join(', ') || '(none set up yet — add one under Admin > Events first)'}. `
+          + `Valid Sub Event codes: ${eventCategories.map((c) => c.code).join(', ') || '(none set up yet — add one under Admin > Events > Sub-events first)'}.`,
       ],
     ]);
     const book = XLSX.utils.book_new();
@@ -453,6 +467,20 @@ export default function Admin({ user }) {
     }
   }
 
+  // Reference-only download (2026-08-05) — not an import template, since
+  // Country Code isn't its own bulk-editable entity, just a lookup other
+  // imports (Exhibitors, Agents) reference. Exists purely so the user has
+  // something to check a code against while filling in those templates.
+  function handleDownloadCountryList() {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['Code', 'Country'],
+      ...countries.map((c) => [c.code, c.name]),
+    ]);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Countries');
+    XLSX.writeFile(book, 'country_code_reference.csv');
+  }
+
   function handleDownloadAgentTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
       ['Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Contact Person', 'Job Title', 'Contact Phone', 'Contact Email', 'Salesperson Email', 'Main Events'],
@@ -460,16 +488,17 @@ export default function Admin({ user }) {
         'ACME TRAVEL & EVENTS', 'ACME T&E', 'MY', '8 JALAN BUKIT BINTANG', '55100', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR',
         '199801098765', 'C9876543210', 'W10-9876-54321098', 'https://acme-travel.example.com', '60323456780',
         'JOHN TAN', 'ACCOUNT MANAGER', '60123456789', 'john.tan@acme-travel.example.com',
-        'salesperson@example.com', events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name)[0] || 'MIFB',
+        'salesperson@example.com', events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.code).join(', ') || 'MIFB',
       ],
       [
         '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
         '* = mandatory. Delete the sample row above before importing your real data. Trimmed and converted to '
           + 'UPPERCASE on import except Website and Contact Email (lowercased). Contact Phone is digits only. '
+          + `Country Code: 2-letter code (e.g. MY, SG, US) — full reference list at Admin > Data Import below. `
           + 'Salesperson Email is matched by exact text against existing Users — '
-          + 'leave blank if not applicable. Main Events: which Main event(s) this agent represents, comma-separated '
-          + `(e.g. "MIFB, AgriFood World") — valid names: `
-          + `${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name).join(', ') || '(none set up yet — add a Main event first)'}. `
+          + 'leave blank if not applicable. Main Events: which Main event(s) this agent represents, by CODE (not full '
+          + `name), comma-separated to list more than one (e.g. "MIFB, AGRIFOOD") — valid codes: `
+          + `${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.code).join(', ') || '(none set up yet — add a Main event first)'}. `
           + 'Leave blank to leave existing Main event links untouched.',
       ],
     ]);
@@ -652,6 +681,7 @@ export default function Admin({ user }) {
     api.adminListUsers().then(({ users }) => setUsers(users));
     api.adminListEvents().then(({ events }) => setEvents(events));
     api.adminListEventCategories().then(({ eventCategories }) => setEventCategories(eventCategories));
+    api.listCountries().then(({ countries }) => setCountries(countries));
   }
 
   async function handleSaveCategory(e) {
@@ -1365,8 +1395,9 @@ export default function Admin({ user }) {
             <label style={label}>Tier</label>
             <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
               Main = the brand (e.g. "MIFB", no year — carries its own logo). Edition = a specific year's instance
-              (e.g. "MIFB27" — carries the venue, and everything price-list/billing hangs off this level). Category =
-              an optional sub-event within an Edition (e.g. "MCE"/"MYFT"). Can't be changed after creation.
+              (e.g. "MIFB27" — carries the venue, and everything price-list/billing hangs off this level). For
+              reusable sub-events within a Main (e.g. "MCE"/"MYFT", applied per year without recreating a new event),
+              see Sub-events below instead — not a third tier here. Can't be changed after creation.
             </p>
             <select
               style={inputStyle} value={eventForm.tier} disabled={!!eventForm.id}
@@ -1374,7 +1405,6 @@ export default function Admin({ user }) {
             >
               <option value="MAIN">Main</option>
               <option value="EDITION">Edition</option>
-              <option value="CATEGORY">Category</option>
             </select>
             <label style={label}>Code (short, e.g. MIFB27 — can't be changed later)</label>
             <input style={inputStyle} value={eventForm.code} onChange={(e) => setEventForm({ ...eventForm, code: e.target.value })} required disabled={!!eventForm.id} />
@@ -1403,17 +1433,6 @@ export default function Admin({ user }) {
                 </select>
               </>
             )}
-            {eventForm.tier === 'CATEGORY' && (
-              <>
-                <label style={label}>Edition</label>
-                <select style={inputStyle} value={eventForm.parent_event_id} onChange={(e) => setEventForm({ ...eventForm, parent_event_id: e.target.value })} required>
-                  <option value="">— Select —</option>
-                  {events.filter((ev) => ev.tier === 'EDITION').map((ev) => (
-                    <option key={ev.id} value={ev.id}>{ev.name}</option>
-                  ))}
-                </select>
-              </>
-            )}
             <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>
               {eventForm.id ? 'Save Changes' : 'Create Event'}
             </button>
@@ -1436,25 +1455,19 @@ export default function Admin({ user }) {
             {[
               ...events.filter((ev) => ev.tier === 'MAIN').flatMap((main) => [
                 main,
-                ...events.filter((ed) => ed.tier === 'EDITION' && ed.parent_event_id === main.id).flatMap((ed) => [
-                  ed,
-                  ...events.filter((cat) => cat.tier === 'CATEGORY' && cat.parent_event_id === ed.id),
-                ]),
+                ...events.filter((ed) => ed.tier === 'EDITION' && ed.parent_event_id === main.id),
               ]),
-              ...events.filter((ed) => ed.tier === 'EDITION' && !ed.parent_event_id).flatMap((ed) => [
-                ed,
-                ...events.filter((cat) => cat.tier === 'CATEGORY' && cat.parent_event_id === ed.id),
-              ]),
+              ...events.filter((ed) => ed.tier === 'EDITION' && !ed.parent_event_id),
             ].map((ev) => (
               <tr key={ev.id} style={{ borderBottom: '1px solid #eee', opacity: ev.is_active ? 1 : 0.5 }}>
-                <td style={ev.tier === 'MAIN' ? { fontWeight: 600 } : { paddingLeft: ev.tier === 'CATEGORY' ? 40 : 20 }}>
+                <td style={ev.tier === 'MAIN' ? { fontWeight: 600 } : { paddingLeft: 20 }}>
                   {ev.tier !== 'MAIN' ? '↳ ' : ''}{ev.code}
                 </td>
                 <td>{ev.name}</td>
                 <td>{ev.event_year || '—'}</td>
                 <td>{ev.venue || '—'}</td>
                 <td>
-                  {ev.tier === 'MAIN' ? 'Main' : ev.tier === 'EDITION' ? (ev.parent_code ? `Edition of ${ev.parent_code}` : 'Edition (standalone)') : `Category of ${ev.parent_code}`}
+                  {ev.tier === 'MAIN' ? 'Main' : (ev.parent_code ? `Edition of ${ev.parent_code}` : 'Edition (standalone)')}
                 </td>
                 <td>{ev.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -1527,7 +1540,7 @@ export default function Admin({ user }) {
               <tr key={cat.id} style={{ borderBottom: '1px solid #eee', opacity: cat.is_active ? 1 : 0.5 }}>
                 <td>{cat.code}</td>
                 <td>{cat.name}</td>
-                <td>{cat.main_event_name}</td>
+                <td>{cat.main_event_code}</td>
                 <td>{cat.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button onClick={() => startEditCategory(cat)}>Edit</button>{' '}
@@ -2012,6 +2025,16 @@ export default function Admin({ user }) {
           Bulk add/update from Excel — every import here is safe to re-run: a row that matches an existing record
           updates it in place, a new one gets created. Nothing is ever deleted or overwritten destructively.
         </p>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+          <p style={{ fontSize: 13, color: '#5c6070', margin: 0 }}>
+            Country Code (used by the Exhibitor and Agent templates below) is a 2-letter code — the full reference
+            list ({countries.length || '…'} countries) is below if you need to check one while filling in your data.
+          </p>
+          <button type="button" onClick={handleDownloadCountryList} style={{ whiteSpace: 'nowrap', marginLeft: 16 }}>
+            Download Country List
+          </button>
+        </div>
 
         <div style={{ marginTop: 24, paddingTop: 24 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

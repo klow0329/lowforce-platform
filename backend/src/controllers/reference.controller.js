@@ -88,7 +88,7 @@ async function listEvents(req, res) {
   if (accessibleIds.length === 0) return res.json({ events: [] });
   const result = await pool.query(
     `SELECT e.id, e.code, e.name, e.event_year, e.parent_event_id, e.tier,
-            m.id AS main_event_id, m.name AS main_event_name
+            m.id AS main_event_id, m.code AS main_event_code
      FROM events e
      LEFT JOIN events m ON m.id = e.parent_event_id AND m.tier = 'MAIN'
      WHERE e.company_id = $1 AND e.is_active = TRUE AND e.tier != 'MAIN' AND e.id = ANY($2::uuid[])

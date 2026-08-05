@@ -461,20 +461,21 @@ async function listEvents(req, res) {
   res.json({ events: result.rows });
 }
 
-// Enforces the hierarchy shape (2026-08-05): MAIN has no parent; EDITION's
-// parent (if any) must be a MAIN; CATEGORY's parent must be an EDITION.
-// Postgres CHECK constraints can't see a sibling row's tier, so this lives
-// here rather than in migration 083's schema.
+// Enforces the hierarchy shape: MAIN has no parent; EDITION's parent (if
+// any) must be a MAIN. Postgres CHECK constraints can't see a sibling
+// row's tier, so this lives here rather than in the schema. A third tier
+// (CATEGORY, "a sub-event within an Edition") existed briefly but was
+// superseded same-day by the event_categories table ("Sub-event" in the
+// UI) — see migration 089.
 async function validateEventTier(companyId, tier, parentEventId) {
   if (tier === 'MAIN') {
     if (parentEventId) return 'A Main event cannot have a parent.';
     return null;
   }
-  if (!parentEventId) return null; // Edition with no Main yet, or a Category — parent optional per user's own spec
+  if (!parentEventId) return null; // Edition with no Main yet — parent is optional
   const parent = await pool.query(`SELECT tier FROM events WHERE id = $1 AND company_id = $2`, [parentEventId, companyId]);
   if (!parent.rows[0]) return 'Parent event not found.';
   if (tier === 'EDITION' && parent.rows[0].tier !== 'MAIN') return "An Edition's parent must be a Main event.";
-  if (tier === 'CATEGORY' && parent.rows[0].tier !== 'EDITION') return "A Category's parent must be an Edition.";
   return null;
 }
 
@@ -555,11 +556,11 @@ async function updateEvent(req, res) {
 // ---------------------------------------------------------------------------
 async function listEventCategories(req, res) {
   const result = await pool.query(
-    `SELECT ec.id, ec.main_event_id, m.name AS main_event_name, ec.code, ec.name, ec.is_active, ec.sort_order
+    `SELECT ec.id, ec.main_event_id, m.code AS main_event_code, ec.code, ec.name, ec.is_active, ec.sort_order
      FROM event_categories ec
      JOIN events m ON m.id = ec.main_event_id
      WHERE ec.company_id = $1
-     ORDER BY m.name, ec.sort_order, ec.code`,
+     ORDER BY m.code, ec.sort_order, ec.code`,
     [req.companyId]
   );
   res.json({ eventCategories: result.rows });
