@@ -8,6 +8,7 @@ const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'bo
 const emptyAgentForm = {
   id: null, name: '', name_alt: '', country_code: '', address: '', postcode: '', city: '', state: '',
   salesperson_id: '', reg_no: '', tin_no: '', sst_no: '', website: '', fax: '',
+  contact_name: '', contact_job_title: '', contact_phone: '', contact_email: '',
 };
 
 // The commission rate table's first column — every standing billing item
@@ -19,12 +20,13 @@ const commissionItemLabel = (code) => (code === 'ALL' ? 'ALL REVENUE' : (FIXED_L
 
 // Same casing convention as ExhibitorDetail's UPPERCASE_FIELDS — company
 // name/address-type fields display uppercase, codes/URLs stay as typed.
-const AGENT_UPPERCASE_FIELDS = ['name', 'name_alt', 'address', 'city', 'state'];
+const AGENT_UPPERCASE_FIELDS = ['name', 'name_alt', 'address', 'city', 'state', 'contact_name', 'contact_job_title'];
 function normalizeAgentForm(form) {
   const out = { ...form };
   for (const key of Object.keys(out)) {
     if (typeof out[key] !== 'string') continue;
-    out[key] = AGENT_UPPERCASE_FIELDS.includes(key) ? out[key].trim().toUpperCase() : out[key].trim();
+    if (key === 'contact_email') out[key] = out[key].trim().toLowerCase();
+    else out[key] = AGENT_UPPERCASE_FIELDS.includes(key) ? out[key].trim().toUpperCase() : out[key].trim();
   }
   return out;
 }
@@ -242,6 +244,31 @@ export default function AgentsList({ user }) {
             {countries.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
           </select>
 
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Contact Person</label>
+              <input style={inputStyle} value={agentForm.contact_name} onChange={(e) => setAgentForm({ ...agentForm, contact_name: e.target.value })} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Job Title</label>
+              <input style={inputStyle} value={agentForm.contact_job_title} onChange={(e) => setAgentForm({ ...agentForm, contact_job_title: e.target.value })} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Contact Phone</label>
+              <input
+                style={inputStyle} value={agentForm.contact_phone} inputMode="numeric"
+                placeholder="Country code first, e.g. 60123456789"
+                onChange={(e) => setAgentForm({ ...agentForm, contact_phone: e.target.value.replace(/\D/g, '') })}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={label}>Contact Email</label>
+              <input type="email" style={inputStyle} value={agentForm.contact_email} onChange={(e) => setAgentForm({ ...agentForm, contact_email: e.target.value })} />
+            </div>
+          </div>
+
           <label style={label}>Salesperson</label>
           <select style={inputStyle} value={agentForm.salesperson_id} onChange={(e) => setAgentForm({ ...agentForm, salesperson_id: e.target.value })}>
             <option value="">— Unassigned —</option>
@@ -280,7 +307,7 @@ export default function AgentsList({ user }) {
         <table width="100%" cellPadding="6">
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid #ccc' }}>
-              <th>Short Name</th><th>Full Name</th><th>Country</th><th>Salesperson</th><th>Main Event(s)</th><th>Status</th><th></th>
+              <th>Short Name</th><th>Full Name</th><th>Contact Person</th><th>Phone</th><th>Email</th><th>Country</th><th>Salesperson</th><th>Main Event(s)</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -289,6 +316,9 @@ export default function AgentsList({ user }) {
               <tr key={a.id} style={{ borderBottom: '1px solid #eee', opacity: a.is_active ? 1 : 0.5 }}>
                 <td>{a.name}</td>
                 <td>{a.name_alt || '—'}</td>
+                <td>{a.contact_name || '—'}</td>
+                <td>{a.contact_phone || '—'}</td>
+                <td>{a.contact_email || '—'}</td>
                 <td>{a.country_name || '—'}</td>
                 <td>{a.salesperson_name || '—'}</td>
                 <td>{a.main_event_names || '—'}</td>
@@ -303,6 +333,8 @@ export default function AgentsList({ user }) {
                             address: a.address || '', postcode: a.postcode || '', city: a.city || '', state: a.state || '',
                             salesperson_id: a.salesperson_id || '', reg_no: a.reg_no || '', tin_no: a.tin_no || '',
                             sst_no: a.sst_no || '', website: a.website || '', fax: a.fax || '',
+                            contact_name: a.contact_name || '', contact_job_title: a.contact_job_title || '',
+                            contact_phone: a.contact_phone || '', contact_email: a.contact_email || '',
                           });
                           setShowAgentForm(true);
                         }}
@@ -324,7 +356,7 @@ export default function AgentsList({ user }) {
               </tr>
               {mainEventsAgentId === a.id && (
                 <tr>
-                  <td colSpan={7} style={{ background: '#F5F6FA', padding: 12 }}>
+                  <td colSpan={10} style={{ background: '#F5F6FA', padding: 12 }}>
                     <p style={{ fontSize: 12, color: '#5c6070', margin: '0 0 8px' }}>
                       Which Main event(s) {a.name} represents — a standing fact about the agent, not per-year. Select
                       more than one if this agent brings exhibitors to several of your event brands.
@@ -344,7 +376,7 @@ export default function AgentsList({ user }) {
               )}
               {commissionAgentId === a.id && (
                 <tr>
-                  <td colSpan={7} style={{ background: '#F5F6FA', padding: 12 }}>
+                  <td colSpan={10} style={{ background: '#F5F6FA', padding: 12 }}>
                     <p style={{ fontSize: 12, color: '#5c6070', margin: '0 0 8px' }}>
                       Commission rate for {a.name} — pick any billing item (or "ALL REVENUE" as a catch-all) and a
                       rate for repeat-from-last-year vs new exhibitors. A specific item's rate wins over ALL REVENUE
@@ -425,7 +457,7 @@ export default function AgentsList({ user }) {
               )}
               </>
             ))}
-            {agents.length === 0 && <tr><td colSpan={7} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
+            {agents.length === 0 && <tr><td colSpan={10} style={{ fontSize: 13, color: '#5c6070' }}>None set up yet.</td></tr>}
           </tbody>
         </table>
       </div>

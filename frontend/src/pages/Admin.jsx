@@ -454,16 +454,18 @@ export default function Admin({ user }) {
 
   function handleDownloadAgentTemplate() {
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Salesperson Email', 'Main Events'],
+      ['Name *', 'Name (Alt)', 'Country Code', 'Address', 'Postcode', 'City', 'State', 'Reg No', 'TIN No', 'SST No', 'Website', 'Fax', 'Contact Person', 'Job Title', 'Contact Phone', 'Contact Email', 'Salesperson Email', 'Main Events'],
       [
         'ACME TRAVEL & EVENTS', 'ACME T&E', 'MY', '8 JALAN BUKIT BINTANG', '55100', 'KUALA LUMPUR', 'W.P. KUALA LUMPUR',
         '199801098765', 'C9876543210', 'W10-9876-54321098', 'https://acme-travel.example.com', '60323456780',
+        'JOHN TAN', 'ACCOUNT MANAGER', '60123456789', 'john.tan@acme-travel.example.com',
         'salesperson@example.com', events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name)[0] || 'MIFB',
       ],
       [
-        '', '', '', '', '', '', '', '', '', '', '', '', '',
+        '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
         '* = mandatory. Delete the sample row above before importing your real data. Trimmed and converted to '
-          + 'UPPERCASE on import except Website. Salesperson Email is matched by exact text against existing Users — '
+          + 'UPPERCASE on import except Website and Contact Email (lowercased). Contact Phone is digits only. '
+          + 'Salesperson Email is matched by exact text against existing Users — '
           + 'leave blank if not applicable. Main Events: which Main event(s) this agent represents, comma-separated '
           + `(e.g. "MIFB, AgriFood World") — valid names: `
           + `${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.name).join(', ') || '(none set up yet — add a Main event first)'}. `
@@ -498,6 +500,10 @@ export default function Admin({ user }) {
         sst_no: r['SST No'] ?? r['sst_no'] ?? '',
         website: r['Website'] ?? r['website'] ?? '',
         fax: r['Fax'] ?? r['fax'] ?? '',
+        contact_name: r['Contact Person'] ?? r['contact_name'] ?? '',
+        contact_job_title: r['Job Title'] ?? r['contact_job_title'] ?? '',
+        contact_phone: r['Contact Phone'] ?? r['contact_phone'] ?? '',
+        contact_email: r['Contact Email'] ?? r['contact_email'] ?? '',
         salesperson_email: r['Salesperson Email'] ?? r['salesperson_email'] ?? '',
         main_events: r['Main Events'] ?? r['main_events'] ?? '',
       })).filter((r) => r.name);

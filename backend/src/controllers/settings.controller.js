@@ -225,6 +225,7 @@ async function updateTaxCode(req, res) {
 const AGENT_FIELDS = [
   'name', 'name_alt', 'country_code', 'address', 'postcode', 'city', 'state',
   'salesperson_id', 'reg_no', 'tin_no', 'sst_no', 'website', 'fax', 'is_active',
+  'contact_name', 'contact_job_title', 'contact_phone', 'contact_email',
 ];
 
 async function listAgentsAdmin(req, res) {
@@ -359,13 +360,16 @@ async function importAgents(req, res) {
     }
 
     // Trimmed + uppercased like the exhibitor import, except website (kept
-    // as-typed) and postcode (digits only — see importNormalize.js).
+    // as-typed), postcode/contact_phone (digits only), and contact_email
+    // (lowercased) — see importNormalize.js.
     const fields = {
       name_alt: cleanText(row.name_alt) || null, country_code: cleanText(row.country_code) || null,
       address: cleanText(row.address) || null, postcode: cleanDigits(row.postcode) || null,
       city: cleanText(row.city) || null, state: cleanText(row.state) || null,
       reg_no: cleanText(row.reg_no) || null, tin_no: cleanText(row.tin_no) || null, sst_no: cleanText(row.sst_no) || null,
       website: cleanKeepCase(row.website) || null, fax: cleanText(row.fax) || null,
+      contact_name: cleanText(row.contact_name) || null, contact_job_title: cleanText(row.contact_job_title) || null,
+      contact_phone: cleanDigits(row.contact_phone) || null, contact_email: cleanLower(row.contact_email) || null,
     };
     if (salespersonId) fields.salesperson_id = salespersonId;
 
