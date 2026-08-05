@@ -42,6 +42,7 @@ const emptyProfileForm = {
   bank_name: '', bank_account_no: '', bank_swift: '', payment_instructions: '',
   budget_preparer_user_id: '', budget_approver_user_id: '', contract_terms: '', event_name: '',
   stamp_duty_enabled: false, stamp_duty_rate_pct: '0.5', stamp_duty_round_to: '5', stamp_duty_minimum: '10',
+  payment_terms_wording: '', declaration_wording: '',
 };
 const emptyExpenseCodeForm = { id: null, code: '', description: '', type: 'EXPENSE' };
 
@@ -705,6 +706,8 @@ export default function Admin({ user }) {
         stamp_duty_rate_pct: settings.stamp_duty_rate_pct ?? '0.5',
         stamp_duty_round_to: settings.stamp_duty_round_to ?? '5',
         stamp_duty_minimum: settings.stamp_duty_minimum ?? '10',
+        payment_terms_wording: settings.payment_terms_wording || '',
+        declaration_wording: settings.declaration_wording || '',
       });
       setBranding({
         logo: settings.has_logo, letterhead: settings.has_letterhead, footer: settings.has_footer,
@@ -1678,6 +1681,27 @@ export default function Admin({ user }) {
             style={{ ...inputStyle, minHeight: 200, fontFamily: 'monospace', fontSize: 12 }}
             value={profileForm.contract_terms}
             onChange={(e) => setProfileForm({ ...profileForm, contract_terms: e.target.value })}
+          />
+
+          <h4 style={{ marginBottom: 4, marginTop: 24 }}>Contract — Payment Terms Wording</h4>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Printed under Section 5 (Payment) of the Contract, above the bank details. Leave blank to omit.
+          </p>
+          <textarea
+            style={{ ...inputStyle, minHeight: 100, fontFamily: 'monospace', fontSize: 12 }}
+            value={profileForm.payment_terms_wording}
+            onChange={(e) => setProfileForm({ ...profileForm, payment_terms_wording: e.target.value })}
+          />
+
+          <h4 style={{ marginBottom: 4, marginTop: 24 }}>Contract — Exhibitor's Declaration Wording</h4>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Printed under Section 6 (Exhibitor's Declaration and Signature) of the Contract, above the signature
+            block. Leave blank to omit.
+          </p>
+          <textarea
+            style={{ ...inputStyle, minHeight: 140, fontFamily: 'monospace', fontSize: 12 }}
+            value={profileForm.declaration_wording}
+            onChange={(e) => setProfileForm({ ...profileForm, declaration_wording: e.target.value })}
           />
 
           <h4 style={{ marginBottom: 4, marginTop: 24 }}>Group Resource Sharing</h4>
