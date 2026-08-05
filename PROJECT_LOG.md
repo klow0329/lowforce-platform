@@ -36,6 +36,22 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 - **Verified locally against the exact contract the user's own sample PDF was generated from** (sales_order id `7a6ca863...`, Constellar Group PTE LTD, RM 45,545.55) — every figure matched exactly; venue/dates and the new wording fields were confirmed to round-trip correctly through Admin > Events and Admin > Company Profile before deploying. Migration 087 applied to production and the new fields confirmed queryable there too.
 - Not done: no PDF-pagination guarantee for "under 2 pages" beyond compact styling — html2pdf auto-paginates from content height, there's no hard page-count enforcement, so an exhibitor with an unusually long remarks/billing list could still spill to a 3rd page.
 
+**Round 2, same day — user reported the deployed Contract still "looks like before, more like a proposal, 2 logos overlaid," plus four new items:**
+
+**Diagnosed the "looks unchanged" report as a false alarm, not a broken deploy:** compared the JS bundle hash actually served by both `lowforce.co` and the user's local `localhost:3001` instance against the just-built `frontend/dist` — both matched exactly. The real explanation: "testing site" = the user's own local `start-lowforce.cmd` instance (see [[deployment-frontend-build-gap]]), a completely separate environment from Production — and production had zero real exhibitors/agents/contracts at the time (reconfirmed again this round), so the "ugly" reference PDF attached earlier this session could only have come from local test data. Fixed the header regardless: the two logos (Event brand + Company) now sit side-by-side instead of stacked-centered, since stacking read as "overlapping" to the user.
+
+**(2) Country list was inconsistent, not just short:** production only ever had the original 9-country seed; local dev had grown to 230 over past sessions but with a genuine mix of alpha-2 (32 countries) and alpha-3 (198) codes — the actual root cause of the user's import confusion, not just missing rows. User was asked and said any consistent, widely-used format was fine — went with alpha-2 (matches the existing 9-country seed). Migration 088 standardizes every code, in safe insert-then-repoint-then-delete order (new codes inserted first, then any child row referencing an old alpha-3 code repointed, then the old rows deleted — doing it in any other order 500s on the FK). Applied to both environments; verified zero non-2-letter codes remain anywhere. A "Download Country List" reference button was added under Admin > Data Import for the user's own reference while filling in import sheets.
+
+**(3) "Sub-event vs Category" confusion was real, not user error:** `events.tier = 'CATEGORY'` (migration 083) was superseded same-day by the `event_categories`/"Sub-event" table (migration 084) — 084's own comment even flags converting any existing CATEGORY rows as a deliberate follow-up that never happened — but the dead tier option was never removed from Admin > Events' Add Event form, and its one orphan row ("MIFBS" under MIFB27, zero references anywhere, user confirmed via screenshot) was never cleaned up. Deleted the orphan, tightened the `events.tier` CHECK constraint to just `MAIN`/`EDITION` (migration 089), removed the option and its now-dead nesting logic from the UI and its validation branch in `admin.controller.js`.
+
+**(4) Event short codes now shown in every listing** (Agent list's Main Event(s) column, Sub-events admin table, Approval Rules listing, Exhibitor Detail's Event Participation checklist + Opportunities sub-table) instead of full names — printed documents (Contract/Invoice/Proforma/Receipt/Proposal) intentionally keep full names, the correct register for a formal document.
+
+**(5) Exhibitor/Agent bulk import now matches Main Event(s)/Sub Event(s) by CODE instead of full name**, for the same consistency reason, with both templates rewritten (second sample row demonstrating the position-by-position multi-value pairing, clearer instructions using code terminology throughout, Country Code column pointed at the new reference download).
+
+**Still open:**
+- No hard page-count enforcement for the Contract's "under 2 pages" ask (unchanged from Round 1).
+- Production's near-empty business-data state means none of this round's changes have been exercised against a real contract/exhibitor there yet.
+
 ---
 
 ## 2026-08-04 (past midnight)
