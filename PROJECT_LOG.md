@@ -6,6 +6,24 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-06
+
+**Asked** (continuing from the Contract redesign feedback the prior session): (1) Exhibitor Sub-event tagging only kept one Sub-event per Main event participation even when the user's own real import CSV listed several in one cell. (2) Every printed document should show the country's full name, not its 2-letter code. (3) Three separate problems with the generated Contract PDF: the two header logos rendered fine on-screen but merged together in the actual exported PDF; the section numbers jumped from 3 to 5 with no 4; and Section 5 (Payment)'s bank-details grid got cut in half across the page 1/page 2 boundary.
+
+**(1) Root-caused as a real schema limitation, not an import bug:** `exhibitor_events.category_id` was a single FK column — it could only ever hold ONE Sub-event tag per participation, so an exhibitor legitimately tagged with three Sub-events at once ("MCE, MIFB, MYFT" under one Main, straight from the user's own test CSV) silently kept only the first. Replaced with a proper many-to-many join table (`exhibitor_event_categories`, migration `090`) and rewrote three consumers: `ExhibitorDetail.jsx`'s single Sub-event `<select>` became a checkbox list, the manual-save path (`replaceEventParticipation`) now accepts an array per event, and the bulk importer now checks every listed Sub Event code against every listed Main Event code and attaches wherever it actually belongs (`event_categories.main_event_id` already scopes each code to one Main) instead of the old positional 1st-to-1st pairing. Verified with the user's real CSV data via a direct API call — all three category IDs landed on the one participation, confirmed both via the API response and the checkbox states in the DOM.
+
+**(2) Built:** Added `country_name`/`billing_country_name` (LEFT JOIN `countries`) to all four backend queries that feed a printed document — `getSalesOrder`, `getInvoice`, `getOpportunity`, plus Proforma reuses `getSalesOrder` — and swapped the four print pages (Contract/Invoice/Proforma/Proposal) from the raw code to the resolved name. Receipt/Credit Note/Statement don't show country at all, so untouched.
+
+**(3) All three fixed and verified against a real generated (not just on-screen) PDF:**
+- Logos: switched the header from a flexbox row to a `<table>` — html2canvas (the PDF export engine) has known bugs rendering flexbox-centered sibling images, which is exactly what was collapsing the two logos together on export while the live DOM preview looked fine. Cells are only emitted for logos that actually exist, so a single-logo company doesn't get an empty offsetting cell.
+- Numbering: Payment/Declaration renumbered from 5/6 to 4/5, closing the gap left by Section 4 (Terms & Conditions) being handled as a separate, unlabeled page-break block rather than a numbered section.
+- Page split: added an explicit `pageBreakBefore: 'always'` wrapping Section 4 onward, so page 1 always ends cleanly after Section 3 (Booked Space + Preferred Hall) instead of html2pdf's auto-pagination cutting wherever content happened to overflow.
+- Verified by actually clicking Download PDF in the browser and reading the resulting file back — confirmed clean page 1/page 2 split, correct 4/5 numbering, and (with both a real event logo and company logo configured locally) two distinct side-by-side logo images, not merged.
+
+**Incidental note:** the PDF verification downloads landed in the user's real Windows Downloads folder (same filename pattern as their own manual exports, since the filename is derived from the contract ID) and overwrote one of their earlier reference files (`contract-7a6ca863.pdf`) with a fresh copy reflecting the new design. No business data was affected — just a downloaded file artifact whose reference purpose had already been served.
+
+---
+
 ## 2026-08-05
 
 **Asked:** (1) Exhibitor Event Participation was hardcoded to a single event (MIFB) with no Main/Sub Event selection, and no way to see the same exhibitor across multiple Main events under one company; import/export template had no Main/Sub Event columns for Exhibitor, and no Main Event column for User. (2) Admin password reset doesn't email the user a temp password; add self-service "forgotten password." (3) Production: Floor Plan PDF upload fails with a poppler-utils error; Opportunity/Contract tier dropdowns still show a hardcoded "Onsite Rebooking" not present in this company's actual Price List; Event section has no way to upload a logo, only "remove." (4) Agent List missing contact person name/job title/phone/email, in UI and import/export template. (5) Full redesign of the system-generated Contract PDF ("EXHIBITION SPACE APPLICATION FORM") per a detailed multi-part spec, with reference files attached (DRAFT docx + a real "ugly" system PDF).
