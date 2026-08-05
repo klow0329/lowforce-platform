@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { downloadPdf } from '../utils/pdf';
+import { downloadPdf, buildPdfFilename } from '../utils/pdf';
 import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmt = (n, ccy = 'MYR') => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -77,28 +77,34 @@ export default function ProposalPrint() {
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <button type="button" onClick={() => navigate(`/opportunities/${id}`)}>Back</button>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => downloadPdf('pdf-doc', proposalNo)}>Download PDF</button>
+          <button type="button" onClick={() => downloadPdf('pdf-doc', buildPdfFilename(proposalNo, opportunity.event_code, opportunity.exhibitor_name))}>Download PDF</button>
           <button type="button" onClick={() => window.print()}>Print</button>
         </div>
       </div>
 
       <div id="pdf-doc">
       <LetterheadBand company={company} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-        <div>
+      {/* A <table> here, not a flex row — see ContractPrint/InvoicePrint's
+          own comment: html2canvas doesn't reliably render flexbox-centered
+          sibling images, which put the logos in the wrong spot on export
+          even though the on-screen preview looked correct. */}
+      <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 24 }}><tbody><tr>
+        <td style={{ verticalAlign: 'top', width: '38%' }}>
           <BrandLogo company={company} height={44} />
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{opportunity.event_name}</div>
-        </div>
-        <div style={{ textAlign: 'center', alignSelf: 'center' }}>
-          <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
-        </div>
-        <div style={{ textAlign: 'right' }}>
+        </td>
+        {company.has_event_logo && (
+          <td style={{ verticalAlign: 'middle', textAlign: 'center', width: '24%' }}>
+            <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
+          </td>
+        )}
+        <td style={{ verticalAlign: 'top', textAlign: 'right', width: '38%' }}>
           <h2 style={{ margin: 0 }}>PROPOSAL</h2>
           <div style={{ fontSize: 13 }}>No: {proposalNo}</div>
           <div style={{ fontSize: 13 }}>Date: {todayStr()}</div>
-        </div>
-      </div>
+        </td>
+      </tr></tbody></table>
 
       <div style={{ marginBottom: 24 }}>
         <h4>Prepared For</h4>

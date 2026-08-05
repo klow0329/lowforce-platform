@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { downloadPdf } from '../utils/pdf';
+import { downloadPdf, buildPdfFilename } from '../utils/pdf';
 import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -18,11 +18,10 @@ function fmtDateRange(start, end) {
   return fmtDate(start || end);
 }
 
-const sectionTitle = {
-  background: '#1B3A6B', color: '#fff', padding: '3px 10px', fontSize: 12, fontWeight: 700,
-  letterSpacing: 0.4, marginTop: 14, marginBottom: 8,
+const sectionTitleBar = {
+  background: '#1B3A6B', color: '#fff', padding: '4px 10px', fontSize: 12, fontWeight: 700, letterSpacing: 0.4,
 };
-const fieldGrid = { display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 24, rowGap: 4, fontSize: 12 };
+const fieldGrid = { display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 24, rowGap: 3, fontSize: 12 };
 const fieldLabel = { color: '#5c6070', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.3 };
 const fieldValue = { fontSize: 12.5 };
 const th = { textAlign: 'left', fontSize: 11, padding: '4px 6px', borderBottom: '1.5px solid #1B3A6B', color: '#1B3A6B' };
@@ -33,6 +32,23 @@ function Field({ label, value, span }) {
     <div style={span ? { gridColumn: '1 / -1' } : undefined}>
       <div style={fieldLabel}>{label}</div>
       <div style={fieldValue}>{value || '—'}</div>
+    </div>
+  );
+}
+
+// A bordered box per section (title bar + padded content) — per the user's
+// own reference design, not just a colored heading floating over open
+// whitespace. Deliberately NOT break-inside:avoid — html2pdf's pagination
+// is a canvas-slicing approximation, not true CSS pagination, and avoiding
+// a mid-section break pushed entire sections onto fresh pages instead,
+// turning the intended 2-page layout into 3 with large blank gaps. The
+// explicit page-break-before on Section 4 (below) is what actually
+// controls where the real page boundary falls.
+function Section({ title, children, style }) {
+  return (
+    <div style={{ border: '1px solid #c7ccd9', borderRadius: 5, marginBottom: 8, ...style }}>
+      <div style={sectionTitleBar}>{title}</div>
+      <div style={{ padding: '7px 10px' }}>{children}</div>
     </div>
   );
 }
@@ -100,6 +116,10 @@ export default function ContractPrint() {
   const boothCount = (salesOrder.booth_no || '').split(',').map((s) => s.trim()).filter(Boolean).length;
   const hallBoothFits = boothCount > 0 && boothCount <= 10 && (salesOrder.booth_no || '').length <= 60;
   const hallBoothDisplay = hallBoothFits ? [salesOrder.hall, salesOrder.booth_no].filter(Boolean).join(' / ') : '';
+  // The internal "Booth No. Allocated" line isn't space-constrained the way
+  // the exhibitor-facing Preferred Hall field above is — always show the
+  // real value here regardless of length.
+  const boothAllocatedDisplay = [salesOrder.hall, salesOrder.booth_no].filter(Boolean).join(' / ');
 
   const showBillingDetails = !same;
   const showContact2 = !!salesOrder.contact2_name;
@@ -111,7 +131,7 @@ export default function ContractPrint() {
         <div style={{ display: 'flex', gap: 8 }}>
           <button
             type="button"
-            onClick={() => downloadPdf('pdf-doc', `contract-${salesOrder.legacy_order_no || id.slice(0, 8)}`, 'portrait', {
+            onClick={() => downloadPdf('pdf-doc', buildPdfFilename(`contract-${salesOrder.legacy_order_no || id.slice(0, 8)}`, salesOrder.event_code, salesOrder.company_name), 'portrait', {
               appendPdfUrl: company.has_contract_terms_pdf ? api.brandingImageUrl('contract_terms_pdf') : undefined,
             })}
           >
@@ -123,7 +143,7 @@ export default function ContractPrint() {
 
       <div id="pdf-doc" style={{ fontSize: 12.5, lineHeight: 1.4 }}>
       <LetterheadBand company={company} />
-      <div style={{ textAlign: 'center', marginBottom: 16 }}>
+      <div style={{ textAlign: 'center', marginBottom: 10 }}>
         {/* A <table> here, not a flex row — html2canvas (the PDF export
             engine) has long-standing bugs rendering flexbox-centered
             sibling images, which showed up as the two logos collapsing
@@ -143,7 +163,7 @@ export default function ContractPrint() {
         </tr></tbody></table>
         <div style={{ fontSize: 18, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
         <div style={{ fontSize: 13, color: '#5c6070' }}>{company.event_name || salesOrder.event_name}</div>
-        <h2 style={{ marginTop: 12, marginBottom: 0, fontSize: 18 }}>{docTitle}</h2>
+        <h2 style={{ marginTop: 8, marginBottom: 0, fontSize: 18 }}>{docTitle}</h2>
         {!isCoex && (
           <p style={{ fontSize: 10.5, color: '#5c6070', maxWidth: 520, margin: '4px auto 0' }}>
             This is an application to participate. A binding contract is formed only upon written acceptance by
@@ -157,107 +177,111 @@ export default function ContractPrint() {
         )}
       </div>
 
-      <div style={sectionTitle}>SECTION 1 &mdash; EVENT DETAILS</div>
-      <div style={fieldGrid}>
-        <Field label="Event Name" value={salesOrder.event_name} span />
-        <Field label="Venue" value={salesOrder.event_venue} span />
-        <Field label="Event Dates" value={fmtDateRange(salesOrder.event_start_date, salesOrder.event_end_date)} />
-        <Field label="Contract Type" value={isCoex ? 'Co-Exhibitor (CoEX)' : 'Standard'} />
-        <Field label="Contract Date" value={fmtDate(salesOrder.contract_date)} />
-        <Field label="Rate Tier / Booking Type" value={salesOrder.booking_type} />
-      </div>
+      <Section title="SECTION 1 — EVENT DETAILS">
+        <div style={fieldGrid}>
+          <Field label="Event Name" value={salesOrder.event_name} span />
+          <Field label="Venue" value={salesOrder.event_venue} span />
+          <Field label="Event Dates" value={fmtDateRange(salesOrder.event_start_date, salesOrder.event_end_date)} />
+          <Field label="Contract Type" value={isCoex ? 'Co-Exhibitor (CoEX)' : 'Standard'} />
+          <Field label="Contract Date" value={fmtDate(salesOrder.contract_date)} />
+          <Field label="Rate Tier / Booking Type" value={salesOrder.booking_type} />
+        </div>
+      </Section>
 
-      <div style={sectionTitle}>SECTION 2 &mdash; EXHIBITOR&rsquo;S DETAILS</div>
-      <div style={fieldGrid}>
-        <Field label="Company Name" value={salesOrder.company_name} />
-        <Field label="Alternative / Native Name" value={salesOrder.company_name_alt} />
-        <Field label="Company Reg. No." value={salesOrder.reg_no} />
-        <Field label="TIN No." value={salesOrder.tin_no} />
-        <Field label="SST No." value={salesOrder.sst_no} />
-        <Field label="Website" value={salesOrder.website} />
-        <Field label="Address" value={[salesOrder.address, salesOrder.postcode, salesOrder.city, salesOrder.state].filter(Boolean).join(', ')} span />
-        <Field label="Country" value={salesOrder.country_name} />
-        <Field label="Fax" value={salesOrder.fax} />
-        <Field label="Contact Person 1" value={salesOrder.contact1_name} />
-        <Field label="Designation" value={salesOrder.contact1_job_title} />
-        <Field label="Mobile No." value={salesOrder.contact1_phone} />
-        <Field label="Business Email" value={salesOrder.contact1_email} />
-        {showContact2 && (
+      <Section title="SECTION 2 — EXHIBITOR'S DETAILS">
+        <div style={fieldGrid}>
+          <Field label="Company Name" value={salesOrder.company_name} />
+          <Field label="Alternative / Native Name" value={salesOrder.company_name_alt} />
+          <Field label="Company Reg. No." value={salesOrder.reg_no} />
+          <Field label="TIN No." value={salesOrder.tin_no} />
+          <Field label="SST No." value={salesOrder.sst_no} />
+          <Field label="Website" value={salesOrder.website} />
+          <Field label="Address" value={[salesOrder.address, salesOrder.postcode, salesOrder.city, salesOrder.state].filter(Boolean).join(', ')} span />
+          <Field label="Country" value={salesOrder.country_name} />
+          <Field label="Fax" value={salesOrder.fax} />
+          <Field label="Contact Person 1" value={salesOrder.contact1_name} />
+          <Field label="Designation" value={salesOrder.contact1_job_title} />
+          <Field label="Mobile No." value={salesOrder.contact1_phone} />
+          <Field label="Business Email" value={salesOrder.contact1_email} />
+          {showContact2 && (
+            <>
+              <Field label="Contact Person 2" value={salesOrder.contact2_name} />
+              <Field label="Designation" value={salesOrder.contact2_job_title} />
+              <Field label="Mobile No." value={salesOrder.contact2_phone} />
+              <Field label="Business Email" value={salesOrder.contact2_email} />
+            </>
+          )}
+        </div>
+        {showBillingDetails && (
           <>
-            <Field label="Contact Person 2" value={salesOrder.contact2_name} />
-            <Field label="Designation" value={salesOrder.contact2_job_title} />
-            <Field label="Mobile No." value={salesOrder.contact2_phone} />
-            <Field label="Business Email" value={salesOrder.contact2_email} />
+            <div style={{ ...fieldLabel, marginTop: 12, marginBottom: 4, borderTop: '1px solid #eee', paddingTop: 8 }}>
+              Billing Details (if different from above)
+            </div>
+            <div style={fieldGrid}>
+              <Field label="Billing Name" value={billTo.name} />
+              <Field label="Billing Address" value={[billTo.address, billTo.postcodeCity].filter(Boolean).join(', ')} />
+              <Field label="Country" value={billTo.country} />
+              <Field label="Billing Contact No." value={billTo.contactNo} />
+              <Field label="Billing Email" value={billTo.email} span />
+            </div>
           </>
         )}
-      </div>
+      </Section>
 
-      {showBillingDetails && (
-        <>
-          <div style={{ ...fieldLabel, marginTop: 10, marginBottom: 4 }}>Billing Details (if different from above)</div>
-          <div style={fieldGrid}>
-            <Field label="Billing Name" value={billTo.name} />
-            <Field label="Billing Address" value={[billTo.address, billTo.postcodeCity].filter(Boolean).join(', ')} />
-            <Field label="Country" value={billTo.country} />
-            <Field label="Billing Contact No." value={billTo.contactNo} />
-            <Field label="Billing Email" value={billTo.email} span />
-          </div>
-        </>
-      )}
-
-      <div style={sectionTitle}>SECTION 3 &mdash; BOOKED SPACE AND PARTICIPATION FEES</div>
-      <table width="100%" cellPadding={0} cellSpacing={0} style={{ borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            <th style={th}>Item</th>
-            <th style={{ ...th, textAlign: 'right' }}>Qty</th>
-            <th style={{ ...th, textAlign: 'right' }}>Rate</th>
-            <th style={{ ...th, textAlign: 'right' }}>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {boothItems.map((it) => (
-            <tr key={it.id}>
-              <td style={td}>{it.description}</td>
-              <td style={{ ...td, textAlign: 'right' }}>{it.qty}</td>
-              <td style={{ ...td, textAlign: 'right' }}>{fmt(it.unit_price)}</td>
-              <td style={{ ...td, textAlign: 'right' }}>{fmt(Number(it.subtotal) - Number(it.discount_amount))}</td>
+      <Section title="SECTION 3 — BOOKED SPACE AND PARTICIPATION FEES">
+        <table width="100%" cellPadding={0} cellSpacing={0} style={{ borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={th}>Item</th>
+              <th style={{ ...th, textAlign: 'right' }}>Qty</th>
+              <th style={{ ...th, textAlign: 'right' }}>Rate</th>
+              <th style={{ ...th, textAlign: 'right' }}>Amount</th>
             </tr>
-          ))}
-          {otherItems.map((it) => (
-            <tr key={it.id}>
-              <td style={td}>{it.description}</td>
-              <td style={{ ...td, textAlign: 'right' }}>{it.qty}</td>
-              <td style={{ ...td, textAlign: 'right' }}>{fmt(it.unit_price)}</td>
-              <td style={{ ...td, textAlign: 'right' }}>{fmt(Number(it.subtotal) - Number(it.discount_amount))}</td>
+          </thead>
+          <tbody>
+            {boothItems.map((it) => (
+              <tr key={it.id}>
+                <td style={td}>{it.description}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{it.qty}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{fmt(it.unit_price)}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{fmt(Number(it.subtotal) - Number(it.discount_amount))}</td>
+              </tr>
+            ))}
+            {otherItems.map((it) => (
+              <tr key={it.id}>
+                <td style={td}>{it.description}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{it.qty}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{fmt(it.unit_price)}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{fmt(Number(it.subtotal) - Number(it.discount_amount))}</td>
+              </tr>
+            ))}
+            {billedItems.length === 0 && (
+              <tr><td colSpan={4} style={{ ...td, color: '#5c6070' }}>No items billed yet.</td></tr>
+            )}
+            <tr>
+              <td colSpan={3} style={{ ...td, textAlign: 'right', fontWeight: 600 }}>Sub-total (before tax)</td>
+              <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{fmt(itemSubtotal)}</td>
             </tr>
-          ))}
-          {billedItems.length === 0 && (
-            <tr><td colSpan={4} style={{ ...td, color: '#5c6070' }}>No items billed yet.</td></tr>
-          )}
-          <tr>
-            <td colSpan={3} style={{ ...td, textAlign: 'right', fontWeight: 600 }}>Sub-total (before tax)</td>
-            <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{fmt(itemSubtotal)}</td>
-          </tr>
-          <tr>
-            <td colSpan={3} style={{ ...td, textAlign: 'right', fontWeight: 600 }}>Tax</td>
-            <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{fmt(itemTax)}</td>
-          </tr>
-          <tr>
-            <td colSpan={3} style={{ ...td, textAlign: 'right', fontWeight: 700, fontSize: 13.5, borderBottom: '2px solid #1B3A6B' }}>
-              Total Participation Fees
-            </td>
-            <td style={{ ...td, textAlign: 'right', fontWeight: 700, fontSize: 13.5, borderBottom: '2px solid #1B3A6B' }}>
-              {fmtCur(itemTotal)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            <tr>
+              <td colSpan={3} style={{ ...td, textAlign: 'right', fontWeight: 600 }}>Tax</td>
+              <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{fmt(itemTax)}</td>
+            </tr>
+            <tr>
+              <td colSpan={3} style={{ ...td, textAlign: 'right', fontWeight: 700, fontSize: 13.5, borderBottom: '2px solid #1B3A6B' }}>
+                Total Participation Fees
+              </td>
+              <td style={{ ...td, textAlign: 'right', fontWeight: 700, fontSize: 13.5, borderBottom: '2px solid #1B3A6B' }}>
+                {fmtCur(itemTotal)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
 
-      <div style={{ ...fieldGrid, marginTop: 10 }}>
-        <Field label="Preferred Hall / Booth No. (subject to availability and allocation)" value={hallBoothDisplay} span />
-        {salesOrder.remarks && <Field label="Remarks" value={salesOrder.remarks} span />}
-      </div>
+        <div style={{ ...fieldGrid, marginTop: 6 }}>
+          <Field label="Preferred Hall / Booth No. (subject to availability and allocation)" value={hallBoothDisplay} span />
+          {salesOrder.remarks && <Field label="Remarks" value={salesOrder.remarks} span />}
+        </div>
+      </Section>
 
       {/* Forced page break: everything from here on (Payment + Declaration)
           starts on a fresh page 2, rather than letting html2pdf's
@@ -265,38 +289,57 @@ export default function ContractPrint() {
           previously split the Payment section's bank-details grid in half
           across two pages. */}
       <div style={{ pageBreakBefore: 'always', paddingTop: 8 }}>
-      <div style={sectionTitle}>SECTION 4 &mdash; PAYMENT</div>
-      {company.payment_terms_wording && (
-        <p style={{ fontSize: 11, color: '#333', marginTop: 0 }}>{company.payment_terms_wording}</p>
-      )}
-      <div style={fieldGrid}>
-        <Field label="Account Name" value={company.name} />
-        <Field label="Bank" value={company.bank_name} />
-        <Field label="Account No." value={company.bank_account_no} />
-        <Field label="SWIFT Code" value={company.bank_swift} />
-        {company.payment_instructions && <Field label="Remittance / Other Instructions" value={company.payment_instructions} span />}
-      </div>
-
-      <div style={sectionTitle}>SECTION 5 &mdash; EXHIBITOR&rsquo;S DECLARATION AND SIGNATURE</div>
-      {company.declaration_wording && (
-        <p style={{ fontSize: 11, color: '#333', marginTop: 0 }}>{company.declaration_wording}</p>
-      )}
-      <div style={{ marginTop: 32 }}>
-        <div style={{ display: 'flex', gap: 32 }}>
-          <div style={{ flex: 1, borderTop: '1px solid #333', paddingTop: 4, fontSize: 11 }}>
-            Name / Signature &amp; Company Stamp (Exhibitor)
-          </div>
-          <div style={{ flex: 1, borderTop: '1px solid #333', paddingTop: 4, fontSize: 11 }}>
-            Designation / Date
-          </div>
+      <Section title="SECTION 4 — PAYMENT">
+        {company.payment_terms_wording && (
+          <p style={{ fontSize: 11, color: '#333', marginTop: 0 }}>{company.payment_terms_wording}</p>
+        )}
+        <div style={fieldGrid}>
+          <Field label="Account Name" value={company.name} />
+          <Field label="Bank" value={company.bank_name} />
+          <Field label="Account No." value={company.bank_account_no} />
+          <Field label="SWIFT Code" value={company.bank_swift} />
+          {company.payment_instructions && <Field label="Remittance / Other Instructions" value={company.payment_instructions} span />}
         </div>
-      </div>
-      <div style={{
-        marginTop: 20, border: '1px solid #ccc', borderRadius: 4, padding: 8, fontSize: 10.5, color: '#5c6070',
-      }}>
-        <strong>For Office Use Only</strong> &mdash; Salesperson: {salesOrder.salesperson_name || '—'}
-        &nbsp;&nbsp;Rate Tier: {salesOrder.booking_type || '—'}
-      </div>
+      </Section>
+
+      <Section title="SECTION 5 — EXHIBITOR'S DECLARATION AND SIGNATURE">
+        {company.declaration_wording && (
+          <p style={{ fontSize: 11, color: '#333', marginTop: 0 }}>{company.declaration_wording}</p>
+        )}
+        {/* A table, not a flex row, for the same html2canvas-reliability
+            reason as the logo header above. Each side gets a tall bordered
+            box to actually sign/stamp inside, not just a bare line — the
+            previous single-line version left almost no usable room. */}
+        <table width="100%" style={{ borderCollapse: 'separate', borderSpacing: 16, marginTop: 8 }}><tbody><tr>
+          <td style={{ width: '50%', verticalAlign: 'top', padding: 0 }}>
+            <div style={{ height: 80, border: '1px solid #ccc', borderRadius: 4, marginBottom: 4 }} />
+            <div style={{ borderTop: '1px solid #333', paddingTop: 4, fontSize: 11 }}>Name / Signature &amp; Company Stamp (Exhibitor)</div>
+          </td>
+          <td style={{ width: '50%', verticalAlign: 'top', padding: 0 }}>
+            <div style={{ height: 80, border: '1px solid #ccc', borderRadius: 4, marginBottom: 4 }} />
+            <div style={{ borderTop: '1px solid #333', paddingTop: 4, fontSize: 11 }}>Designation / Date</div>
+          </td>
+        </tr></tbody></table>
+
+        <div style={{
+          marginTop: 16, border: '1px solid #ccc', borderRadius: 4, padding: 10, fontSize: 10.5, color: '#5c6070',
+        }}>
+          <div style={{ fontWeight: 700, color: '#333', marginBottom: 6 }}>For Office Use Only (Event Organiser's internal record)</div>
+          <div>
+            Application:{' '}
+            {salesOrder.status === 'APPROVED' ? '☑ ACCEPTED  ☐ REJECTED'
+              : salesOrder.status === 'REJECTED' ? '☐ ACCEPTED  ☑ REJECTED'
+              : '☐ ACCEPTED  ☐ REJECTED'}
+            &nbsp;&nbsp;Date of acceptance: {fmtDate(salesOrder.approved_at) || '—'}
+          </div>
+          <div style={{ marginTop: 4 }}>
+            Salesperson: {salesOrder.salesperson_name || '—'}
+            &nbsp;&nbsp;Rate Tier: {salesOrder.booking_type || '—'}
+            &nbsp;&nbsp;Booth No. Allocated: {boothAllocatedDisplay || '—'}
+          </div>
+          <div style={{ marginTop: 4 }}>Remarks: _______________________________________________</div>
+        </div>
+      </Section>
       </div>
 
       {company.contract_terms && !company.has_contract_terms_pdf && (

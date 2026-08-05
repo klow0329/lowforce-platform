@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { downloadPdf } from '../utils/pdf';
+import { downloadPdf, buildPdfFilename } from '../utils/pdf';
 import { amountInWords } from '../utils/amountInWords';
 import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
@@ -110,7 +110,7 @@ export default function InvoicePrint() {
       <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
         <button type="button" onClick={() => navigate(`/invoices/${id}`)}>Back</button>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => downloadPdf('pdf-doc', invoice.invoice_no)}>Download PDF</button>
+          <button type="button" onClick={() => downloadPdf('pdf-doc', buildPdfFilename(invoice.invoice_no, invoice.event_code, invoice.company_name))}>Download PDF</button>
           <button type="button" onClick={() => window.print()}>Print</button>
         </div>
       </div>
@@ -128,8 +128,14 @@ export default function InvoicePrint() {
           </div>
         )}
         <LetterheadBand company={company} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-          <div>
+        {/* A <table> here, not a flex row — html2canvas (the PDF export
+            engine) has long-standing bugs rendering flexbox-centered
+            sibling images, which showed up as the logos landing in the
+            wrong spot in the exported PDF even though the on-screen
+            preview looked fine. A table's cells lay out reliably in both
+            the browser and html2canvas's canvas rendering. */}
+        <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 16 }}><tbody><tr>
+          <td style={{ verticalAlign: 'top', width: '38%' }}>
             <BrandLogo company={company} height={44} />
             <div style={{ fontSize: 18, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
             {company.reg_no && <div>Co. Reg. {company.reg_no}{company.tin_no ? `  TIN: ${company.tin_no}` : ''}</div>}
@@ -138,16 +144,18 @@ export default function InvoicePrint() {
             {(company.phone || company.email) && (
               <div style={{ color: '#5c6070' }}>{[company.phone, company.email].filter(Boolean).join(' | ')}</div>
             )}
-          </div>
-          <div style={{ textAlign: 'center', alignSelf: 'center' }}>
-            <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
-          </div>
-          <div style={{ textAlign: 'right' }}>
+          </td>
+          {company.has_event_logo && (
+            <td style={{ verticalAlign: 'middle', textAlign: 'center', width: '24%' }}>
+              <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
+            </td>
+          )}
+          <td style={{ verticalAlign: 'top', textAlign: 'right', width: '38%' }}>
             <h2 style={{ margin: '0 0 8px' }}>TAX INVOICE</h2>
             <div>No: <strong>{invoice.invoice_no}</strong></div>
             <div>Date: {invoice.invoice_date || '—'}</div>
-          </div>
-        </div>
+          </td>
+        </tr></tbody></table>
 
         <div style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, marginBottom: 12 }}>
           <div style={{ fontWeight: 700 }}>{billTo.name}</div>

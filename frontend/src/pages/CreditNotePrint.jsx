@@ -35,18 +35,21 @@ export default function CreditNotePrint() {
 
       <div id="pdf-doc">
       <LetterheadBand company={company} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-        <div>
+      {/* A <table> here, not a flex row — html2canvas (the PDF export
+          engine) doesn't reliably position flexbox-laid-out sibling
+          elements on export even when the on-screen preview looks fine. */}
+      <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 24 }}><tbody><tr>
+        <td style={{ verticalAlign: 'top' }}>
           <BrandLogo company={company} height={44} />
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{cn.event_name}</div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
+        </td>
+        <td style={{ verticalAlign: 'top', textAlign: 'right' }}>
           <h2 style={{ margin: 0 }}>CREDIT NOTE</h2>
           <div style={{ fontSize: 13 }}>No: {cn.cn_no}</div>
           <div style={{ fontSize: 13 }}>Date: {cn.cn_date || '—'}</div>
-        </div>
-      </div>
+        </td>
+      </tr></tbody></table>
 
       <div style={{ marginBottom: 24 }}>
         <h4>Issued To</h4>

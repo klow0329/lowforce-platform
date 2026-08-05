@@ -136,7 +136,7 @@ async function getOpportunity(req, res) {
             ex.billing_country_code, bcy.name AS billing_country_name, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
             ex.billing_contact_no, ex.billing_email, ex.billing_same_as_company,
             ag.name AS agent_name,
-            ev.name AS event_name,
+            ev.name AS event_name, ev.code AS event_code,
             (SELECT so.id FROM sales_orders so WHERE so.opportunity_id = o.id AND so.status != 'VOID' ORDER BY so.contract_date DESC NULLS LAST LIMIT 1) AS existing_sales_order_id,
             -- A booth was lost to a competing contract's approval and the
             -- user hasn't picked a replacement yet (see FloorPlan.jsx's

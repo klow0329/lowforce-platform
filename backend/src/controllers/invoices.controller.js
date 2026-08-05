@@ -64,7 +64,7 @@ async function getInvoice(req, res) {
             ex.billing_country_code, bcy.name AS billing_country_name, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
             ex.billing_contact_no, ex.billing_email, ex.billing_same_as_company,
             ag.name AS agent_name,
-            ev.name AS event_name, ev.start_date AS event_start_date, ev.end_date AS event_end_date,
+            ev.name AS event_name, ev.code AS event_code, ev.start_date AS event_start_date, ev.end_date AS event_end_date,
             so.contract_type, so.contract_date, so.hall, so.booth_no, so.total_foreign AS contract_total_foreign,
             so.total_sqm, o.booth_type,
             COALESCE((SELECT SUM(amount_myr) FROM payment_allocations WHERE invoice_id = inv.id), 0) AS total_paid,

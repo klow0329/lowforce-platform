@@ -1,6 +1,21 @@
 import html2pdf from 'html2pdf.js';
 import { PDFDocument } from 'pdf-lib';
 
+// Builds a download filename from parts (e.g. "INV-2026-0008", "MIFB27",
+// "ACME EXHIBITIONS SDN BHD" -> "INV-2026-0008-MIFB27-ACME EXHIBITIONS SDN
+// BHD"), used by Contract/Invoice/Proposal/Receipt so the file is
+// identifiable without opening it. Drops characters that are invalid (or
+// awkward) in a filename on Windows — the platform every user of this app
+// so far has been on — and skips any blank/undefined part rather than
+// leaving a stray "--" where an event code or company name isn't known yet.
+export function buildPdfFilename(...parts) {
+  return parts
+    .filter(Boolean)
+    .map((p) => String(p).replace(/[\\/:*?"<>|]/g, '').trim())
+    .filter(Boolean)
+    .join('-');
+}
+
 // Downloads a rendered document section as a real PDF file (A4 by default).
 // Used by the Contract / Proforma / Invoice / Official Receipt pages — the
 // Print button stays for paper, this produces the file to email to

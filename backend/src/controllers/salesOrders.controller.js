@@ -82,9 +82,14 @@ async function getSalesOrder(req, res) {
             ex.billing_country_code, bcy.name AS billing_country_name, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
             ex.billing_contact_no, ex.billing_email, ex.billing_same_as_company,
             ag.name AS agent_name,
-            ev.name AS event_name, ev.venue AS event_venue, ev.start_date AS event_start_date, ev.end_date AS event_end_date,
+            ev.name AS event_name, ev.code AS event_code, ev.venue AS event_venue, ev.start_date AS event_start_date, ev.end_date AS event_end_date,
             u.full_name AS salesperson_name,
             o.booth_sqm, o.booth_type,
+            -- The Contract print's "For Office Use Only" box wants a real
+            -- acceptance date, not the contract_date (which is just when
+            -- the record was first created/drafted) — the most recent
+            -- APPROVED entry in this contract's own approval_log.
+            (SELECT created_at FROM approval_log WHERE sales_order_id = so.id AND action = 'APPROVED' ORDER BY created_at DESC LIMIT 1) AS approved_at,
             -- Same persistent-alert signal as getOpportunity — see that
             -- query's comment.
             EXISTS (
