@@ -32,7 +32,7 @@ async function listExhibitors(req, res) {
   if (vis.param !== undefined) params.push(vis.param);
 
   const result = await pool.query(
-    `SELECT e.id, e.company_name, e.country_code, e.contact1_name, e.contact1_email, e.is_active,
+    `SELECT e.id, e.company_name, e.country_code, cy.name AS country_name, e.contact1_name, e.contact1_email, e.is_active,
             ${effectiveOwner} AS salesperson_id,
             COALESCE(ue.full_name, u.full_name) AS salesperson_name,
             ${eventId ? '(ee.exhibitor_id IS NOT NULL)' : 'FALSE'} AS in_selected_event,
@@ -44,6 +44,7 @@ async function listExhibitors(req, res) {
               WHERE x.exhibitor_id = e.id) AS event_codes
      FROM exhibitors e
      LEFT JOIN users u ON u.id = e.salesperson_id
+     LEFT JOIN countries cy ON cy.code = e.country_code
      ${eventId ? 'LEFT JOIN exhibitor_events ee ON ee.exhibitor_id = e.id AND ee.event_id = $3' : ''}
      ${eventId ? 'LEFT JOIN users ue ON ue.id = ee.salesperson_id' : 'LEFT JOIN users ue ON FALSE'}
      WHERE e.company_id = $1
@@ -67,7 +68,7 @@ async function listExhibitors(req, res) {
     const peerCompanyIds = await getGroupSharedCompanyIds(req.companyId, 'EXHIBITORS');
     if (peerCompanyIds.length > 0) {
       const groupResult = await pool.query(
-        `SELECT e.id, e.company_name, e.country_code,
+        `SELECT e.id, e.company_name, e.country_code, cy.name AS country_name,
                 c.name AS owning_company_name,
                 u.full_name AS salesperson_name,
                 (SELECT STRING_AGG(ev.code, ', ' ORDER BY ev.code)
@@ -76,6 +77,7 @@ async function listExhibitors(req, res) {
          FROM exhibitors e
          JOIN companies c ON c.id = e.company_id
          LEFT JOIN users u ON u.id = e.salesperson_id
+         LEFT JOIN countries cy ON cy.code = e.country_code
          WHERE e.company_id = ANY($1::uuid[])
            AND e.is_active = TRUE
            AND e.company_name ILIKE $2

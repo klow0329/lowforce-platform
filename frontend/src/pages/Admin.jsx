@@ -1415,7 +1415,10 @@ export default function Admin({ user }) {
             { type: 'logo', label: 'Logo', hint: 'Square-ish, shown top-left of documents' },
             { type: 'letterhead', label: 'Letterhead Header', hint: 'Wide strip across the top' },
             { type: 'footer', label: 'Footer', hint: 'Wide strip across the bottom' },
-            { type: 'event_logo', label: 'Event/Brand Logo', hint: 'Your event’s own brand (e.g. MIFB), shown alongside the company logo on Contracts' },
+            // Event/Brand logo is deliberately NOT managed here — it's per-
+            // Main-event now (Admin > Events), not one shared company-wide
+            // slot. Only one place to upload it, per the user's own
+            // explicit request to avoid two locations doing the same thing.
             {
               type: 'contract_terms_pdf', label: 'Terms & Conditions (PDF)', isPdf: true,
               hint: 'Your own formatted T&C document — auto-appended as trailing pages on every Contract PDF, replacing the plain-text version below',
@@ -1462,8 +1465,8 @@ export default function Admin({ user }) {
         <form onSubmit={handleSaveProfile} style={{ maxWidth: 500 }}>
           <label style={label}>Event/Brand Name</label>
           <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
-            Shown next to the Event/Brand Logo above on Contracts — leave blank to just use the event's own name
-            (e.g. "MIFB 2026") as set up under Events.
+            Shown on Contracts next to whichever Main event's logo applies (see Admin &gt; Events) — leave blank to
+            just use the event's own name (e.g. "MIFB 2026").
           </p>
           <input style={inputStyle} value={profileForm.event_name} onChange={(e) => setProfileForm({ ...profileForm, event_name: e.target.value })} />
 

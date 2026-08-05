@@ -11,7 +11,7 @@ import DataTable from '../components/DataTable';
 // obvious during a search.
 const columns = [
   { key: 'company_name', label: 'Company', default: true },
-  { key: 'country_code', label: 'Country', default: true },
+  { key: 'country_code', label: 'Country', default: true, value: (r) => r.country_name || r.country_code || '—' },
   { key: 'contact1_name', label: 'Contact', default: true, value: (r) => r.contact1_name || 'No contact' },
   { key: 'contact1_email', label: 'Contact Email', default: false },
   { key: 'contact1_phone', label: 'Contact Phone', default: false },
@@ -157,7 +157,7 @@ export default function ExhibitorsList({ user }) {
             screenKey="exhibitors-group"
             columns={[
               { key: 'company_name', label: 'Company', default: true },
-              { key: 'country_code', label: 'Country', default: true },
+              { key: 'country_code', label: 'Country', default: true, value: (r) => r.country_name || r.country_code || '—' },
               { key: 'owning_company_name', label: 'Handled By (Company)', default: true },
               { key: 'salesperson_name', label: 'Salesperson', default: true, value: (r) => r.salesperson_name || 'Unassigned' },
               { key: 'event_codes', label: 'Events', default: true, value: (r) => r.event_codes || '—' },
