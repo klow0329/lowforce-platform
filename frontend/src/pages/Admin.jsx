@@ -9,7 +9,7 @@ const inputStyle = { display: 'block', width: '100%', padding: 8, boxSizing: 'bo
 const section = { marginBottom: 40 };
 
 const emptyUserForm = { email: '', full_name: '', role_id: '', temp_password: '' };
-const emptyEventForm = { id: null, code: '', name: '', event_year: '', start_date: '', end_date: '', parent_event_id: '' };
+const emptyEventForm = { id: null, code: '', name: '', event_year: '', start_date: '', end_date: '', parent_event_id: '', tier: 'EDITION', venue: '' };
 const emptyTaxCodeForm = { id: null, code: '', name: '', rate_pct: '' };
 const emptyRuleForm = {
   id: null, trigger_type: 'DISCOUNT_ABOVE_THRESHOLD', threshold_type: '', threshold_value: '',
@@ -1061,8 +1061,31 @@ export default function Admin({ user }) {
       start_date: ev.start_date || '',
       end_date: ev.end_date || '',
       parent_event_id: ev.parent_event_id || '',
+      tier: ev.tier || 'EDITION',
+      venue: ev.venue || '',
     });
     setShowEventForm(true);
+  }
+
+  async function handleUploadEventLogo(ev, file) {
+    setError('');
+    try {
+      await api.uploadEventLogo(ev.id, file);
+      loadAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleDeleteEventLogo(ev) {
+    if (!window.confirm(`Remove ${ev.name}'s logo?`)) return;
+    setError('');
+    try {
+      await api.deleteEventLogo(ev.id);
+      loadAll();
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   async function handleSaveEvent(e) {
@@ -1236,23 +1259,58 @@ export default function Admin({ user }) {
 
         {showEventForm && (
           <form onSubmit={handleSaveEvent} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+            <label style={label}>Tier</label>
+            <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+              Main = the brand (e.g. "MIFB", no year — carries its own logo). Edition = a specific year's instance
+              (e.g. "MIFB27" — carries the venue, and everything price-list/billing hangs off this level). Category =
+              an optional sub-event within an Edition (e.g. "MCE"/"MYFT"). Can't be changed after creation.
+            </p>
+            <select
+              style={inputStyle} value={eventForm.tier} disabled={!!eventForm.id}
+              onChange={(e) => setEventForm({ ...eventForm, tier: e.target.value, parent_event_id: '' })}
+            >
+              <option value="MAIN">Main</option>
+              <option value="EDITION">Edition</option>
+              <option value="CATEGORY">Category</option>
+            </select>
             <label style={label}>Code (short, e.g. MIFB27 — can't be changed later)</label>
             <input style={inputStyle} value={eventForm.code} onChange={(e) => setEventForm({ ...eventForm, code: e.target.value })} required disabled={!!eventForm.id} />
             <label style={label}>Name</label>
             <input style={inputStyle} value={eventForm.name} onChange={(e) => setEventForm({ ...eventForm, name: e.target.value })} required />
-            <label style={label}>Year</label>
-            <input type="number" style={inputStyle} value={eventForm.event_year} onChange={(e) => setEventForm({ ...eventForm, event_year: e.target.value })} />
-            <label style={label}>Start Date</label>
-            <input type="date" style={inputStyle} value={eventForm.start_date} onChange={(e) => setEventForm({ ...eventForm, start_date: e.target.value })} />
-            <label style={label}>End Date</label>
-            <input type="date" style={inputStyle} value={eventForm.end_date} onChange={(e) => setEventForm({ ...eventForm, end_date: e.target.value })} />
-            <label style={label}>Sub-event of (optional — e.g. MYFT/MCE under MIFB)</label>
-            <select style={inputStyle} value={eventForm.parent_event_id} onChange={(e) => setEventForm({ ...eventForm, parent_event_id: e.target.value })}>
-              <option value="">— None (main event) —</option>
-              {events.filter((ev) => ev.id !== eventForm.id && !ev.parent_event_id).map((ev) => (
-                <option key={ev.id} value={ev.id}>{ev.name}</option>
-              ))}
-            </select>
+            {eventForm.tier !== 'MAIN' && (
+              <>
+                <label style={label}>Year</label>
+                <input type="number" style={inputStyle} value={eventForm.event_year} onChange={(e) => setEventForm({ ...eventForm, event_year: e.target.value })} />
+                <label style={label}>Start Date</label>
+                <input type="date" style={inputStyle} value={eventForm.start_date} onChange={(e) => setEventForm({ ...eventForm, start_date: e.target.value })} />
+                <label style={label}>End Date</label>
+                <input type="date" style={inputStyle} value={eventForm.end_date} onChange={(e) => setEventForm({ ...eventForm, end_date: e.target.value })} />
+              </>
+            )}
+            {eventForm.tier === 'EDITION' && (
+              <>
+                <label style={label}>Venue</label>
+                <input style={inputStyle} value={eventForm.venue} onChange={(e) => setEventForm({ ...eventForm, venue: e.target.value })} />
+                <label style={label}>Main event (optional)</label>
+                <select style={inputStyle} value={eventForm.parent_event_id} onChange={(e) => setEventForm({ ...eventForm, parent_event_id: e.target.value })}>
+                  <option value="">— Standalone, no Main —</option>
+                  {events.filter((ev) => ev.tier === 'MAIN').map((ev) => (
+                    <option key={ev.id} value={ev.id}>{ev.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
+            {eventForm.tier === 'CATEGORY' && (
+              <>
+                <label style={label}>Edition</label>
+                <select style={inputStyle} value={eventForm.parent_event_id} onChange={(e) => setEventForm({ ...eventForm, parent_event_id: e.target.value })} required>
+                  <option value="">— Select —</option>
+                  {events.filter((ev) => ev.tier === 'EDITION').map((ev) => (
+                    <option key={ev.id} value={ev.id}>{ev.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
             <button type="submit" style={{ padding: '8px 16px', marginTop: 16 }}>
               {eventForm.id ? 'Save Changes' : 'Create Event'}
             </button>
@@ -1265,27 +1323,48 @@ export default function Admin({ user }) {
               <th>Code</th>
               <th>Name</th>
               <th>Year</th>
-              <th>Dates</th>
+              <th>Venue</th>
               <th>Type</th>
               <th>Status</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {events
-              .filter((ev) => !ev.parent_event_id)
-              .flatMap((main) => [main, ...events.filter((ev) => ev.parent_event_id === main.id)])
-              .map((ev) => (
+            {[
+              ...events.filter((ev) => ev.tier === 'MAIN').flatMap((main) => [
+                main,
+                ...events.filter((ed) => ed.tier === 'EDITION' && ed.parent_event_id === main.id).flatMap((ed) => [
+                  ed,
+                  ...events.filter((cat) => cat.tier === 'CATEGORY' && cat.parent_event_id === ed.id),
+                ]),
+              ]),
+              ...events.filter((ed) => ed.tier === 'EDITION' && !ed.parent_event_id).flatMap((ed) => [
+                ed,
+                ...events.filter((cat) => cat.tier === 'CATEGORY' && cat.parent_event_id === ed.id),
+              ]),
+            ].map((ev) => (
               <tr key={ev.id} style={{ borderBottom: '1px solid #eee', opacity: ev.is_active ? 1 : 0.5 }}>
-                <td style={ev.parent_event_id ? { paddingLeft: 28 } : { fontWeight: 600 }}>
-                  {ev.parent_event_id ? '↳ ' : ''}{ev.code}
+                <td style={ev.tier === 'MAIN' ? { fontWeight: 600 } : { paddingLeft: ev.tier === 'CATEGORY' ? 40 : 20 }}>
+                  {ev.tier !== 'MAIN' ? '↳ ' : ''}{ev.code}
                 </td>
                 <td>{ev.name}</td>
                 <td>{ev.event_year || '—'}</td>
-                <td>{ev.start_date && ev.end_date ? `${ev.start_date} → ${ev.end_date}` : '—'}</td>
-                <td>{ev.parent_event_id ? `Sub-event of ${ev.parent_code}` : 'Main'}</td>
+                <td>{ev.venue || '—'}</td>
+                <td>
+                  {ev.tier === 'MAIN' ? 'Main' : ev.tier === 'EDITION' ? (ev.parent_code ? `Edition of ${ev.parent_code}` : 'Edition (standalone)') : `Category of ${ev.parent_code}`}
+                </td>
                 <td>{ev.is_active ? 'Active' : 'Inactive'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {ev.tier === 'MAIN' && (
+                    ev.has_logo ? (
+                      <button onClick={() => handleDeleteEventLogo(ev)} style={{ fontSize: 12, padding: '3px 8px', marginRight: 6 }}>Remove Logo</button>
+                    ) : (
+                      <label style={{ fontSize: 12, padding: '3px 8px', border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', marginRight: 6, display: 'inline-block' }}>
+                        Upload Logo
+                        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => e.target.files[0] && handleUploadEventLogo(ev, e.target.files[0])} />
+                      </label>
+                    )
+                  )}
                   <button onClick={() => startEditEvent(ev)}>Edit</button>{' '}
                   <button onClick={() => handleToggleEventActive(ev)}>{ev.is_active ? 'Deactivate' : 'Activate'}</button>
                 </td>

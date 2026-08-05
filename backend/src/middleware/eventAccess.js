@@ -4,22 +4,39 @@ const { pool } = require('../config/db');
 // their company). Admin and Management see every event; everyone else only
 // the events they've been granted in user_event_access — same model as
 // tblUserEventAccess in the old Power Apps design.
-// A grant on a MAIN event cascades to all of its sub-events — access is
-// managed at main-event level (per user request), so checking a sub-event
-// also accepts a grant on its parent.
+//
+// A grant cascades DOWN the full events hierarchy, not just one level — a
+// grant on a Main (e.g. "MIFB") reaches every Edition under it (MIFB26,
+// MIFB27, ...) and every Category under each Edition (MCE26, MYFT26, ...),
+// per the user's explicit 2026-08-05 instruction that Main-level user
+// access should be automatic across everything beneath it. Originally this
+// only walked one parent_event_id hop (correct for the old 2-tier
+// Main->Sub-event shape); the recursive CTE below generalizes it so a grant
+// at any tier reaches every descendant at any depth, not a hardcoded count.
+const ANCESTOR_CTE = `
+  WITH RECURSIVE event_ancestors AS (
+    SELECT id AS event_id, id AS ancestor_id FROM events WHERE company_id = $2
+    UNION ALL
+    SELECT ea.event_id, ev.parent_event_id
+    FROM event_ancestors ea
+    JOIN events ev ON ev.id = ea.ancestor_id
+    WHERE ev.parent_event_id IS NOT NULL
+  )
+`;
+
 async function userCanAccessEvent(userId, companyId, eventId) {
   const result = await pool.query(
-    `SELECT 1
+    `${ANCESTOR_CTE}
+     SELECT 1
      FROM users u
      LEFT JOIN roles r ON r.id = u.role_id
      WHERE u.id = $1 AND u.company_id = $2
        AND (
          r.code IN ('ADM', 'MGT')
          OR EXISTS (
-           SELECT 1 FROM user_event_access uea
-           JOIN events ev ON ev.id = $3
-           WHERE uea.user_id = u.id AND uea.is_active = TRUE
-             AND (uea.event_id = ev.id OR uea.event_id = ev.parent_event_id)
+           SELECT 1 FROM event_ancestors ea
+           JOIN user_event_access uea ON uea.event_id = ea.ancestor_id
+           WHERE ea.event_id = $3 AND uea.user_id = u.id AND uea.is_active = TRUE
          )
        )`,
     [userId, companyId, eventId]
@@ -45,14 +62,17 @@ function requireEventAccess(req, res, next) {
 // participation so a user never wipes grants on events they can't even see.
 async function getAccessibleEventIds(userId, companyId) {
   const result = await pool.query(
-    `SELECT e.id FROM events e
+    `${ANCESTOR_CTE}
+     SELECT DISTINCT e.id FROM events e
      WHERE e.company_id = $2
        AND (
          EXISTS (SELECT 1 FROM users u LEFT JOIN roles r ON r.id = u.role_id
                  WHERE u.id = $1 AND r.code IN ('ADM','MGT'))
-         OR EXISTS (SELECT 1 FROM user_event_access uea
-                    WHERE uea.user_id = $1 AND uea.is_active = TRUE
-                      AND (uea.event_id = e.id OR uea.event_id = e.parent_event_id))
+         OR EXISTS (
+           SELECT 1 FROM event_ancestors ea
+           JOIN user_event_access uea ON uea.event_id = ea.ancestor_id
+           WHERE ea.event_id = e.id AND uea.user_id = $1 AND uea.is_active = TRUE
+         )
        )`,
     [userId, companyId]
   );

@@ -86,6 +86,67 @@ async function deleteBrandingImage(req, res) {
   res.json({ success: true });
 }
 
+// ---------------------------------------------------------------------------
+// Per-MAIN-event logo (2026-08-05) — each MAIN-tier event (see migration
+// 083) gets its own logo, distinct from the company's own corporate logo
+// AND from any other Main the company runs. Same disk-storage/BRANDING_DIR
+// convention as the company-wide branding images above, just keyed by
+// events.logo_filename (row-scoped) instead of company_settings (one global
+// slot) — that's the whole point: a company running MIFB and, say,
+// AgriFood side by side needs two different event logos, not one.
+// ---------------------------------------------------------------------------
+const uploadMainEventLogo = multer({
+  storage: brandingStorage,
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\//.test(file.mimetype)) return cb(new Error('Only image files (PNG/JPG) are accepted.'));
+    cb(null, true);
+  },
+});
+
+async function uploadEventLogo(req, res) {
+  if (!req.file) return res.status(400).json({ error: 'No image uploaded.' });
+  const existing = await pool.query(
+    `SELECT logo_filename FROM events WHERE id = $1 AND company_id = $2 AND tier = 'MAIN'`,
+    [req.params.id, req.companyId]
+  );
+  if (!existing.rows[0]) {
+    fs.unlink(path.join(BRANDING_DIR, req.file.filename), () => {});
+    return res.status(404).json({ error: 'Main event not found.' });
+  }
+  await pool.query(`UPDATE events SET logo_filename = $1 WHERE id = $2`, [req.file.filename, req.params.id]);
+  if (existing.rows[0].logo_filename) {
+    fs.unlink(path.join(BRANDING_DIR, existing.rows[0].logo_filename), () => {});
+  }
+  res.json({ success: true });
+}
+
+async function deleteEventLogo(req, res) {
+  const existing = await pool.query(
+    `SELECT logo_filename FROM events WHERE id = $1 AND company_id = $2 AND tier = 'MAIN'`,
+    [req.params.id, req.companyId]
+  );
+  if (!existing.rows[0]) return res.status(404).json({ error: 'Main event not found.' });
+  await pool.query(`UPDATE events SET logo_filename = NULL WHERE id = $1`, [req.params.id]);
+  if (existing.rows[0].logo_filename) {
+    fs.unlink(path.join(BRANDING_DIR, existing.rows[0].logo_filename), () => {});
+  }
+  res.json({ success: true });
+}
+
+// Public read within the tenant (session-authenticated, not URL-guessable
+// data) — same convention as getBrandingImage below.
+async function getEventLogo(req, res) {
+  const result = await pool.query(
+    `SELECT logo_filename FROM events WHERE id = $1 AND company_id = $2 AND tier = 'MAIN'`,
+    [req.params.id, req.companyId]
+  );
+  const filename = result.rows[0] && result.rows[0].logo_filename;
+  if (!filename) return res.status(404).json({ error: 'No image uploaded.' });
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(BRANDING_DIR, filename));
+}
+
 // Session-cookie authenticated, same as every other endpoint here — an
 // <img src> to a same-origin URL sends cookies automatically, so this
 // doesn't need the "public read" carve-out the Floor Plan hall image uses.
@@ -770,4 +831,5 @@ module.exports = {
   createSegmentSub, updateSegmentSub, deleteSegmentSub, importSegments,
   getSettings, updateSettings, updateGroupSharing,
   uploadBranding, uploadBrandingImage, getBrandingImage, deleteBrandingImage,
+  uploadMainEventLogo, uploadEventLogo, getEventLogo, deleteEventLogo,
 };

@@ -14,9 +14,14 @@ export function EventProvider({ children }) {
   useEffect(() => {
     api.listEvents().then(({ events }) => {
       setEvents(events);
-      // The switcher works at main-event level; sub-events ride along.
-      const mains = events.filter((ev) => !ev.parent_event_id);
-      if (mains.length > 0) setSelectedEventId(mains[0].id);
+      // The switcher works at Edition level (a specific year's instance,
+      // e.g. "MIFB27") — Categories ride along under whichever Edition is
+      // selected. listEvents already excludes the MAIN tier entirely (it's
+      // a brand/grouping, not something you "work in"), so this can't rely
+      // on !parent_event_id any more — an Edition under a Main now HAS a
+      // parent_event_id (the Main's, which isn't even in this list).
+      const editions = events.filter((ev) => ev.tier === 'EDITION');
+      if (editions.length > 0) setSelectedEventId(editions[0].id);
       else if (events.length > 0) setSelectedEventId(events[0].id);
       setLoading(false);
     });

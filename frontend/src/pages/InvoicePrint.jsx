@@ -21,9 +21,13 @@ export default function InvoicePrint() {
   const [contractItems, setContractItems] = useState([]);
 
   useEffect(() => {
-    Promise.all([api.getInvoice(id), api.getCompany()]).then(([inv, c]) => {
+    // Company is fetched AFTER the invoice, not in parallel, so its
+    // event_id is known — getCompany uses it to resolve the right MAIN
+    // event's own logo (a company running more than one Main needs a
+    // different logo per document, not one shared company-wide image).
+    api.getInvoice(id).then((inv) => {
       setInvoice(inv.invoice);
-      setCompany(c.company);
+      api.getCompany(inv.invoice.event_id).then((c) => setCompany(c.company));
       api.listSalesOrderItems(inv.invoice.sales_order_id).then(({ items }) => setContractItems(items));
     });
   }, [id]);

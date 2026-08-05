@@ -26,7 +26,16 @@ export function FooterBand({ company }) {
 // operating company's own name/logo — shown on customer-facing event forms
 // (Contract/Application/Proposal) alongside the company's own branding,
 // rather than replacing it. Renders nothing until Admin sets it up.
+//
+// Resolves per-document once `company.main_event_id` is present (set by
+// getCompany when called with the document's event_id, which resolves to
+// that event's MAIN-tier ancestor — see reference.controller.js) — a
+// company running more than one Main (e.g. MIFB and a second brand) gets a
+// different logo per document, not one shared company-wide image. Falls
+// back to the old company-wide slot for any company that hasn't
+// introduced the Main tier yet, so nothing breaks for them.
 export function EventBrandLogo({ company, height = 44, style }) {
   if (!company?.has_event_logo) return null;
-  return <img src={api.brandingImageUrl('event_logo')} alt="" style={{ height, display: 'block', marginBottom: 6, ...style }} />;
+  const src = company.main_event_id ? api.eventLogoUrl(company.main_event_id) : api.brandingImageUrl('event_logo');
+  return <img src={src} alt="" style={{ height, display: 'block', marginBottom: 6, ...style }} />;
 }

@@ -15,9 +15,11 @@ export default function ReceiptPrint() {
   const [company, setCompany] = useState(null);
 
   useEffect(() => {
-    Promise.all([api.getPayment(id), api.getCompany()]).then(([p, c]) => {
+    // Sequential, not parallel, so getCompany has the payment's event_id —
+    // it uses that to resolve the right MAIN event's own logo.
+    api.getPayment(id).then((p) => {
       setPayment(p.payment);
-      setCompany(c.company);
+      api.getCompany(p.payment.event_id).then((c) => setCompany(c.company));
     });
   }, [id]);
 

@@ -428,7 +428,7 @@ async function deleteRole(req, res) {
 async function listEvents(req, res) {
   const result = await pool.query(
     `SELECT e.id, e.code, e.name, e.event_year, e.start_date, e.end_date, e.is_active,
-            e.parent_event_id, p.code AS parent_code
+            e.parent_event_id, p.code AS parent_code, e.tier, e.venue, (e.logo_filename IS NOT NULL) AS has_logo
      FROM events e
      LEFT JOIN events p ON p.id = e.parent_event_id
      WHERE e.company_id = $1
@@ -438,12 +438,32 @@ async function listEvents(req, res) {
   res.json({ events: result.rows });
 }
 
+// Enforces the hierarchy shape (2026-08-05): MAIN has no parent; EDITION's
+// parent (if any) must be a MAIN; CATEGORY's parent must be an EDITION.
+// Postgres CHECK constraints can't see a sibling row's tier, so this lives
+// here rather than in migration 083's schema.
+async function validateEventTier(companyId, tier, parentEventId) {
+  if (tier === 'MAIN') {
+    if (parentEventId) return 'A Main event cannot have a parent.';
+    return null;
+  }
+  if (!parentEventId) return null; // Edition with no Main yet, or a Category — parent optional per user's own spec
+  const parent = await pool.query(`SELECT tier FROM events WHERE id = $1 AND company_id = $2`, [parentEventId, companyId]);
+  if (!parent.rows[0]) return 'Parent event not found.';
+  if (tier === 'EDITION' && parent.rows[0].tier !== 'MAIN') return "An Edition's parent must be a Main event.";
+  if (tier === 'CATEGORY' && parent.rows[0].tier !== 'EDITION') return "A Category's parent must be an Edition.";
+  return null;
+}
+
 async function createEvent(req, res) {
-  const { code, name, event_year, start_date, end_date, parent_event_id } = req.body;
+  const { code, name, event_year, start_date, end_date, parent_event_id, tier, venue } = req.body;
 
   if (!code || !name) {
     return res.status(400).json({ error: 'code and name are required.' });
   }
+  const eventTier = tier || 'EDITION';
+  const tierError = await validateEventTier(req.companyId, eventTier, parent_event_id || null);
+  if (tierError) return res.status(400).json({ error: tierError });
 
   const duplicate = await pool.query(
     `SELECT 1 FROM events WHERE company_id = $1 AND code = $2`,
@@ -454,25 +474,33 @@ async function createEvent(req, res) {
   }
 
   const result = await pool.query(
-    `INSERT INTO events (company_id, code, name, event_year, start_date, end_date, parent_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO events (company_id, code, name, event_year, start_date, end_date, parent_event_id, tier, venue)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
-    [req.companyId, code, name, event_year || null, start_date || null, end_date || null, parent_event_id || null]
+    [req.companyId, code, name, event_year || null, start_date || null, end_date || null, parent_event_id || null, eventTier, venue || null]
   );
 
   res.status(201).json({ event: { id: result.rows[0].id } });
 }
 
 // Event code stays immutable after creation — it's the stable identifier
-// data entry and reports hang off; rename via `name` instead.
+// data entry and reports hang off; rename via `name` instead. Tier is also
+// immutable after creation (changing it mid-life would strand child events
+// against an invalid hierarchy) — recreate the event if the tier was wrong.
 async function updateEvent(req, res) {
   const fields = {};
-  for (const field of ['name', 'event_year', 'start_date', 'end_date', 'is_active', 'parent_event_id']) {
+  for (const field of ['name', 'event_year', 'start_date', 'end_date', 'is_active', 'parent_event_id', 'venue']) {
     if (field in req.body) fields[field] = req.body[field] === '' ? null : req.body[field];
   }
   // an event can't be its own parent
   if (fields.parent_event_id === req.params.id) {
     return res.status(400).json({ error: "An event can't be its own parent." });
+  }
+  if ('parent_event_id' in fields) {
+    const current = await pool.query(`SELECT tier FROM events WHERE id = $1 AND company_id = $2`, [req.params.id, req.companyId]);
+    if (!current.rows[0]) return res.status(404).json({ error: 'Event not found.' });
+    const tierError = await validateEventTier(req.companyId, current.rows[0].tier, fields.parent_event_id);
+    if (tierError) return res.status(400).json({ error: tierError });
   }
   const columns = Object.keys(fields);
 

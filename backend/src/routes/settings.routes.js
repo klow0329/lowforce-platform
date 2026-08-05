@@ -13,6 +13,7 @@ const {
   createSegmentSub, updateSegmentSub, deleteSegmentSub, importSegments,
   getSettings, updateSettings, updateGroupSharing,
   uploadBranding, uploadBrandingImage, getBrandingImage, deleteBrandingImage,
+  uploadMainEventLogo, uploadEventLogo, getEventLogo, deleteEventLogo,
 } = require('../controllers/settings.controller');
 
 router.use(attachTenant);
@@ -20,6 +21,10 @@ router.use(attachTenant);
 router.get('/branding/:type', asyncHandler(getBrandingImage)); // everyone can view (print pages)
 router.post('/branding/:type', requireAdmin, uploadBranding.single('image'), asyncHandler(uploadBrandingImage));
 router.delete('/branding/:type', requireAdmin, asyncHandler(deleteBrandingImage));
+
+router.get('/events/:id/logo', asyncHandler(getEventLogo)); // everyone can view (print pages)
+router.post('/events/:id/logo', requireAdmin, uploadMainEventLogo.single('image'), asyncHandler(uploadEventLogo));
+router.delete('/events/:id/logo', requireAdmin, asyncHandler(deleteEventLogo));
 
 router.get('/tax-codes', asyncHandler(listTaxCodes)); // everyone can read (needed for line-item dropdowns)
 router.post('/tax-codes', requireAdmin, asyncHandler(createTaxCode));

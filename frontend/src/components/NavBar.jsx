@@ -77,7 +77,7 @@ export default function NavBar({ user, onLogout, availableRoles = [], onSwitchRo
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {!loading && events.length > 0 && (
             <select value={selectedEventId} onChange={(e) => setSelectedEventId(e.target.value)}>
-              {events.filter((ev) => !ev.parent_event_id).map((ev) => (
+              {events.filter((ev) => ev.tier === 'EDITION').map((ev) => (
                 <option key={ev.id} value={ev.id}>{ev.name}</option>
               ))}
             </select>

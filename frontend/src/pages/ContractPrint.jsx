@@ -15,9 +15,11 @@ export default function ContractPrint() {
   const [company, setCompany] = useState(null);
 
   useEffect(() => {
-    Promise.all([api.getSalesOrder(id), api.getCompany()]).then(([so, c]) => {
+    // Sequential, not parallel, so getCompany has the contract's event_id —
+    // it uses that to resolve the right MAIN event's own logo.
+    api.getSalesOrder(id).then((so) => {
       setSalesOrder(so.salesOrder);
-      setCompany(c.company);
+      api.getCompany(so.salesOrder.event_id).then((c) => setCompany(c.company));
     });
   }, [id]);
 

@@ -24,10 +24,12 @@ export default function ProposalPrint() {
   const [items, setItems] = useState([]);
 
   useEffect(() => {
-    Promise.all([api.getOpportunity(id), api.getCompany(), api.listOpportunityItems(id)]).then(([o, c, it]) => {
+    // Company is fetched once the opportunity's event_id is known —
+    // getCompany uses it to resolve the right MAIN event's own logo.
+    Promise.all([api.getOpportunity(id), api.listOpportunityItems(id)]).then(([o, it]) => {
       setOpportunity(o.opportunity);
-      setCompany(c.company);
       setItems(it.items);
+      api.getCompany(o.opportunity.event_id).then((c) => setCompany(c.company));
     });
   }, [id]);
 

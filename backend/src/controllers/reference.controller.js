@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { getAccessibleEventIds } = require('../middleware/eventAccess');
 
 // Countries are a true global reference table (not company-scoped).
 async function listCountries(req, res) {
@@ -49,24 +50,23 @@ async function listSalespeople(req, res) {
 
 // Only the events this user can access — Admin/Management see all, everyone
 // else needs a user_event_access grant (managed from the Admin screen).
+// The top-bar "which event am I working in" picker. MAIN-tier events are
+// deliberately excluded — a Main (e.g. "MIFB") is a brand/grouping, not a
+// data-entry scope; users pick an Edition (or Category) to actually work
+// in, same as before the Main tier existed. Reuses getAccessibleEventIds
+// rather than re-deriving the access cascade here — this used to
+// duplicate that logic with only a 1-level parent walk, which would have
+// silently stayed stuck at 1 level once Main->Edition->Category made the
+// hierarchy 3 deep.
 async function listEvents(req, res) {
+  const accessibleIds = await getAccessibleEventIds(req.userId, req.companyId);
+  if (accessibleIds.length === 0) return res.json({ events: [] });
   const result = await pool.query(
-    `SELECT e.id, e.code, e.name, e.event_year, e.parent_event_id
+    `SELECT e.id, e.code, e.name, e.event_year, e.parent_event_id, e.tier
      FROM events e
-     WHERE e.company_id = $1 AND e.is_active = TRUE
-       AND (
-         EXISTS (
-           SELECT 1 FROM users u LEFT JOIN roles r ON r.id = u.role_id
-           WHERE u.id = $2 AND r.code IN ('ADM', 'MGT')
-         )
-         OR EXISTS (
-           SELECT 1 FROM user_event_access uea
-           WHERE uea.user_id = $2 AND uea.is_active = TRUE
-             AND (uea.event_id = e.id OR uea.event_id = e.parent_event_id)
-         )
-       )
+     WHERE e.company_id = $1 AND e.is_active = TRUE AND e.tier != 'MAIN' AND e.id = ANY($2::uuid[])
      ORDER BY e.event_year DESC, e.name`,
-    [req.companyId, req.userId]
+    [req.companyId, accessibleIds]
   );
   res.json({ events: result.rows });
 }
@@ -83,7 +83,32 @@ async function listStages(req, res) {
 // The tenant's own company profile — needed on generated documents
 // (contracts, invoices, receipts) as the "For and on behalf of" party and,
 // for invoices specifically, the full letterhead/payment-details block.
+// event_id (optional query param) resolves the event's logo to the nearest
+// MAIN ancestor's own logo (2026-08-05: each Main gets its own uploaded
+// logo, not one shared company-wide slot) — walking up parent_event_id
+// since an Edition or Category's logo always comes from its Main, never its
+// own row. Falls back to the old company-wide company_settings.event_logo
+// when the event has no MAIN ancestor (or none uploaded), so a company that
+// never introduces the Main tier keeps working exactly as before.
 async function getCompany(req, res) {
+  const { event_id } = req.query;
+  let mainEventId = null;
+  let mainHasLogo = false;
+  if (event_id) {
+    const main = await pool.query(
+      `WITH RECURSIVE up AS (
+         SELECT id, parent_event_id, tier, logo_filename FROM events WHERE id = $1 AND company_id = $2
+         UNION ALL
+         SELECT e.id, e.parent_event_id, e.tier, e.logo_filename FROM events e JOIN up ON e.id = up.parent_event_id
+       ) SELECT id, logo_filename FROM up WHERE tier = 'MAIN' LIMIT 1`,
+      [event_id, req.companyId]
+    );
+    if (main.rows[0]) {
+      mainEventId = main.rows[0].id;
+      mainHasLogo = !!main.rows[0].logo_filename;
+    }
+  }
+
   const result = await pool.query(
     `SELECT c.id, c.name,
             cs.reg_no, cs.tin_no, cs.sst_no, cs.address, cs.phone, cs.email,
@@ -99,7 +124,12 @@ async function getCompany(req, res) {
      WHERE c.id = $1`,
     [req.companyId]
   );
-  res.json({ company: result.rows[0] });
+  const company = result.rows[0];
+  if (mainEventId) {
+    company.main_event_id = mainEventId;
+    company.has_event_logo = mainHasLogo;
+  }
+  res.json({ company });
 }
 
 // Credit Note reason categories — company-configurable (standing rule #2).

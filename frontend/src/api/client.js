@@ -82,9 +82,16 @@ export const api = {
   listSalespeople: () => apiFetch('/reference/salespeople'),
   listEvents: () => apiFetch('/reference/events'),
   listStages: () => apiFetch('/reference/stages'),
-  getCompany: () => apiFetch('/reference/company'),
+  getCompany: (eventId) => apiFetch(`/reference/company${eventId ? `?event_id=${eventId}` : ''}`),
 
   brandingImageUrl: (type) => `/api/settings/branding/${type}`,
+  eventLogoUrl: (eventId) => `/api/settings/events/${eventId}/logo`,
+  uploadEventLogo: (eventId, file) => {
+    const body = new FormData();
+    body.append('image', file);
+    return apiFetch(`/settings/events/${eventId}/logo`, { method: 'POST', body });
+  },
+  deleteEventLogo: (eventId) => apiFetch(`/settings/events/${eventId}/logo`, { method: 'DELETE' }),
   uploadBrandingImage: (type, file) => {
     const body = new FormData();
     body.append('image', file);
