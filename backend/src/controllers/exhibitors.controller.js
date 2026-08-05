@@ -226,10 +226,13 @@ async function getExhibitor(req, res) {
     [exhibitor.id]
   );
   const eventsResult = await pool.query(
-    `SELECT ee.event_id, ee.salesperson_id, u.full_name AS salesperson_name, ee.category_id
+    `SELECT ee.event_id, ee.salesperson_id, u.full_name AS salesperson_name,
+            COALESCE(ARRAY_AGG(eec.category_id) FILTER (WHERE eec.category_id IS NOT NULL), ARRAY[]::uuid[]) AS category_ids
      FROM exhibitor_events ee
      LEFT JOIN users u ON u.id = ee.salesperson_id
-     WHERE ee.exhibitor_id = $1`,
+     LEFT JOIN exhibitor_event_categories eec ON eec.exhibitor_id = ee.exhibitor_id AND eec.event_id = ee.event_id
+     WHERE ee.exhibitor_id = $1
+     GROUP BY ee.event_id, ee.salesperson_id, u.full_name`,
     [exhibitor.id]
   );
 
@@ -338,11 +341,14 @@ async function replaceSegments(exhibitorId, segments) {
 // see — participation in events outside their access is left untouched, so
 // a sales user can't silently wipe a sub-event they don't work on.
 //
-// categoryByEvent (2026-08-05, optional): { [event_id]: category_id } — the
-// exhibitor's optional Sub-event tag (event_categories) for that specific
-// Edition's participation. A tag not year-specific itself (e.g. "MYFT"), but
-// WHERE it applies is recorded per participation, since revenue/sqm/booth
-// analysis needs to know which year's contract it belongs to.
+// categoryByEvent (optional): { [event_id]: category_id[] } — the
+// exhibitor's optional Sub-event tags (event_categories) for that specific
+// Edition's participation, MULTIPLE per event (2026-08-05: a real import
+// showed one exhibitor legitimately tagged with three Sub-events at once
+// under the same Main — see exhibitor_event_categories, migration 090).
+// Tags aren't year-specific themselves (e.g. "MYFT"), but WHERE they apply
+// is recorded per participation, since revenue/sqm/booth analysis needs to
+// know which year's contract they belong to.
 async function replaceEventParticipation(exhibitorId, eventIds, userId, companyId, categoryByEvent = {}) {
   if (!Array.isArray(eventIds)) return;
   const accessible = await getAccessibleEventIds(userId, companyId);
@@ -353,15 +359,26 @@ async function replaceEventParticipation(exhibitorId, eventIds, userId, companyI
     await client.query('BEGIN');
     // This function replaces participation wholesale (delete-then-insert),
     // which would otherwise WIPE each row's per-event salesperson_id
-    // (migration 078) and category_id every time someone saved the
+    // (migration 078) and Sub-event tags every time someone saved the
     // Exhibitor form — a silent loss of assignment/classification data.
     // Snapshot the existing values first and restore them for any event
-    // that survives the replace, or apply the newly submitted category.
+    // that survives the replace, or apply the newly submitted tags.
+    // exhibitor_event_categories cascades off exhibitor_events, so the
+    // DELETE below also clears prior tags for every event being replaced —
+    // snapshot first, same as salesperson_id.
     const priorRows = await client.query(
-      `SELECT event_id, salesperson_id, assigned_at, category_id FROM exhibitor_events WHERE exhibitor_id = $1`,
+      `SELECT event_id, salesperson_id, assigned_at FROM exhibitor_events WHERE exhibitor_id = $1`,
       [exhibitorId]
     );
     const priorByEvent = Object.fromEntries(priorRows.rows.map((r) => [r.event_id, r]));
+    const priorCatRows = await client.query(
+      `SELECT event_id, category_id FROM exhibitor_event_categories WHERE exhibitor_id = $1`,
+      [exhibitorId]
+    );
+    const priorCatsByEvent = {};
+    for (const r of priorCatRows.rows) {
+      (priorCatsByEvent[r.event_id] = priorCatsByEvent[r.event_id] || []).push(r.category_id);
+    }
 
     await client.query(
       `DELETE FROM exhibitor_events WHERE exhibitor_id = $1 AND event_id = ANY($2)`,
@@ -369,13 +386,20 @@ async function replaceEventParticipation(exhibitorId, eventIds, userId, companyI
     );
     for (const eventId of allowed) {
       const prior = priorByEvent[eventId];
-      const categoryId = eventId in categoryByEvent ? (categoryByEvent[eventId] || null) : (prior?.category_id || null);
       await client.query(
-        `INSERT INTO exhibitor_events (exhibitor_id, event_id, salesperson_id, assigned_at, category_id)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO exhibitor_events (exhibitor_id, event_id, salesperson_id, assigned_at)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT DO NOTHING`,
-        [exhibitorId, eventId, prior?.salesperson_id || null, prior?.assigned_at || null, categoryId]
+        [exhibitorId, eventId, prior?.salesperson_id || null, prior?.assigned_at || null]
       );
+      const categoryIds = eventId in categoryByEvent ? (categoryByEvent[eventId] || []) : (priorCatsByEvent[eventId] || []);
+      for (const categoryId of categoryIds) {
+        if (!categoryId) continue;
+        await client.query(
+          `INSERT INTO exhibitor_event_categories (exhibitor_id, event_id, category_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+          [exhibitorId, eventId, categoryId]
+        );
+      }
     }
     await client.query('COMMIT');
   } catch (err) {
@@ -540,24 +564,31 @@ async function importExhibitors(req, res) {
       created += 1;
     }
 
-    // Which Main event(s) this exhibitor takes part in, by CODE (2026-08-05
-    // — switched from full NAME, per the user's own explicit preference:
-    // codes are short/unambiguous for a spreadsheet cell, matching how
-    // event names are now shown as codes everywhere else in the app, e.g.
-    // "MIFB" not "Malaysian International Food & Beverage Trade Fair").
-    // Each Main resolves to its own most recent/latest Edition (by
-    // event_year) — imports don't target a specific past year, since most
-    // bulk imports are "add these exhibitors to what we're setting up
-    // now". Sub Event(s) is optional and lines up POSITION-BY-POSITION with
-    // Main Event(s) — e.g. Main "MIFB, AGRIFOOD" + Sub "MYFT, " tags only
-    // the first. Additive: an unlisted Main is NOT removed, so a partial
-    // import can't silently wipe participation the sheet simply didn't
-    // mention. Blank leaves everything as-is.
+    // Which Main event(s) this exhibitor takes part in, by CODE — codes are
+    // short/unambiguous for a spreadsheet cell, matching how event names
+    // are shown as codes everywhere else in the app (e.g. "MIFB" not
+    // "Malaysian International Food & Beverage Trade Fair"). Each Main
+    // resolves to its own most recent/latest Edition (by event_year) —
+    // imports don't target a specific past year, since most bulk imports
+    // are "add these exhibitors to what we're setting up now".
+    //
+    // Sub Event(s) is optional and, per exhibitor_event_categories
+    // (migration 090), NOT limited to one tag per Main — a real import
+    // showed one exhibitor legitimately tagged with three Sub-events at
+    // once under the same Main ("MCE, MIFB, MYFT" all under one MIFB27
+    // participation, no positional pairing intended). So every listed Sub
+    // Event code is checked against EVERY listed Main event and attached
+    // wherever it actually belongs (event_categories.main_event_id scopes
+    // each code to one Main already, so a code that belongs to a
+    // DIFFERENT Main in the same row is simply skipped there, not
+    // reported as an error) — only a code that matches NONE of the row's
+    // Main events is reported as not found. Additive: an unlisted Main is
+    // NOT removed, so a partial import can't silently wipe participation
+    // the sheet simply didn't mention. Blank leaves everything as-is.
     const mainCodes = cleanText(row.main_events).split(',').map((s) => s.trim()).filter(Boolean);
-    const subCodes = cleanText(row.sub_events).split(',').map((s) => s.trim());
-    for (let i = 0; i < mainCodes.length; i++) {
-      const mainCode = mainCodes[i];
-      const subCode = subCodes[i];
+    const subCodes = cleanText(row.sub_events).split(',').map((s) => s.trim()).filter(Boolean);
+    const matchedSubCodes = new Set();
+    for (const mainCode of mainCodes) {
       const main = await pool.query(
         `SELECT id FROM events WHERE company_id = $1 AND tier = 'MAIN' AND UPPER(TRIM(code)) = UPPER($2)`,
         [req.companyId, mainCode]
@@ -575,23 +606,28 @@ async function importExhibitors(req, res) {
         skipped.push(`${companyName}: Main event "${mainCode}" has no Edition set up yet (exhibitor still saved, not linked to it)`);
         continue;
       }
-      let categoryId = null;
-      if (subCode) {
+      await pool.query(
+        `INSERT INTO exhibitor_events (exhibitor_id, event_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [exhibitorId, edition.rows[0].id]
+      );
+      for (const subCode of subCodes) {
         const cat = await pool.query(
           `SELECT id FROM event_categories WHERE company_id = $1 AND main_event_id = $2 AND UPPER(TRIM(code)) = UPPER($3)`,
           [req.companyId, main.rows[0].id, subCode]
         );
-        if (!cat.rows[0]) {
-          skipped.push(`${companyName}: Sub-event "${subCode}" not found under "${mainCode}" (event still linked, without that tag)`);
-        } else {
-          categoryId = cat.rows[0].id;
+        if (cat.rows[0]) {
+          matchedSubCodes.add(subCode.toUpperCase());
+          await pool.query(
+            `INSERT INTO exhibitor_event_categories (exhibitor_id, event_id, category_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+            [exhibitorId, edition.rows[0].id, cat.rows[0].id]
+          );
         }
       }
-      await pool.query(
-        `INSERT INTO exhibitor_events (exhibitor_id, event_id, category_id) VALUES ($1, $2, $3)
-         ON CONFLICT (exhibitor_id, event_id) DO UPDATE SET category_id = COALESCE(EXCLUDED.category_id, exhibitor_events.category_id)`,
-        [exhibitorId, edition.rows[0].id, categoryId]
-      );
+    }
+    for (const subCode of subCodes) {
+      if (!matchedSubCodes.has(subCode.toUpperCase())) {
+        skipped.push(`${companyName}: Sub-event "${subCode}" not found under any of the listed Main event(s) (event still linked, without that tag)`);
+      }
     }
   }
 

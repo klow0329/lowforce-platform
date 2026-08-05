@@ -383,8 +383,8 @@ export default function Admin({ user }) {
         'JANE TAN', 'MARKETING MANAGER', '60123456789', 'jane.tan@acme-exhibitions.example.com',
         'AHMAD FAIZAL', 'FINANCE EXECUTIVE', '60129876543', 'ahmad.faizal@acme-exhibitions.example.com',
         'salesperson@example.com', 'ACME TRAVEL & EVENTS', '',
-        events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.code).join(', ') || 'MIFB',
-        eventCategories.map((c) => c.code).join(', ') || 'MYFT',
+        events.filter((ev) => ev.tier === 'MAIN')[0]?.code || 'MIFB',
+        eventCategories.map((c) => c.code).join(', ') || 'MCE, MYFT',
       ],
       [
         'GLOBAL PACKAGING SOLUTIONS SDN BHD', '', 'SG', '', '', '', '',
@@ -404,13 +404,14 @@ export default function Admin({ user }) {
           + 'name) / Billing Company are matched by exact text against your existing Users/Agents/Exhibitors — leave '
           + 'blank if not applicable. '
           + 'Main Event(s) / Sub Event(s): both by CODE (not full name), comma-separated in the same cell to list more '
-          + 'than one, and lined up POSITION-BY-POSITION with each other — the 1st Sub Event code applies to the 1st '
-          + 'Main Event code, the 2nd to the 2nd, and so on. Leave a position blank (but keep its comma) to skip a '
-          + 'sub-event for just that one Main. Example for a company with two Main events set up ("MIFB" and '
-          + '"AGRIFOOD"): Main Event(s) = "MIFB, AGRIFOOD", Sub Event(s) = "MYFT, " tags MIFB with the MYFT sub-event '
-          + 'and leaves AGRIFOOD untagged. Each Main Event resolves to its own most recent/latest Edition (by year); '
-          + 'to target an older year precisely instead, add that participation from the Exhibitor\'s own page '
-          + 'afterward. Leave both columns blank to leave existing event participation untouched. '
+          + 'than one of either. Every Sub Event code is checked against every Main Event code in the row and applied '
+          + 'wherever it actually belongs — NOT paired by position, and an exhibitor CAN have more than one Sub Event '
+          + 'under the same Main at once. Example: row 1 above (Main Event(s) = "MIFB", Sub Event(s) = "MCE, MYFT") '
+          + 'tags this exhibitor\'s MIFB participation with BOTH the MCE and MYFT sub-events. A Sub Event code that '
+          + "doesn't belong to any of the row's Main Events is skipped and reported. Each Main Event resolves to its "
+          + 'own most recent/latest Edition (by year); to target an older year precisely instead, add that '
+          + 'participation from the Exhibitor\'s own page afterward. Leave both columns blank to leave existing event '
+          + 'participation untouched. '
           + `Valid Main Event codes: ${events.filter((ev) => ev.tier === 'MAIN').map((ev) => ev.code).join(', ') || '(none set up yet — add one under Admin > Events first)'}. `
           + `Valid Sub Event codes: ${eventCategories.map((c) => c.code).join(', ') || '(none set up yet — add one under Admin > Events > Sub-events first)'}.`,
       ],

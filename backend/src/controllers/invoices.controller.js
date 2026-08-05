@@ -58,10 +58,10 @@ async function getInvoice(req, res) {
   const vis = financeVisibilityClause(req, 'so.salesperson_id', 3);
   const result = await pool.query(
     `SELECT inv.*,
-            ex.company_name, ex.country_code, ex.contact1_name, ex.contact1_email, ex.contact1_phone,
+            ex.company_name, ex.country_code, cy.name AS country_name, ex.contact1_name, ex.contact1_email, ex.contact1_phone,
             ex.postcode, ex.city, ex.reg_no, ex.tin_no, ex.sst_no,
             ex.billing_name, ex.billing_address, ex.billing_postcode, ex.billing_city,
-            ex.billing_country_code, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
+            ex.billing_country_code, bcy.name AS billing_country_name, ex.billing_reg_no, ex.billing_tin_no, ex.billing_sst_no,
             ex.billing_contact_no, ex.billing_email, ex.billing_same_as_company,
             ag.name AS agent_name,
             ev.name AS event_name, ev.start_date AS event_start_date, ev.end_date AS event_end_date,
@@ -76,6 +76,8 @@ async function getInvoice(req, res) {
      JOIN sales_orders so ON so.id = inv.sales_order_id
      LEFT JOIN opportunities o ON o.id = so.opportunity_id
      LEFT JOIN agents ag ON ag.id = ex.agent_id
+     LEFT JOIN countries cy ON cy.code = ex.country_code
+     LEFT JOIN countries bcy ON bcy.code = ex.billing_country_code
      WHERE inv.id = $1 AND inv.company_id = $2 AND ${vis.sql}`,
     [req.params.id, req.companyId, ...(vis.param !== undefined ? [vis.param] : [])]
   );

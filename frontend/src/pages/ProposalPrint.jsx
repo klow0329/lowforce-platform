@@ -62,7 +62,7 @@ export default function ProposalPrint() {
     address: opportunity.billing_address || '—',
     postcodeCity: [same ? opportunity.postcode : opportunity.billing_postcode, same ? opportunity.city : opportunity.billing_city]
       .filter(Boolean).join(' '),
-    country: (same ? opportunity.country_code : opportunity.billing_country_code) || '—',
+    country: (same ? opportunity.country_name : opportunity.billing_country_name) || '—',
     regNo: same ? opportunity.reg_no : opportunity.billing_reg_no,
     tinNo: same ? opportunity.tin_no : opportunity.billing_tin_no,
     sstNo: same ? opportunity.sst_no : opportunity.billing_sst_no,

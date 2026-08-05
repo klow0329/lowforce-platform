@@ -56,7 +56,7 @@ export default function ProformaPrint() {
     address: salesOrder.billing_address || '—',
     postcodeCity: [same ? salesOrder.postcode : salesOrder.billing_postcode, same ? salesOrder.city : salesOrder.billing_city]
       .filter(Boolean).join(' '),
-    country: (same ? salesOrder.country_code : salesOrder.billing_country_code) || '—',
+    country: (same ? salesOrder.country_name : salesOrder.billing_country_name) || '—',
     regNo: same ? salesOrder.reg_no : salesOrder.billing_reg_no,
     tinNo: same ? salesOrder.tin_no : salesOrder.billing_tin_no,
     sstNo: same ? salesOrder.sst_no : salesOrder.billing_sst_no,

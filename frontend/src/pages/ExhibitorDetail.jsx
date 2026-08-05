@@ -49,7 +49,7 @@ const emptyForm = {
   billing_email: '',
   segments: [],
   event_ids: [],
-  event_categories: {}, // { [event_id]: category_id } — optional Sub-event tag per Edition participation (2026-08-05)
+  event_categories: {}, // { [event_id]: category_id[] } — optional Sub-event tags per Edition participation, more than one allowed
 };
 
 const section = { marginBottom: 24 };
@@ -127,11 +127,13 @@ export default function ExhibitorDetail({ user }) {
       for (const key of Object.keys(emptyForm)) {
         if (exhibitor[key] !== null && exhibitor[key] !== undefined) loaded[key] = exhibitor[key];
       }
-      // event_assignments carries this exhibitor's own category_id per
-      // Edition — collapse it into the { event_id: category_id } shape the
-      // form/checkboxes use.
+      // event_assignments carries this exhibitor's own category_ids per
+      // Edition — collapse it into the { event_id: category_id[] } shape
+      // the form/checkboxes use.
       loaded.event_categories = Object.fromEntries(
-        (exhibitor.event_assignments || []).filter((a) => a.category_id).map((a) => [a.event_id, a.category_id])
+        (exhibitor.event_assignments || [])
+          .filter((a) => a.category_ids && a.category_ids.length > 0)
+          .map((a) => [a.event_id, a.category_ids])
       );
       setForm(loaded);
       setOriginal(loaded);
@@ -213,8 +215,18 @@ export default function ExhibitorDetail({ user }) {
     });
   }
 
-  function setEventCategory(eventId, categoryId) {
-    setForm((f) => ({ ...f, event_categories: { ...f.event_categories, [eventId]: categoryId || undefined } }));
+  // A Sub-event tag isn't exclusive — a real import showed one exhibitor
+  // legitimately tagged with three Sub-events at once under the same Main
+  // (e.g. "MCE, MIFB, MYFT"), so this toggles one code in/out of that
+  // event's tag list rather than replacing it.
+  function toggleEventCategory(eventId, categoryId) {
+    setForm((f) => {
+      const current = f.event_categories[eventId] || [];
+      const next = current.includes(categoryId)
+        ? current.filter((c) => c !== categoryId)
+        : [...current, categoryId];
+      return { ...f, event_categories: { ...f.event_categories, [eventId]: next } };
+    });
   }
 
   const changes = computeChanges(original, form);
@@ -575,7 +587,8 @@ export default function ExhibitorDetail({ user }) {
           <h3>Event Participation</h3>
           <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
             Which Editions (a specific year, e.g. "MIFB 2027") this exhibitor takes part in, grouped by Main event —
-            and optionally, which Sub-event (e.g. "MYFT") applies to that specific year's participation.
+            and optionally, which Sub-event(s) (e.g. "MYFT") apply to that specific year's participation. More than
+            one Sub-event can apply at once.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {Object.entries(
@@ -597,14 +610,19 @@ export default function ExhibitorDetail({ user }) {
                         {' '}{ev.code}
                       </label>
                       {checked && catOptions.length > 0 && (
-                        <select
-                          style={{ fontSize: 12, padding: '2px 6px' }}
-                          value={form.event_categories[ev.id] || ''}
-                          onChange={(e) => setEventCategory(ev.id, e.target.value)}
-                        >
-                          <option value="">— Sub-event (optional) —</option>
-                          {catOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 11, color: '#5c6070' }}>Sub-event(s):</span>
+                          {catOptions.map((c) => (
+                            <label key={c.id} style={{ fontSize: 12, fontWeight: 400 }}>
+                              <input
+                                type="checkbox"
+                                checked={(form.event_categories[ev.id] || []).includes(c.id)}
+                                onChange={() => toggleEventCategory(ev.id, c.id)}
+                              />
+                              {' '}{c.code}
+                            </label>
+                          ))}
+                        </span>
                       )}
                     </div>
                   );

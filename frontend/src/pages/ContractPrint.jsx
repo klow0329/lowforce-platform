@@ -74,7 +74,7 @@ export default function ContractPrint() {
     address: salesOrder.billing_address || '',
     postcodeCity: [same ? salesOrder.postcode : salesOrder.billing_postcode, same ? salesOrder.city : salesOrder.billing_city]
       .filter(Boolean).join(' '),
-    country: (same ? salesOrder.country_code : salesOrder.billing_country_code) || '',
+    country: (same ? salesOrder.country_name : salesOrder.billing_country_name) || '',
     contactNo: same ? salesOrder.contact1_phone : salesOrder.billing_contact_no,
     email: (same ? salesOrder.contact1_email : salesOrder.billing_email) || '',
   };
@@ -124,10 +124,23 @@ export default function ContractPrint() {
       <div id="pdf-doc" style={{ fontSize: 12.5, lineHeight: 1.4 }}>
       <LetterheadBand company={company} />
       <div style={{ textAlign: 'center', marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 24, marginBottom: 6 }}>
-          <EventBrandLogo company={company} height={44} style={{ margin: 0 }} />
-          <BrandLogo company={company} height={44} style={{ margin: 0 }} />
-        </div>
+        {/* A <table> here, not a flex row — html2canvas (the PDF export
+            engine) has long-standing bugs rendering flexbox-centered
+            sibling images, which showed up as the two logos collapsing
+            into one spot in the exported PDF even though the on-screen
+            preview looked fine. A table's cells lay out reliably in both
+            the browser and html2canvas's canvas rendering. Cells are only
+            emitted for logos that actually exist, so a company with just
+            one configured logo still gets a genuinely centered table
+            instead of one real cell plus an empty, off-centering one. */}
+        <table style={{ margin: '0 auto 8px', borderCollapse: 'collapse' }}><tbody><tr>
+          {company.has_event_logo && (
+            <td style={{ padding: '0 20px', verticalAlign: 'middle' }}><EventBrandLogo company={company} height={64} style={{ margin: 0 }} /></td>
+          )}
+          {company.has_logo && (
+            <td style={{ padding: '0 20px', verticalAlign: 'middle' }}><BrandLogo company={company} height={64} style={{ margin: 0 }} /></td>
+          )}
+        </tr></tbody></table>
         <div style={{ fontSize: 18, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
         <div style={{ fontSize: 13, color: '#5c6070' }}>{company.event_name || salesOrder.event_name}</div>
         <h2 style={{ marginTop: 12, marginBottom: 0, fontSize: 18 }}>{docTitle}</h2>
@@ -163,7 +176,7 @@ export default function ContractPrint() {
         <Field label="SST No." value={salesOrder.sst_no} />
         <Field label="Website" value={salesOrder.website} />
         <Field label="Address" value={[salesOrder.address, salesOrder.postcode, salesOrder.city, salesOrder.state].filter(Boolean).join(', ')} span />
-        <Field label="Country" value={salesOrder.country_code} />
+        <Field label="Country" value={salesOrder.country_name} />
         <Field label="Fax" value={salesOrder.fax} />
         <Field label="Contact Person 1" value={salesOrder.contact1_name} />
         <Field label="Designation" value={salesOrder.contact1_job_title} />
@@ -246,7 +259,13 @@ export default function ContractPrint() {
         {salesOrder.remarks && <Field label="Remarks" value={salesOrder.remarks} span />}
       </div>
 
-      <div style={sectionTitle}>SECTION 5 &mdash; PAYMENT</div>
+      {/* Forced page break: everything from here on (Payment + Declaration)
+          starts on a fresh page 2, rather than letting html2pdf's
+          auto-pagination cut wherever content happens to overflow — which
+          previously split the Payment section's bank-details grid in half
+          across two pages. */}
+      <div style={{ pageBreakBefore: 'always', paddingTop: 8 }}>
+      <div style={sectionTitle}>SECTION 4 &mdash; PAYMENT</div>
       {company.payment_terms_wording && (
         <p style={{ fontSize: 11, color: '#333', marginTop: 0 }}>{company.payment_terms_wording}</p>
       )}
@@ -258,7 +277,7 @@ export default function ContractPrint() {
         {company.payment_instructions && <Field label="Remittance / Other Instructions" value={company.payment_instructions} span />}
       </div>
 
-      <div style={sectionTitle}>SECTION 6 &mdash; EXHIBITOR&rsquo;S DECLARATION AND SIGNATURE</div>
+      <div style={sectionTitle}>SECTION 5 &mdash; EXHIBITOR&rsquo;S DECLARATION AND SIGNATURE</div>
       {company.declaration_wording && (
         <p style={{ fontSize: 11, color: '#333', marginTop: 0 }}>{company.declaration_wording}</p>
       )}
@@ -277,6 +296,7 @@ export default function ContractPrint() {
       }}>
         <strong>For Office Use Only</strong> &mdash; Salesperson: {salesOrder.salesperson_name || '—'}
         &nbsp;&nbsp;Rate Tier: {salesOrder.booking_type || '—'}
+      </div>
       </div>
 
       {company.contract_terms && !company.has_contract_terms_pdf && (

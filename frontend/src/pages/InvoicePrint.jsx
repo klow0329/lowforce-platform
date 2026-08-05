@@ -44,7 +44,7 @@ export default function InvoicePrint() {
     address: invoice.billing_address || '—',
     postcodeCity: [same ? invoice.postcode : invoice.billing_postcode, same ? invoice.city : invoice.billing_city]
       .filter(Boolean).join(' '),
-    country: (same ? invoice.country_code : invoice.billing_country_code) || '—',
+    country: (same ? invoice.country_name : invoice.billing_country_name) || '—',
     tinNo: same ? invoice.tin_no : invoice.billing_tin_no,
     sstNo: same ? invoice.sst_no : invoice.billing_sst_no,
     contactNo: same ? invoice.contact1_phone : invoice.billing_contact_no,
