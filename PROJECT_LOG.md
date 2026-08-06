@@ -6,6 +6,20 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-06, round 4 — Contract header scale, Invoice/Proposal cleanup
+
+**Asked:** (1) Contract header technically matched the reference layout but looked too small/unprofessional — wanted it scaled up to span nearly the full page width. (2) Invoice/Proposal's event logo "looked lonely in the middle" as a standalone column — remove it, keep only the company's own logo. (3) When an invoice/proposal's billing differs from the exhibitor, show the exhibitor's own details alongside Bill To, not just the payer.
+
+**(1) Built:** scaled the Contract header up significantly. Non-obvious finding: the event logo's own height wasn't actually the height bottleneck — the table row's height was set by the *company details* column (Show Organiser label + company logo + reg no + multi-line address), so increasing the event logo alone did nothing for "professional-looking" but also cost nothing extra in page-height terms. Compensated by tightening the company-details column's spacing (smaller line-height, less margin) rather than the logo itself, and reconfirmed exactly 2 pages via a real generated PDF (this is now the third time this same page-count regression nearly slipped through — any future spacing change here needs the same real-PDF check, not just a visual glance).
+
+**(2) Built:** removed `EventBrandLogo` from Invoice and Proposal entirely — both now match Proforma/Credit Note/Statement's plain 2-column header (company info left, doc title/number right).
+
+**(3) Built:** Invoice and Proposal now render a second "Exhibitor" panel alongside "Bill To" whenever `billing_same_as_company` is false — same table-based approach as everywhere else this session, for the same html2canvas reliability reason. Verified against a real invoice (INV-2026-0005) with genuinely different billing/exhibitor data.
+
+**Still open, user flagged for next:** "testing vs production sync" — not yet described in detail; likely related to the recurring confusion this session about which environment (local `start-lowforce.cmd` vs Railway production) a given screenshot/test actually came from. Worth proactively clarifying which environment a report is about before diagnosing, going forward.
+
+---
+
 ## 2026-08-06, round 3 — PDF logo positioning and Contract polish
 
 **Asked:** (1) The logo-merging bug the user kept re-reporting wasn't Contract-specific — Invoice/Proposal/Receipt had it too, and looked fine on screen but broke on export. (2) Beautify the Contract per their own reference design: bordered box per section, spacious signature area, "For Office Use Only" filled with real data. (3) File naming: Contract/Invoice/Proposal get `name-eventcode-company`, Receipt gets `name-company`. (4) A wide real event logo (a proper icon+text lockup, not the placeholder swoosh from earlier local testing) pushed the company logo out of the visible page. (5) The Contract header should group the company's logo + registration details together as one block next to the event logo, matching their own reference layout — not stacked/centered. (6) "Account Name" showed the company's name before any banking info was entered, looked hardcoded. (7) Remove the auto-populated Accepted/Rejected/Rate Tier/Booth fields from "For Office Use Only" — this document is a pre-decision application, showing it as already-decided defeats the point. (8) The "Event/Brand Name" field in Company Profile was confusingly labeled and had "EXPOCO SDN BHD" sitting in it.
