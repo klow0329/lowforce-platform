@@ -6,6 +6,30 @@ Newest entries first. Append a new dated entry after every session; don't edit p
 
 ---
 
+## 2026-08-06, round 3 — PDF logo positioning and Contract polish
+
+**Asked:** (1) The logo-merging bug the user kept re-reporting wasn't Contract-specific — Invoice/Proposal/Receipt had it too, and looked fine on screen but broke on export. (2) Beautify the Contract per their own reference design: bordered box per section, spacious signature area, "For Office Use Only" filled with real data. (3) File naming: Contract/Invoice/Proposal get `name-eventcode-company`, Receipt gets `name-company`. (4) A wide real event logo (a proper icon+text lockup, not the placeholder swoosh from earlier local testing) pushed the company logo out of the visible page. (5) The Contract header should group the company's logo + registration details together as one block next to the event logo, matching their own reference layout — not stacked/centered. (6) "Account Name" showed the company's name before any banking info was entered, looked hardcoded. (7) Remove the auto-populated Accepted/Rejected/Rate Tier/Booth fields from "For Office Use Only" — this document is a pre-decision application, showing it as already-decided defeats the point. (8) The "Event/Brand Name" field in Company Profile was confusingly labeled and had "EXPOCO SDN BHD" sitting in it.
+
+**Root cause, same fix, applied everywhere:** every document header used a flexbox row to lay out its logo(s) — html2canvas (the PDF export engine) has long-standing bugs rendering flexbox-centered sibling images, which is why the on-screen preview always looked correct (real browser layout) but the exported PDF didn't (html2canvas's own re-render). Converted every document's header (Contract/Invoice/Proposal/Receipt/Proforma/CreditNote/Statement) from flex to `<table>`, which renders identically in both. Verified end-to-end by downloading and reading back real generated PDFs after each change — this is what caught the fix actually working, not just "should work."
+
+**Logo sizing fixed at the source** (`CompanyBranding.jsx`): `BrandLogo`/`EventBrandLogo` previously took a fixed `height` only — fine for a roughly-square logo, but a real event logo is a wide horizontal lockup (icon + 3 lines of text), and forcing just height let it blow past the page width, pushing the company logo (or itself) off the visible area. Switched to a `maxHeight`/`maxWidth` bounding box with `object-fit: contain`, so any aspect ratio shrinks to fit instead of overflowing. Verified against the user's own real uploaded logos (741×262 event logo, 401×150 company logo) via a real generated PDF — both now sit cleanly within their columns.
+
+**Contract header redesigned** to match the user's own reference (event logo alone on the left; "Show Organiser:" + company logo + registration/address grouped as one block on the right) — replacing the earlier stacked-and-centered design that separated the company's identity from its own details.
+
+**Contract beautified**: each section is now a bordered box (title bar + padded content); the exhibitor signature/stamp area is a tall bordered box instead of a bare line. Adding the section borders initially pushed the page 1/page 2 split from 2 pages to 3 (the extra border/padding overhead was just enough to overflow) — caught via a real generated PDF showing a near-blank middle page, fixed by trimming vertical spacing back down and reconfirming exactly 2 pages.
+
+**"For Office Use Only" reverted per the user's explicit call** — no more auto-populated Accepted/Rejected status, Rate Tier, or allocated booth; just unticked checkboxes, a blank Date-of-acceptance line, real Salesperson, and a blank Remarks line, matching the document's own stated premise ("a binding contract is formed only upon written acceptance" — it shouldn't print as already decided).
+
+**"Account Name" was showing real (not hardcoded) but non-configurable data** — it read `company.name` directly, which is technically correct but isn't admin-editable and looked suspicious next to blank Bank/Account No/SWIFT. Added a distinct `bank_account_name` field (migration 091), same blank-until-configured convention as the other banking fields.
+
+**Company Profile's "Event/Brand Name" field relabeled to "Company Display Name"** with corrected helper text (it's a fallback shown only when no Logo is uploaded, unrelated to the Event's own name/code which lives under Admin > Events) — this is what had "EXPOCO SDN BHD" sitting in it, confusing the user about where the document's company name actually comes from.
+
+**Filename convention**: added `buildPdfFilename()` (`frontend/src/utils/pdf.js`) and wired it into Contract/Invoice/Proposal (`name-eventcode-company`) and Receipt (`name-company`) per the user's own spec.
+
+**Important process note for future sessions:** twice this round, testing on the user's own local `start-lowforce.cmd` instance (port 3001, shared with the user's own concurrent testing) caused real confusion — once when a synthetic test logo I uploaded to verify the wide-logo fix was later deleted, making the user think their own freshly-uploaded real logo had been "seeded" or removed by the system. **Do not upload/delete test branding assets on a shared local instance the user is actively testing on** — use synthetic in-memory test data (e.g. a Blob-based upload that's immediately identifiable as a test, or verify via DOM measurement without persisting anything) instead.
+
+---
+
 ## 2026-08-06
 
 **Asked** (continuing from the Contract redesign feedback the prior session): (1) Exhibitor Sub-event tagging only kept one Sub-event per Main event participation even when the user's own real import CSV listed several in one cell. (2) Every printed document should show the country's full name, not its 2-letter code. (3) Three separate problems with the generated Contract PDF: the two header logos rendered fine on-screen but merged together in the actual exported PDF; the section numbers jumped from 3 to 5 with no 4; and Section 5 (Payment)'s bank-details grid got cut in half across the page 1/page 2 boundary.
