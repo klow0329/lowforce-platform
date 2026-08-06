@@ -39,7 +39,7 @@ const SELECTABLE_TRIGGERS = [
 const NO_THRESHOLD_TRIGGERS = ['INVOICE_CONFIRM', 'CREDIT_NOTE_CONFIRM', 'PAYMENT_RECORD'];
 const emptyProfileForm = {
   reg_no: '', tin_no: '', sst_no: '', address: '', phone: '', email: '',
-  bank_name: '', bank_account_no: '', bank_swift: '', payment_instructions: '',
+  bank_name: '', bank_account_no: '', bank_account_name: '', bank_swift: '', payment_instructions: '',
   budget_preparer_user_id: '', budget_approver_user_id: '', contract_terms: '', event_name: '',
   stamp_duty_enabled: false, stamp_duty_rate_pct: '0.5', stamp_duty_round_to: '5', stamp_duty_minimum: '10',
   payment_terms_wording: '', declaration_wording: '',
@@ -728,6 +728,7 @@ export default function Admin({ user }) {
         reg_no: settings.reg_no || '', tin_no: settings.tin_no || '', sst_no: settings.sst_no || '',
         address: settings.address || '', phone: settings.phone || '', email: settings.email || '',
         bank_name: settings.bank_name || '', bank_account_no: settings.bank_account_no || '',
+        bank_account_name: settings.bank_account_name || '',
         bank_swift: settings.bank_swift || '', payment_instructions: settings.payment_instructions || '',
         budget_preparer_user_id: settings.budget_preparer_user_id || '',
         budget_approver_user_id: settings.budget_approver_user_id || '',
@@ -1639,10 +1640,10 @@ export default function Admin({ user }) {
         </div>
 
         <form onSubmit={handleSaveProfile} style={{ maxWidth: 500 }}>
-          <label style={label}>Event/Brand Name</label>
+          <label style={label}>Company Display Name</label>
           <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
-            Shown on Contracts next to whichever Main event's logo applies (see Admin &gt; Events) — leave blank to
-            just use the event's own name (e.g. "MIFB 2026").
+            Shown on Contracts if no Logo is uploaded above (leave blank to just use your registered company name).
+            This is separate from the Main event's own name/code, which is set under Admin &gt; Events.
           </p>
           <input style={inputStyle} value={profileForm.event_name} onChange={(e) => setProfileForm({ ...profileForm, event_name: e.target.value })} />
 
@@ -1670,6 +1671,12 @@ export default function Admin({ user }) {
               <input style={inputStyle} value={profileForm.email} onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })} />
             </div>
           </div>
+          <label style={label}>Bank Account Name</label>
+          <p style={{ fontSize: 12, color: '#5c6070', marginTop: 0 }}>
+            Printed as "Account Name" on Contracts, alongside Bank/Account No./SWIFT below — same rule as those:
+            blank here prints blank there, nothing is assumed.
+          </p>
+          <input style={inputStyle} value={profileForm.bank_account_name} onChange={(e) => setProfileForm({ ...profileForm, bank_account_name: e.target.value })} />
           <label style={label}>Bank Name</label>
           <input style={inputStyle} value={profileForm.bank_name} onChange={(e) => setProfileForm({ ...profileForm, bank_name: e.target.value })} />
           <div style={{ display: 'flex', gap: 8 }}>

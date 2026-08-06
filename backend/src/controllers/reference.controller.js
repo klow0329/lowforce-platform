@@ -139,7 +139,7 @@ async function getCompany(req, res) {
   const result = await pool.query(
     `SELECT c.id, c.name,
             cs.reg_no, cs.tin_no, cs.sst_no, cs.address, cs.phone, cs.email,
-            cs.bank_name, cs.bank_account_no, cs.bank_swift, cs.payment_instructions,
+            cs.bank_name, cs.bank_account_no, cs.bank_account_name, cs.bank_swift, cs.payment_instructions,
             cs.contract_terms, cs.event_name, cs.payment_terms_wording, cs.declaration_wording,
             (cs.logo_filename IS NOT NULL) AS has_logo,
             (cs.letterhead_filename IS NOT NULL) AS has_letterhead,

@@ -116,10 +116,6 @@ export default function ContractPrint() {
   const boothCount = (salesOrder.booth_no || '').split(',').map((s) => s.trim()).filter(Boolean).length;
   const hallBoothFits = boothCount > 0 && boothCount <= 10 && (salesOrder.booth_no || '').length <= 60;
   const hallBoothDisplay = hallBoothFits ? [salesOrder.hall, salesOrder.booth_no].filter(Boolean).join(' / ') : '';
-  // The internal "Booth No. Allocated" line isn't space-constrained the way
-  // the exhibitor-facing Preferred Hall field above is — always show the
-  // real value here regardless of length.
-  const boothAllocatedDisplay = [salesOrder.hall, salesOrder.booth_no].filter(Boolean).join(' / ');
 
   const showBillingDetails = !same;
   const showContact2 = !!salesOrder.contact2_name;
@@ -143,27 +139,37 @@ export default function ContractPrint() {
 
       <div id="pdf-doc" style={{ fontSize: 12.5, lineHeight: 1.4 }}>
       <LetterheadBand company={company} />
+      {/* Event logo on the left, standalone; the operating company's own
+          identity (logo + registration/address block) grouped together as
+          one unit on the right — matching the user's own reference layout,
+          not the earlier stacked-and-centered design. A <table>, not a flex
+          row: html2canvas (the PDF export engine) has long-standing bugs
+          rendering flexbox-centered sibling images, which showed up as the
+          logos collapsing together or landing in the wrong spot on export
+          even though the on-screen preview looked fine. Cells only appear
+          for logos that actually exist. */}
+      <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 10 }}><tbody><tr>
+        {company.has_event_logo && (
+          <td style={{ verticalAlign: 'middle', textAlign: 'left', width: company.has_logo ? '50%' : '100%' }}>
+            <EventBrandLogo company={company} height={90} maxWidth={300} style={{ margin: 0 }} />
+          </td>
+        )}
+        <td style={{ verticalAlign: 'top', textAlign: 'left', width: company.has_event_logo ? '50%' : '100%' }}>
+          <div style={{ fontSize: 10.5, color: '#5c6070', marginBottom: 3 }}>Show Organiser:</div>
+          {company.has_logo ? (
+            <BrandLogo company={company} height={42} maxWidth={180} style={{ margin: '0 0 4px' }} />
+          ) : (
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#1B3A6B', marginBottom: 4 }}>
+              {company.event_name || company.name}
+            </div>
+          )}
+          {company.reg_no && <div style={{ fontSize: 10.5 }}>Co. Reg. No: {company.reg_no}</div>}
+          {company.address && <div style={{ fontSize: 10.5, color: '#5c6070', whiteSpace: 'pre-line' }}>{company.address}</div>}
+        </td>
+      </tr></tbody></table>
+
       <div style={{ textAlign: 'center', marginBottom: 10 }}>
-        {/* A <table> here, not a flex row — html2canvas (the PDF export
-            engine) has long-standing bugs rendering flexbox-centered
-            sibling images, which showed up as the two logos collapsing
-            into one spot in the exported PDF even though the on-screen
-            preview looked fine. A table's cells lay out reliably in both
-            the browser and html2canvas's canvas rendering. Cells are only
-            emitted for logos that actually exist, so a company with just
-            one configured logo still gets a genuinely centered table
-            instead of one real cell plus an empty, off-centering one. */}
-        <table style={{ margin: '0 auto 8px', borderCollapse: 'collapse' }}><tbody><tr>
-          {company.has_event_logo && (
-            <td style={{ padding: '0 20px', verticalAlign: 'middle' }}><EventBrandLogo company={company} height={64} style={{ margin: 0 }} /></td>
-          )}
-          {company.has_logo && (
-            <td style={{ padding: '0 20px', verticalAlign: 'middle' }}><BrandLogo company={company} height={64} style={{ margin: 0 }} /></td>
-          )}
-        </tr></tbody></table>
-        <div style={{ fontSize: 18, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
-        <div style={{ fontSize: 13, color: '#5c6070' }}>{company.event_name || salesOrder.event_name}</div>
-        <h2 style={{ marginTop: 8, marginBottom: 0, fontSize: 18 }}>{docTitle}</h2>
+        <h2 style={{ marginTop: 0, marginBottom: 0, fontSize: 18 }}>{docTitle}</h2>
         {!isCoex && (
           <p style={{ fontSize: 10.5, color: '#5c6070', maxWidth: 520, margin: '4px auto 0' }}>
             This is an application to participate. A binding contract is formed only upon written acceptance by
@@ -294,7 +300,7 @@ export default function ContractPrint() {
           <p style={{ fontSize: 11, color: '#333', marginTop: 0 }}>{company.payment_terms_wording}</p>
         )}
         <div style={fieldGrid}>
-          <Field label="Account Name" value={company.name} />
+          <Field label="Account Name" value={company.bank_account_name} />
           <Field label="Bank" value={company.bank_name} />
           <Field label="Account No." value={company.bank_account_no} />
           <Field label="SWIFT Code" value={company.bank_swift} />
@@ -325,18 +331,8 @@ export default function ContractPrint() {
           marginTop: 16, border: '1px solid #ccc', borderRadius: 4, padding: 10, fontSize: 10.5, color: '#5c6070',
         }}>
           <div style={{ fontWeight: 700, color: '#333', marginBottom: 6 }}>For Office Use Only (Event Organiser's internal record)</div>
-          <div>
-            Application:{' '}
-            {salesOrder.status === 'APPROVED' ? '☑ ACCEPTED  ☐ REJECTED'
-              : salesOrder.status === 'REJECTED' ? '☐ ACCEPTED  ☑ REJECTED'
-              : '☐ ACCEPTED  ☐ REJECTED'}
-            &nbsp;&nbsp;Date of acceptance: {fmtDate(salesOrder.approved_at) || '—'}
-          </div>
-          <div style={{ marginTop: 4 }}>
-            Salesperson: {salesOrder.salesperson_name || '—'}
-            &nbsp;&nbsp;Rate Tier: {salesOrder.booking_type || '—'}
-            &nbsp;&nbsp;Booth No. Allocated: {boothAllocatedDisplay || '—'}
-          </div>
+          <div>Application:&nbsp;&nbsp;☐ ACCEPTED&nbsp;&nbsp;&nbsp;☐ REJECTED&nbsp;&nbsp;&nbsp;&nbsp;Date of acceptance: _______________________</div>
+          <div style={{ marginTop: 4 }}>Salesperson: {salesOrder.salesperson_name || '—'}</div>
           <div style={{ marginTop: 4 }}>Remarks: _______________________________________________</div>
         </div>
       </Section>
