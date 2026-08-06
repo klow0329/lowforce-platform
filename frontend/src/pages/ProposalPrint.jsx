@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf, buildPdfFilename } from '../utils/pdf';
-import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
+import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmt = (n, ccy = 'MYR') => `${ccy === 'USD' ? 'USD' : 'RM'} ${Number(n).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -89,35 +89,47 @@ export default function ProposalPrint() {
           sibling images, which put the logos in the wrong spot on export
           even though the on-screen preview looked correct. */}
       <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 24 }}><tbody><tr>
-        <td style={{ verticalAlign: 'top', width: '38%' }}>
+        <td style={{ verticalAlign: 'top' }}>
           <BrandLogo company={company} height={44} />
           <div style={{ fontSize: 20, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
           <div style={{ fontSize: 14, color: '#5c6070' }}>{opportunity.event_name}</div>
         </td>
-        {company.has_event_logo && (
-          <td style={{ verticalAlign: 'middle', textAlign: 'center', width: '24%' }}>
-            <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
-          </td>
-        )}
-        <td style={{ verticalAlign: 'top', textAlign: 'right', width: '38%' }}>
+        <td style={{ verticalAlign: 'top', textAlign: 'right' }}>
           <h2 style={{ margin: 0 }}>PROPOSAL</h2>
           <div style={{ fontSize: 13 }}>No: {proposalNo}</div>
           <div style={{ fontSize: 13 }}>Date: {todayStr()}</div>
         </td>
       </tr></tbody></table>
 
-      <div style={{ marginBottom: 24 }}>
-        <h4>Prepared For</h4>
-        <div>{billTo.name}</div>
-        <div>{billTo.address}</div>
-        {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
-        <div>{billTo.country}</div>
-        {billTo.regNo && <div>Co. Reg No: {billTo.regNo}</div>}
-        {billTo.tinNo && <div>TIN No: {billTo.tinNo}</div>}
-        {billTo.sstNo && <div>SST No: {billTo.sstNo}</div>}
-        {billTo.contactNo && <div>Contact: {billTo.contactNo}</div>}
-        <div>{billTo.email}</div>
-      </div>
+      {/* When the bill-to party isn't the exhibitor (billed to an Agent or
+          a separate Billing contact), show who's actually exhibiting
+          alongside who's being billed. A <table>, not flex, for the same
+          html2canvas reliability reason as the header above. */}
+      <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 24 }}><tbody><tr>
+        <td style={{ verticalAlign: 'top', width: same ? '100%' : '50%', paddingRight: same ? 0 : 8 }}>
+          <h4 style={{ marginBottom: 4 }}>{same ? 'Prepared For' : 'Bill To'}</h4>
+          <div>{billTo.name}</div>
+          <div>{billTo.address}</div>
+          {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
+          <div>{billTo.country}</div>
+          {billTo.regNo && <div>Co. Reg No: {billTo.regNo}</div>}
+          {billTo.tinNo && <div>TIN No: {billTo.tinNo}</div>}
+          {billTo.sstNo && <div>SST No: {billTo.sstNo}</div>}
+          {billTo.contactNo && <div>Contact: {billTo.contactNo}</div>}
+          <div>{billTo.email}</div>
+        </td>
+        {!same && (
+          <td style={{ verticalAlign: 'top', width: '50%', paddingLeft: 8 }}>
+            <h4 style={{ marginBottom: 4 }}>Exhibitor</h4>
+            <div>{opportunity.exhibitor_name}</div>
+            <div>{[opportunity.postcode, opportunity.city].filter(Boolean).join(' ')}</div>
+            <div>{opportunity.country_name || '—'}</div>
+            {opportunity.reg_no && <div>Co. Reg No: {opportunity.reg_no}</div>}
+            {opportunity.contact1_phone && <div>Contact: {opportunity.contact1_phone}</div>}
+            <div>{opportunity.contact1_email || '—'}</div>
+          </td>
+        )}
+      </tr></tbody></table>
 
       <table width="100%" cellPadding="6" style={{ marginBottom: 4, fontSize: 13 }}>
         <thead>

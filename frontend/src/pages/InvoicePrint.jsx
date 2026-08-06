@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { downloadPdf, buildPdfFilename } from '../utils/pdf';
 import { amountInWords } from '../utils/amountInWords';
-import { BrandLogo, EventBrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
+import { BrandLogo, LetterheadBand, FooterBand } from '../components/CompanyBranding';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -135,7 +135,7 @@ export default function InvoicePrint() {
             preview looked fine. A table's cells lay out reliably in both
             the browser and html2canvas's canvas rendering. */}
         <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 16 }}><tbody><tr>
-          <td style={{ verticalAlign: 'top', width: '38%' }}>
+          <td style={{ verticalAlign: 'top' }}>
             <BrandLogo company={company} height={44} />
             <div style={{ fontSize: 18, fontWeight: 700, color: '#1B3A6B' }}>{company.name}</div>
             {company.reg_no && <div>Co. Reg. {company.reg_no}{company.tin_no ? `  TIN: ${company.tin_no}` : ''}</div>}
@@ -145,33 +145,54 @@ export default function InvoicePrint() {
               <div style={{ color: '#5c6070' }}>{[company.phone, company.email].filter(Boolean).join(' | ')}</div>
             )}
           </td>
-          {company.has_event_logo && (
-            <td style={{ verticalAlign: 'middle', textAlign: 'center', width: '24%' }}>
-              <EventBrandLogo company={company} height={56} style={{ margin: '0 auto' }} />
-            </td>
-          )}
-          <td style={{ verticalAlign: 'top', textAlign: 'right', width: '38%' }}>
+          <td style={{ verticalAlign: 'top', textAlign: 'right' }}>
             <h2 style={{ margin: '0 0 8px' }}>TAX INVOICE</h2>
             <div>No: <strong>{invoice.invoice_no}</strong></div>
             <div>Date: {invoice.invoice_date || '—'}</div>
           </td>
         </tr></tbody></table>
 
-        <div style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, marginBottom: 12 }}>
-          <div style={{ fontWeight: 700 }}>{billTo.name}</div>
-          {billTo.regNo && <div>Business Registration No.: {billTo.regNo}</div>}
-          <div>{billTo.address}</div>
-          {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
-          <div>{billTo.country}</div>
-          <div style={{ display: 'flex', gap: 24, marginTop: 6 }}>
-            {billTo.contactNo && <span>Tel: {billTo.contactNo}</span>}
-            {billTo.contactName && <span>Attn: {billTo.contactName}</span>}
-          </div>
-          <div style={{ display: 'flex', gap: 24 }}>
-            <span>SST ID No.: {billTo.sstNo || '—'}</span>
-            <span>TIN No.: {billTo.tinNo || '—'}</span>
-          </div>
-        </div>
+        {/* When the bill-to party isn't the exhibitor (billed to an Agent or
+            a separate Billing contact), show who's actually exhibiting
+            alongside who's being billed — otherwise staff processing the
+            invoice only sees the payer's details, not the real exhibitor.
+            A <table>, not flex, for the same html2canvas reliability
+            reason as the header above. */}
+        <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 12 }}><tbody><tr>
+          <td style={{ verticalAlign: 'top', width: same ? '100%' : '50%', paddingRight: same ? 0 : 8 }}>
+            <div style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, height: '100%', boxSizing: 'border-box' }}>
+              {!same && <div style={{ fontSize: 10.5, color: '#5c6070', marginBottom: 2 }}>Bill To</div>}
+              <div style={{ fontWeight: 700 }}>{billTo.name}</div>
+              {billTo.regNo && <div>Business Registration No.: {billTo.regNo}</div>}
+              <div>{billTo.address}</div>
+              {billTo.postcodeCity && <div>{billTo.postcodeCity}</div>}
+              <div>{billTo.country}</div>
+              <div style={{ display: 'flex', gap: 24, marginTop: 6 }}>
+                {billTo.contactNo && <span>Tel: {billTo.contactNo}</span>}
+                {billTo.contactName && <span>Attn: {billTo.contactName}</span>}
+              </div>
+              <div style={{ display: 'flex', gap: 24 }}>
+                <span>SST ID No.: {billTo.sstNo || '—'}</span>
+                <span>TIN No.: {billTo.tinNo || '—'}</span>
+              </div>
+            </div>
+          </td>
+          {!same && (
+            <td style={{ verticalAlign: 'top', width: '50%', paddingLeft: 8 }}>
+              <div style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, height: '100%', boxSizing: 'border-box' }}>
+                <div style={{ fontSize: 10.5, color: '#5c6070', marginBottom: 2 }}>Exhibitor</div>
+                <div style={{ fontWeight: 700 }}>{invoice.company_name}</div>
+                {invoice.reg_no && <div>Business Registration No.: {invoice.reg_no}</div>}
+                <div>{[invoice.postcode, invoice.city].filter(Boolean).join(' ')}</div>
+                <div>{invoice.country_name || '—'}</div>
+                <div style={{ display: 'flex', gap: 24, marginTop: 6 }}>
+                  {invoice.contact1_phone && <span>Tel: {invoice.contact1_phone}</span>}
+                  {invoice.contact1_name && <span>Attn: {invoice.contact1_name}</span>}
+                </div>
+              </div>
+            </td>
+          )}
+        </tr></tbody></table>
 
         <p style={{ fontWeight: 600, marginBottom: 4 }}>
           {invoice.event_name}{eventDates ? ` ${eventDates}` : ''}

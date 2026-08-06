@@ -148,23 +148,23 @@ export default function ContractPrint() {
           logos collapsing together or landing in the wrong spot on export
           even though the on-screen preview looked fine. Cells only appear
           for logos that actually exist. */}
-      <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 10 }}><tbody><tr>
+      <table width="100%" style={{ borderCollapse: 'collapse', marginBottom: 8 }}><tbody><tr>
         {company.has_event_logo && (
-          <td style={{ verticalAlign: 'middle', textAlign: 'left', width: company.has_logo ? '50%' : '100%' }}>
-            <EventBrandLogo company={company} height={90} maxWidth={300} style={{ margin: 0 }} />
+          <td style={{ verticalAlign: 'middle', textAlign: 'left', width: company.has_logo ? '48%' : '100%' }}>
+            <EventBrandLogo company={company} height={110} maxWidth={380} style={{ margin: 0 }} />
           </td>
         )}
-        <td style={{ verticalAlign: 'top', textAlign: 'left', width: company.has_event_logo ? '50%' : '100%' }}>
-          <div style={{ fontSize: 10.5, color: '#5c6070', marginBottom: 3 }}>Show Organiser:</div>
+        <td style={{ verticalAlign: 'middle', textAlign: 'left', width: company.has_event_logo ? '52%' : '100%', paddingLeft: company.has_event_logo ? 16 : 0, fontSize: 10, lineHeight: 1.25 }}>
+          <div style={{ fontSize: 11, color: '#5c6070', marginBottom: 3 }}>Show Organiser:</div>
           {company.has_logo ? (
-            <BrandLogo company={company} height={42} maxWidth={180} style={{ margin: '0 0 4px' }} />
+            <BrandLogo company={company} height={46} maxWidth={220} style={{ margin: '0 0 3px' }} />
           ) : (
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#1B3A6B', marginBottom: 4 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#1B3A6B', marginBottom: 3 }}>
               {company.event_name || company.name}
             </div>
           )}
-          {company.reg_no && <div style={{ fontSize: 10.5 }}>Co. Reg. No: {company.reg_no}</div>}
-          {company.address && <div style={{ fontSize: 10.5, color: '#5c6070', whiteSpace: 'pre-line' }}>{company.address}</div>}
+          {company.reg_no && <div>Co. Reg. No: {company.reg_no}</div>}
+          {company.address && <div style={{ color: '#5c6070', whiteSpace: 'pre-line' }}>{company.address}</div>}
         </td>
       </tr></tbody></table>
 
